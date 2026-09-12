@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import logging
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 
@@ -45,6 +46,12 @@ class Recorder:
     interval: timedelta
     groups: list[str] = field(default_factory=list)
 
+    #: Optional observers, called *after* the row is written. The live stream uses
+    #: these, so a subscriber can never see a value that was not persisted first.
+    #: Read per call, so they can be attached after collection has started.
+    tee_sample: Callable[[Sample], None] | None = None
+    tee_gap: Callable[[Gap], None] | None = None
+
     _stop: asyncio.Event = field(default_factory=asyncio.Event, init=False)
     _task: asyncio.Task | None = field(default=None, init=False)
     _samples: int = field(default=0, init=False)
@@ -64,10 +71,14 @@ class Recorder:
 
     def _on_sample(self, sample: Sample) -> None:
         self._samples += store.add_sample(self.conn, self.recording_id, sample)
+        if self.tee_sample is not None:
+            self.tee_sample(sample)
 
     def _on_gap(self, gap: Gap) -> None:
         store.add_gap(self.conn, self.recording_id, gap)
         self._gaps += 1
+        if self.tee_gap is not None:
+            self.tee_gap(gap)
 
     def _start_task(self) -> None:
         endpoints = self.profile.observed

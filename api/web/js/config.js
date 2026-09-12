@@ -49,9 +49,15 @@ function profileCard(profile) {
   return `<div class="card mb-3">
     <div class="card-header">
       <h3 class="card-title">${escape(profile.name)}</h3>
-      <div class="card-actions text-secondary">
-        ${escape(profile.addressing)} · ${profile.observed.length} of
-        ${profile.endpoints.length} observed
+      <div class="card-actions">
+        <span class="text-secondary me-2">${escape(profile.addressing)} ·
+          ${profile.observed.length} of ${profile.endpoints.length} observed</span>
+        ${
+          profile.observed.length
+            ? `<button class="btn btn-sm btn-primary" data-action="observe"
+                 data-profile="${escape(profile.name)}">Start observing</button>`
+            : `<span class="text-secondary">nothing to collect</span>`
+        }
       </div>
     </div>
     ${description}

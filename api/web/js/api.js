@@ -30,6 +30,15 @@ export const api = {
     return request(`/api/recordings${suffix}`);
   },
   recording: (id) => request(`/api/recordings/${encodeURIComponent(id)}`),
+  startRecording: (body) =>
+    request("/api/recordings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body),
+    }),
+  stopRecording: (id) =>
+    request(`/api/recordings/${encodeURIComponent(id)}/stop`, { method: "POST" }),
+  live: () => request("/api/recordings/live"),
   series: (id, metric, target) =>
     request(
       `/api/recordings/${encodeURIComponent(id)}/series?` +

@@ -1,8 +1,9 @@
-// Wiring: hash routing, data loading, and one render pass per state change.
+// Wiring: hash routing, data loading, click actions, and one render pass per state
+// change.
 //
 // Views are pure functions of state (state.js) and never touch the network; api.js
-// is the only module that does. That separation is what keeps the live stream in
-// A1.8 from having to know anything about the DOM.
+// is the only module that does, and stream.js writes into state without knowing
+// anything about the DOM.
 
 import { api } from "./api.js";
 import * as charts from "./charts.js";
@@ -10,6 +11,7 @@ import * as config from "./config.js";
 import { escape } from "./format.js";
 import * as recordings from "./recordings.js";
 import { get, set, subscribe } from "./state.js";
+import * as stream from "./stream.js";
 import * as table from "./table.js";
 
 const ROUTES = {
@@ -50,7 +52,8 @@ async function load(route) {
       return;
     }
 
-    // A recording id in the URL, or the one already open when switching pages.
+    // Opening a specific recording, or staying with the one already open when
+    // switching between Stats and Charts.
     const id = route.recordingId ?? get().selectedRecording?.id;
     if (id) {
       const recording = await api.recording(id);
@@ -62,9 +65,8 @@ async function load(route) {
   }
 }
 
-// The last value of every metric, per target. A1.8 replaces this with the live
-// stream; until then one request per metric is honest and fast enough for the
-// handful a recording holds.
+// The last value of every metric for a finished recording. A live one gets these
+// from the stream instead; this is only for reading history back.
 async function latestValues(recording) {
   const latest = {};
   const results = await Promise.all(
@@ -81,7 +83,44 @@ async function latestValues(recording) {
   return latest;
 }
 
+async function startObserving(profileName) {
+  try {
+    const { recording_id: id } = await api.startRecording({ profile: profileName });
+    set({ live: { recordingId: id, connection: "live", latest: {}, targets: [], metrics: [] } });
+    stream.connect(id);
+    location.hash = "#/performance/stats";
+  } catch (error) {
+    set({ error: error.message });
+  }
+}
+
+async function stopObserving(recordingId) {
+  try {
+    await api.stopRecording(recordingId);
+    stream.disconnect();
+    const recording = await api.recording(recordingId);
+    recording.latest = await latestValues(recording);
+    set({ live: null, selectedRecording: recording });
+  } catch (error) {
+    set({ error: error.message });
+  }
+}
+
 function render(state) {
+  try {
+    renderView(state);
+  } catch (error) {
+    // A bug in one view must not freeze the whole page: without this, a thrown
+    // render leaves the last markup on screen and every later update dies too.
+    console.error("render failed", error);
+    document.getElementById("view").innerHTML =
+      `<div class="alert alert-danger">The view failed to render: ${escape(
+        error.message
+      )}</div>`;
+  }
+}
+
+function renderView(state) {
   const route = state.route ?? { name: DEFAULT_ROUTE };
   const entry = ROUTES[route.name] ?? ROUTES[DEFAULT_ROUTE];
 
@@ -92,6 +131,11 @@ function render(state) {
   for (const item of document.querySelectorAll("#nav .nav-item[data-route]")) {
     item.classList.toggle("active", item.dataset.route === route.name);
   }
+
+  // A live table patches its own cells rather than being rebuilt every second:
+  // replacing the markup would destroy text selection and make the Stop button
+  // unclickable under the cursor.
+  if (!state.error && route.name === "stats" && table.patch(state)) return;
 
   document.getElementById("view").innerHTML = state.error
     ? `<div class="alert alert-danger">${escape(state.error)}</div>`
@@ -119,9 +163,33 @@ async function pollHealth() {
   }
 }
 
+// Rejoin a recording that is still running -- a page reload should not orphan it.
+async function rejoinLive() {
+  try {
+    const { live } = await api.live();
+    if (live.length) {
+      set({ live: { recordingId: live[0], connection: "live", latest: {}, targets: [], metrics: [] } });
+      stream.connect(live[0]);
+    }
+  } catch {
+    // Nothing live, or the API is down; pollHealth already says which.
+  }
+}
+
+// One delegated listener rather than per-render bindings, since the view is replaced
+// wholesale on every state change.
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-action]");
+  if (!button) return;
+  event.preventDefault();
+  if (button.dataset.action === "observe") startObserving(button.dataset.profile);
+  if (button.dataset.action === "stop") stopObserving(button.dataset.recording);
+});
+
 subscribe(render);
 window.addEventListener("hashchange", onRouteChange);
 
 await pollHealth();
+await rejoinLive();
 await onRouteChange();
 setInterval(pollHealth, 10000);

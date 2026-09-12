@@ -251,3 +251,36 @@ async def test_clock_is_monotonic_from_zero() -> None:
     first = clock.now_ms()
     await asyncio.sleep(0.01)
     assert clock.now_ms() >= first >= 0
+
+
+class TestAbandoned:
+    async def test_a_killed_process_does_not_leave_a_recording_running_forever(self, db) -> None:
+        """A live recording is a task in memory; nothing survives a restart.
+
+        Without this, a hard kill leaves rows indistinguishable from a recording that
+        is still going, and they would never close.
+        """
+        prof = profile()
+        recording_id = store.new_id()
+        store.create(
+            db,
+            recording_id=recording_id,
+            profile=prof,
+            endpoints=prof.observed,
+            kind="observation",
+            api_version="0.0.0",
+            interval_s=1.0,
+        )
+        assert store.get(db, recording_id).status == store.RUNNING
+
+        assert store.abandon_running(db) == [recording_id]
+
+        closed = store.get(db, recording_id)
+        assert closed.status == store.ABORTED
+        assert closed.finished_at is not None
+
+        codes = [a["code"] for a in store.annotations(db, recording_id)]
+        assert "recording_abandoned" in codes, "the reason must reach whoever opens it"
+
+    async def test_it_is_a_no_op_when_nothing_was_running(self, db) -> None:
+        assert store.abandon_running(db) == []

@@ -8,6 +8,7 @@ const state = {
   brokenProfiles: [],
   recordings: [],
   selectedRecording: null,
+  live: null,
   error: null,
 };
 

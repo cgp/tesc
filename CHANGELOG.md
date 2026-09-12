@@ -145,3 +145,17 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - Removed `test_health.py`: the F0.1 stub asserted an exact body and is superseded by the route tests. It also built an app against the real `~/.metrix`.
 - `B008` ignored in ruff — `Depends()` in an argument default is how FastAPI declares a dependency.
 - Verified: `scripts/check.sh` all green — 153 passed, 1 skipped.
+
+## 2026-09-12 — A1.8 live stream. **A1 complete.**
+
+- **A1.8 done, and A1 with it.** Starting a recording from the browser, watching it stream at 1s, and stopping it all work against the live host.
+- `live.py`: a per-recording hub with a bounded replay buffer, plus start/stop/stream routes. SSE, so the browser handles reconnection and `Last-Event-ID` itself.
+- **Cadence is decoupled from the source** — a ticker pushes one aggregated event per second no matter how fast samples arrive. **Slow clients coalesce**: an overrun subscriber is drained and told to resync rather than fed a backlog, and a client that fell past the replay buffer gets a fresh snapshot rather than a partial catch-up that would silently omit the middle.
+- Persistence stays ahead of the stream: the recorder writes the row, *then* calls the tee, so a subscriber can never see a value that was not stored.
+- **Four bugs found by using it, none by the tests:**
+  - The live table was rebuilt every second, so the Stop button was destroyed under the cursor and text selection was impossible. Now the table is **patched cell by cell** (§14.3), verified by asserting the DOM node survives ticks.
+  - `StaticFiles` sets no `Cache-Control`, so browsers heuristically cached the ES modules — an edited file kept serving stale code, and a half-updated module graph threw. Now `no-cache` (ETag still gives a 304).
+  - A thrown render left the last markup on screen and killed every later update. `render` now catches and shows the failure.
+  - A hard-killed process left a recording `running` forever. Startup now closes any such row as `aborted` with an annotation saying why — nothing can be running when the process has just begun.
+- Verified in the browser: values updating (0.3% → 0.2% CPU, 102 → 105 samples), a full page reload **rejoining an in-progress recording**, Stop persisting a 116s recording.
+- Verified: `scripts/check.sh` all green — 170 passed, 1 skipped.

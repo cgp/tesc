@@ -219,6 +219,39 @@ def finish(
     return get(conn, recording_id)
 
 
+def abandon_running(conn: sqlite3.Connection) -> list[str]:
+    """Close recordings left `running` by a process that did not exit cleanly.
+
+    A live recording is a task in memory, so nothing can still be running when the
+    application starts. Without this a killed process leaves rows that are
+    indistinguishable from one still going -- and they would never close.
+    """
+    stale = [r["id"] for r in conn.execute("SELECT id FROM recording WHERE status = ?", (RUNNING,))]
+    if not stale:
+        return []
+    with transaction(conn):
+        conn.executemany(
+            "UPDATE recording SET status = ?, finished_at = COALESCE(finished_at,"
+            " strftime('%Y-%m-%dT%H:%M:%SZ', 'now')) WHERE id = ?",
+            [(ABORTED, recording_id) for recording_id in stale],
+        )
+        for recording_id in stale:
+            _insert_annotation(
+                conn,
+                recording_id,
+                Annotation(
+                    code="recording_abandoned",
+                    severity="warn",
+                    from_ms=0,
+                    message=(
+                        "The application restarted while this recording was running, so it "
+                        "was closed. Whatever had been collected up to that point is kept."
+                    ),
+                ),
+            )
+    return stale
+
+
 def get(conn: sqlite3.Connection, recording_id: str) -> RecordingRow:
     row = conn.execute("SELECT * FROM recording WHERE id = ?", (recording_id,)).fetchone()
     if row is None:
