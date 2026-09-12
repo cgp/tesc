@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from metrix_api.deps import get_db
+from metrix_api.store import inventories
 from metrix_api.store import recordings as store
 
 router = APIRouter(prefix="/api/recordings", tags=["recordings"])
@@ -83,6 +84,29 @@ def get_recording(
         # identity does not change, and filesystem usage is read once at each end.
         "identity": store.identities(conn, recording_id),
         "filesystems": store.filesystem_usage(conn, recording_id),
+        # Exactly what this ran against, pinned at the time. Present only for a
+        # profile that discovers; a written-down endpoint list is already in the file.
+        "inventory": _inventory(conn, recording_id),
+    }
+
+
+def _inventory(conn: sqlite3.Connection, recording_id: str) -> dict[str, Any] | None:
+    """The snapshot this recording was pinned to.
+
+    Read from the pin rather than resolved again: the point of storing it is that the
+    tasks it names have very likely been replaced since, and the answer to "what did
+    this measure" must not change when the environment does.
+    """
+    stored = inventories.for_recording(conn, recording_id)
+    if stored is None:
+        return None
+    return {
+        "id": stored.id,
+        "source": stored.inventory.source,
+        "reached": stored.inventory.reached,
+        "discovered_at": stored.discovered_at,
+        "confirmed_at": stored.confirmed_at,
+        **{k: v for k, v in stored.inventory.to_document().items() if k in ("resources", "notes")},
     }
 
 

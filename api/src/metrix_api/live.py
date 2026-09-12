@@ -29,6 +29,8 @@ from datetime import timedelta
 from typing import Any
 
 from metrix_api.config import Config
+from metrix_api.discovery.ecs import Clients
+from metrix_api.discovery.resolve import Resolver
 from metrix_api.observer.collector import Clock
 from metrix_api.observer.metrics import Annotation, Gap, Sample
 from metrix_api.profiles import Profile
@@ -260,6 +262,7 @@ class Registry:
         groups: list[str] | None = None,
         note: str | None = None,
         clock: Clock | None = None,
+        clients: Clients | None = None,
     ) -> LiveRecording:
         # The recorder keeps its own connection for the life of the recording; request
         # connections come and go, and a collector must not depend on one.
@@ -267,8 +270,17 @@ class Registry:
         # Idempotent, and cheap. A recorder holds its own connection for its whole
         # life, so it cannot rely on whoever else happened to open the database.
         migrate(conn)
+        # On the recorder's own connection, because it refreshes at phase boundaries
+        # long after the request that started it has gone. Clients are built lazily,
+        # so an explicit profile never opens an AWS session.
         recorder = await start_observation(
-            conn, profile, interval=interval, groups=groups, note=note, clock=clock
+            conn,
+            profile,
+            interval=interval,
+            groups=groups,
+            note=note,
+            clock=clock,
+            resolver=Resolver(conn=conn, aws=config.aws, clients=clients),
         )
 
         live = LiveRecording(

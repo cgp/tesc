@@ -114,6 +114,11 @@ class Gap:
 #: The code every collection failure is recorded under, so one query finds them all.
 COLLECTION_GAP = "collection_gap"
 
+#: Raised when a refresh at a phase boundary finds the environment a different size
+#: (design-api 2.3). Machine-written codes live together so one list answers "what can
+#: appear on a recording", whichever subsystem noticed it.
+HOST_COUNT_CHANGED = "host_count_changed"
+
 
 @dataclass(frozen=True, slots=True)
 class Annotation:

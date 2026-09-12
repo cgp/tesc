@@ -17,10 +17,12 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 
 from metrix_api import __version__
+from metrix_api.discovery.resolve import Resolver, compare
 from metrix_api.observer import transport_for
 from metrix_api.observer.collector import Clock, collect_all
-from metrix_api.observer.metrics import Gap, Sample
+from metrix_api.observer.metrics import HOST_COUNT_CHANGED, Annotation, Gap, Sample
 from metrix_api.profiles import Profile, ProfileError
+from metrix_api.store import inventories
 from metrix_api.store import recordings as store
 
 log = logging.getLogger(__name__)
@@ -45,6 +47,11 @@ class Recorder:
     clock: Clock
     interval: timedelta
     groups: list[str] = field(default_factory=list)
+
+    #: Set for a discovered profile: the snapshot this recording is pinned to, and
+    #: the resolver that will walk again at each phase boundary.
+    resolver: Resolver | None = None
+    pinned: inventories.Stored | None = None
 
     #: Optional observers, called *after* the row is written. The live stream uses
     #: these, so a subscriber can never see a value that was not persisted first.
@@ -102,6 +109,46 @@ class Recorder:
             if facts:
                 store.save_facts(self.conn, self.recording_id, endpoint.id, facts, at=at)
 
+    def refresh(self, *, at_ms: int, phase: str = store.OBSERVATION_PHASE) -> None:
+        """Walk discovery again at a phase boundary and record what moved.
+
+        Collection stays with the set pinned at the start: a series that begins
+        halfway through a recording is worse than an absent one, and every average
+        over "the environment" would change meaning mid-chart. What this produces is
+        the annotation, which is what tells a later reader that the comparison was
+        against a moving target (design-api 2.3).
+
+        Never fatal. A refresh that cannot reach AWS costs the check, not the
+        recording -- the samples already collected are still true.
+        """
+        if self.resolver is None or self.pinned is None or self.profile.discover is None:
+            return
+        try:
+            latest = self.resolver.resolve(self.profile, force=True)
+        except Exception as exc:  # noqa: BLE001 - a failed check must not end a recording
+            log.warning("inventory refresh failed for %s: %s", self.recording_id, exc)
+            return
+
+        change = compare(self.pinned.inventory, latest.inventory)
+        if not change.moved:
+            return
+        log.info("%s: %s", self.recording_id, change.describe())
+        store.add_annotation(
+            self.conn,
+            self.recording_id,
+            Annotation(
+                code=HOST_COUNT_CHANGED,
+                # Warn, not invalid: an environment that scaled under load may be
+                # exactly what was being measured. It is the reader's call, and the
+                # annotation is what lets them make it.
+                severity="warn",
+                from_ms=at_ms,
+                phase=phase,
+                message=change.describe(),
+                detail=change.detail,
+            ),
+        )
+
     def _start_task(self) -> None:
         endpoints = self.profile.observed
         for endpoint in endpoints:
@@ -141,6 +188,9 @@ class Recorder:
         await self.probe(at="finish")
 
         ended = self.clock.now_ms()
+        # The closing phase boundary. An observation-only recording has exactly two,
+        # and a phased load run (A4) will call this at each of its own.
+        self.refresh(at_ms=ended)
         for endpoint in self.profile.observed:
             store.end_phase(
                 self.conn, self.recording_id, endpoint.id, store.OBSERVATION_PHASE, ended
@@ -156,12 +206,38 @@ async def start_observation(
     groups: list[str] | None = None,
     note: str | None = None,
     clock: Clock | None = None,
+    resolver: Resolver | None = None,
 ) -> Recorder:
     """Open a recording and begin collecting.
 
     Refuses a profile with nothing to collect from rather than producing an empty
     recording that looks like a failed one.
+
+    A profile that discovers is resolved here rather than read from the cache: run
+    start is a phase boundary (design-api 3.2), and the one moment worth paying a
+    walk for is the moment the measurement begins. The snapshot it produces is
+    pinned to the recording, so what this ran against stays answerable after the
+    tasks are gone.
     """
+    pinned = None
+    if profile.discover is not None:
+        if resolver is None:
+            raise RecordingError(
+                f"profile {profile.name!r} discovers its endpoints and no resolver was "
+                "supplied; this is a wiring mistake, not a configuration one"
+            )
+        try:
+            resolution = resolver.resolve(profile, force=True)
+        except Exception as exc:  # noqa: BLE001 - surfaced as a start failure
+            raise RecordingError(f"could not resolve profile {profile.name!r}: {exc}") from exc
+        if not resolution.endpoints:
+            raise RecordingError(
+                f"profile {profile.name!r}: {profile.discover.source} resolved to nothing "
+                f"addressable (the walk reached {resolution.inventory.reached})"
+            )
+        profile = profile.with_endpoints(resolution.endpoints)
+        pinned = resolution.stored
+
     observed = profile.observed
     if not observed:
         raise RecordingError(
@@ -188,6 +264,9 @@ async def start_observation(
         note=note,
     )
 
+    if pinned is not None:
+        inventories.pin(conn, recording_id, pinned.id)
+
     recorder = Recorder(
         conn=conn,
         recording_id=recording_id,
@@ -195,6 +274,8 @@ async def start_observation(
         clock=clock or Clock.start(),
         interval=interval,
         groups=list(groups or profile.collect_metrics),
+        resolver=resolver,
+        pinned=pinned,
     )
     # Before the collectors, so the first disk reading is of a box the run has not
     # touched yet. It is the baseline half of "how much did this consume".

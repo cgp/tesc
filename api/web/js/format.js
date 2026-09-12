@@ -39,6 +39,21 @@ export function metricValue(name, value) {
   return value.toFixed(2);
 }
 
+/**
+ * A target id, shortened for a column heading.
+ *
+ * Discovered endpoints are named after the thing they are -- an ECS task id is 32
+ * hex characters -- because that identity is what joins host metrics to load
+ * metrics. It is a poor column heading, so the display is shortened and the full id
+ * stays in the title attribute. Shortening the id itself would break the join it
+ * exists to make.
+ */
+export function targetLabel(id) {
+  const match = /^(task|container)\/([0-9a-f]{16,})(\/.*)?$/.exec(id ?? "");
+  if (!match) return id ?? "";
+  return `${match[1]}/${match[2].slice(0, 8)}…${match[3] ?? ""}`;
+}
+
 export function escape(text) {
   const div = document.createElement("div");
   div.textContent = text ?? "";

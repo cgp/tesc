@@ -17,7 +17,7 @@ Design: [design-api.md](design-api.md). Boundary and shared foundation (**F0, do
 │   │   ├── config.py                # METRIX_HOME resolution, settings
 │   │   ├── routes/                  # plans, runs, profiles, recordings, stream
 │   │   ├── runner/                  # run-spec assembly, engine supervision, NDJSON ingest
-│   │   ├── discovery/               # ecs.py, inventory.py  (boto3 lives ONLY here)
+│   │   ├── discovery/               # ecs.py, inventory.py, resolve.py  (boto3 ONLY here)
 │   │   ├── observer/                # collector.py, ssh.py, scrape.py
 │   │   ├── stats/                   # histogram merge, percentiles, CI, noise floor
 │   │   └── store/                   # SQLite schema, migrations, queries
@@ -110,7 +110,7 @@ Nothing here requires the engine. Through A3 the product is a host-observation t
 ### A2 — Discovery
 
 - [x] **A2.1** — ECS discovery: hostname → ALB → target group → service → tasks → containers → instances (§3.1)
-- [ ] **A2.2** — Resolved inventory: storage, run pinning, refresh at phase boundaries, `host_count_changed`
+- [x] **A2.2** — Resolved inventory: storage, run pinning, refresh at phase boundaries, `host_count_changed`
 - [ ] **A2.3** — Reachability verification at profile setup; `targets.json` written from a profile
 - [ ] **A2.4** — Environment baselines; baseline/settle deltas, recovery curves, leak detection (§9.7)
 

@@ -128,7 +128,9 @@ Three reasons, all of which would be violated by pushing it down:
 2. **Control-plane calls are slow, rate-limited, and retry-prone.** Those characteristics are acceptable during setup and completely unacceptable anywhere near a send loop that is holding a schedule to the millisecond (§13.2).
 3. **The engine stays independently runnable.** A design where the load generator needs AWS to function cannot be tested, debugged, or reused against a local dev server.
 
-Resolution is cached with a TTL, refreshed on demand, at run start, and at phase boundaries (§10.1) so an instance-count change mid-run is detected rather than inferred.
+Resolution is cached with a TTL, refreshed on demand, at run start, and at phase boundaries (§10.1) so an instance-count change mid-run is detected rather than inferred. A profile carries the *question* — a `discover` block naming a hostname, or a cluster and service — and never the resolved endpoints: writing those back would freeze one walk into a document whose purpose is to ask for a fresh one. The answer is stored, and an unchanged re-resolution extends the stored row rather than adding a copy of it, so the table is a history of when the environment changed rather than of when it was checked.
+
+A change found at a boundary raises `host_count_changed` — **warn, not invalid**, because an environment that scaled under load may be exactly what was being measured. Collection stays with the set pinned at the start: a host series that begins halfway through a recording is worse than an absent one, and every average over "the environment" would change meaning mid-chart.
 
 **IAM: read-only.** `route53:List*`, `elasticloadbalancing:Describe*`, `ecs:List*`, `ecs:Describe*`, `ec2:Describe*`, `autoscaling:Describe*`. The repo ships the policy document, because working this out from permission errors is a poor introduction to a tool.
 

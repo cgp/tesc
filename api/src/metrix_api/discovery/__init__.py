@@ -16,19 +16,31 @@ from metrix_api.discovery.inventory import (
     Note,
     Resource,
     from_document,
+    host_key,
+    hosts,
+    to_endpoints,
 )
+from metrix_api.discovery.resolve import Change, Resolution, ResolveError, Resolver, compare
 
 __all__ = [
     "HOPS",
     "NOTHING",
     "ROLES",
     "Asg",
+    "Change",
     "Clients",
     "DiscoveryError",
     "Inventory",
     "InventoryError",
     "Note",
+    "ResolveError",
+    "Resolution",
+    "Resolver",
     "Resource",
+    "compare",
     "discover",
     "from_document",
+    "host_key",
+    "hosts",
+    "to_endpoints",
 ]

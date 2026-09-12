@@ -5,7 +5,7 @@
 // cursor cannot reliably be clicked -- both of which make a live view something
 // people wait out rather than watch.
 
-import { duration, escape, metricValue } from "./format.js";
+import { duration, escape, metricValue, targetLabel } from "./format.js";
 import { empty, icon } from "./ui.js";
 
 export function render(state) {
@@ -109,7 +109,9 @@ function gapNote(live) {
 
 function liveTable(live) {
   const targets = live.targets ?? [];
-  const header = targets.map((t) => `<th class="num">${escape(t)}</th>`).join("");
+  const header = targets
+    .map((t) => `<th class="num" title="${escape(t)}">${escape(targetLabel(t))}</th>`)
+    .join("");
 
   const rows = (live.metrics ?? [])
     .map((metric) => {
@@ -153,7 +155,9 @@ function liveTable(live) {
 
 function staticTable(recording) {
   const targets = recording.targets;
-  const header = targets.map((t) => `<th class="num">${escape(t)}</th>`).join("");
+  const header = targets
+    .map((t) => `<th class="num" title="${escape(t)}">${escape(targetLabel(t))}</th>`)
+    .join("");
   const latest = recording.latest ?? {};
 
   const rows = recording.metrics

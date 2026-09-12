@@ -97,7 +97,11 @@ class TestParsing:
                 json.loads(path.read_text(encoding="utf-8")), name=path.stem
             )
             assert parsed.name == path.stem
-            assert parsed.endpoints, f"{path.name}: an example with no endpoints"
+            # One or the other: an example either lists its machines or says where
+            # to find them. Neither is a profile that points at nothing.
+            assert parsed.endpoints or parsed.discover, (
+                f"{path.name}: an example with no endpoints and no discovery"
+            )
 
     def test_the_local_example_scrapes(self) -> None:
         parsed = parse_profile(json.loads(EXAMPLE.read_text(encoding="utf-8")), name="local")

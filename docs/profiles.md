@@ -156,6 +156,52 @@ saturates while the backend idles is exactly the shape this is meant to show.
 It takes load and contributes no host series. The Config page lists it as *not
 collected* rather than hiding it, so the absence is visible rather than assumed.
 
+## Letting discovery write the list
+
+Instead of endpoints, a profile may say where to find them:
+
+```json
+{
+  "name": "staging-discovered",
+  "addressing": "load_balancer",
+  "discover": {
+    "hostname": "api.staging.example.com",
+    "ttl": "10m",
+    "collect": { "transport": "scrape", "port": 9100 }
+  }
+}
+```
+
+Metrix resolves the hostname the way AWS actually lays it out — Route 53 to the load
+balancer, its listeners and host-header rules to a target group, the ECS service
+registered against that group, its tasks and their image digests, and the EC2
+instances and autoscaling group underneath. Name `cluster` and `service` instead of
+`hostname` to skip DNS and the balancer entirely; with `direct` addressing that form
+also needs a `host_header`, since there is no hostname to take one from.
+
+`collect` is applied to every host found, because discovery yields machines that are
+alike by construction. The balancer itself is listed as an endpoint with no collector
+— you cannot log into an ALB — and under `direct` addressing it is left out, since
+nothing would be sent there.
+
+**Every hop is optional.** A hostname that is a network balancer with nothing in ECS
+behind it resolves to instances and stops; a task in bridge networking has no address
+of its own and is observed through the box hosting it. The Profiles page says how far
+the walk got and what it could not determine, because a partial answer is the normal
+one and is usually the answer you wanted.
+
+**The file keeps the question; the store keeps the answer.** Endpoints are never
+written back into the profile. A resolution is stored with a timestamp, reused until
+`ttl` expires, walked again when you press **Resolve**, and walked again when a
+recording starts — and the snapshot that recording used is pinned to it, so months
+later it still says exactly which build was measured. If the set of machines changes
+while a recording is open, that is a `host_count_changed` note on the recording
+rather than a silent change of subject; collection stays with the machines it started
+with.
+
+Discovery is read-only and needs the permissions in `policy/metrix-readonly.json`.
+Which AWS profile and region to use is `[aws]` in `config.toml`.
+
 ## Addressing
 
 `addressing` is `load_balancer` or `direct`, and it is part of a recording's series

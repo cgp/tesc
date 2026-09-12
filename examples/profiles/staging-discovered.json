@@ -1,0 +1,17 @@
+{
+  "name": "staging-discovered",
+  "description": "Endpoints resolved from a hostname rather than written down. The file says what to look for; the answer lives in the inventory, stored with a timestamp and pinned to every recording made against it.",
+  "addressing": "load_balancer",
+  "discover": {
+    "hostname": "api.staging.example.com",
+    "ttl": "10m",
+    "collect": {
+      "transport": "scrape",
+      "port": 9100
+    }
+  },
+  "observe": {
+    "interval": "1s",
+    "collect": ["cpu", "memory", "net"]
+  }
+}

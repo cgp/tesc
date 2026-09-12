@@ -38,6 +38,8 @@ export const api = {
   createProfile: (document) => request("/api/profiles", json("POST", document)),
   replaceProfile: (name, document) =>
     request(`/api/profiles/${encodeURIComponent(name)}`, json("PUT", document)),
+  resolveProfile: (name) =>
+    request(`/api/profiles/${encodeURIComponent(name)}/resolve`, { method: "POST" }),
   deleteProfile: (name) =>
     request(`/api/profiles/${encodeURIComponent(name)}`, { method: "DELETE" }),
   recordings: (params = {}) => {

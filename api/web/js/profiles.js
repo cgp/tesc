@@ -8,7 +8,7 @@
 // so adding an endpoint row would otherwise wipe every field typed so far; instead
 // the form is read back into the draft before any change that re-renders.
 
-import { escape } from "./format.js";
+import { escape, targetLabel } from "./format.js";
 import { empty, icon } from "./ui.js";
 
 const ADDRESSING = ["load_balancer", "direct"];
@@ -80,7 +80,7 @@ export function render(state) {
         </button>
       </div>
     </div>
-    ${state.profiles.map(profileCard).join("")}
+    ${state.profiles.map((p) => profileCard(p, state.resolving)).join("")}
   </div>`;
 }
 
@@ -119,7 +119,78 @@ function reloadButton(readAt) {
   </button>`;
 }
 
-function profileCard(profile) {
+/**
+ * A profile whose endpoints came from discovery, rather than from the file.
+ *
+ * Three things a person needs here that a table of addresses does not give them:
+ * what was asked for, when the answer was last confirmed, and how far the walk got.
+ * The last one matters because partial resolution is the normal case -- an inventory
+ * that stopped at the target group is a good answer to a shorter question, and it
+ * should not look like a broken one.
+ */
+function discovery(profile, resolving) {
+  const found = profile.inventory;
+  const source = `<code>${escape(profile.discover.source)}</code>`;
+
+  if (!found) {
+    return `<div class="card-body border-bottom">
+      <div class="d-flex align-items-center gap-3">
+        <div class="text-secondary">
+          Endpoints are discovered from ${source}. Nothing has been resolved yet —
+          this profile does not know what it points at until it walks.
+        </div>
+        ${resolveButton(profile.name, "Resolve now", resolving)}
+      </div>
+    </div>`;
+  }
+
+  const notes = found.notes.length
+    ? `<ul class="mb-0 mt-2 text-secondary">${found.notes
+        .map((n) => `<li><span class="badge bg-secondary-lt">${escape(n.hop)}</span>
+                     ${escape(n.message)}</li>`)
+        .join("")}</ul>`
+    : "";
+
+  return `<div class="card-body border-bottom">
+    <div class="d-flex align-items-start gap-3">
+      <div class="flex-fill">
+        <div>Discovered from ${source} —
+          reached <strong>${escape(found.reached)}</strong>,
+          confirmed ${escape(when(found.confirmed_at))}${
+            found.discovered_at !== found.confirmed_at
+              ? `, unchanged since ${escape(when(found.discovered_at))}`
+              : ""
+          }.
+        </div>
+        ${notes}
+      </div>
+      ${resolveButton(profile.name, "Resolve", resolving)}
+    </div>
+  </div>`;
+}
+
+function resolveButton(name, label, resolving) {
+  if (resolving === name) {
+    return `<button class="btn btn-sm" disabled>
+      <span class="spinner-border spinner-border-sm me-2" role="status"></span>Walking…
+    </button>`;
+  }
+  return `<button class="btn btn-sm" data-action="profile-resolve"
+                  data-profile="${escape(name)}"
+                  title="Walk discovery again and store what it finds">
+    ${icon("refresh")} ${escape(label)}
+  </button>`;
+}
+
+/** A stored timestamp as a local time. The date only when it was not today. */
+function when(stamp) {
+  const at = new Date(stamp);
+  if (Number.isNaN(at.getTime())) return stamp;
+  const today = at.toDateString() === new Date().toDateString();
+  return today ? at.toLocaleTimeString() : at.toLocaleString();
+}
+
+function profileCard(profile, resolving) {
   const rows = profile.endpoints
     .map((endpoint) => {
       const observed = profile.observed.includes(endpoint.id);
@@ -130,7 +201,7 @@ function profileCard(profile) {
            <code class="metrix-path ms-1">${escape(endpoint.collects_from ?? "—")}</code>`
         : `<span class="text-secondary">not collected</span>`;
       return `<tr>
-        <td class="name">${escape(endpoint.id)}</td>
+        <td class="name" title="${escape(endpoint.id)}">${escape(targetLabel(endpoint.id))}</td>
         <td><code>${escape(endpoint.address)}</code></td>
         <td>${endpoint.host_header ? `<code>${escape(endpoint.host_header)}</code>` : "—"}</td>
         <td>${collection}</td>
@@ -145,12 +216,13 @@ function profileCard(profile) {
     : "";
 
   const name = escape(profile.name);
+  const source = profile.discover ? " · discovered" : "";
   return `<div class="card">
     <div class="card-header">
       <div>
         <h3 class="card-title">${name}</h3>
         <div class="card-subtitle">${escape(profile.addressing)} addressing ·
-          ${profile.observed.length} of ${profile.endpoints.length} observed</div>
+          ${profile.observed.length} of ${profile.endpoints.length} observed${source}</div>
       </div>
       <div class="card-actions d-flex align-items-center gap-2">
         ${
@@ -161,9 +233,18 @@ function profileCard(profile) {
                </button>`
             : `<span class="text-secondary">nothing to collect</span>`
         }
-        <button class="btn btn-sm" data-action="profile-edit" data-profile="${name}">
-          ${icon("pencil")} Edit
-        </button>
+        ${
+          profile.discover
+            ? // The form edits endpoint rows, and a discovered profile has none of
+              // its own. Until it grows a discovery section, offering it would open
+              // an editor that could only save the profile by emptying it.
+              `<span class="text-secondary" title="Edit the file to change what is discovered">
+                 file only
+               </span>`
+            : `<button class="btn btn-sm" data-action="profile-edit" data-profile="${name}">
+                 ${icon("pencil")} Edit
+               </button>`
+        }
         <button class="btn btn-sm btn-outline-danger" data-action="profile-delete"
                 data-profile="${name}">
           ${icon("trash")} Delete
@@ -171,7 +252,8 @@ function profileCard(profile) {
       </div>
     </div>
     ${description}
-    <div class="table-responsive">
+    ${profile.discover ? discovery(profile, resolving) : ""}
+    ${profile.endpoints.length === 0 ? "" : `<div class="table-responsive">
       <table class="table card-table table-vcenter metrix-table">
         <thead><tr>
           <th style="width:14%">Endpoint</th>
@@ -181,7 +263,7 @@ function profileCard(profile) {
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
-    </div>
+    </div>`}
   </div>`;
 }
 

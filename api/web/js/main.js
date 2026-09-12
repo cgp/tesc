@@ -285,6 +285,26 @@ async function reloadProfiles() {
   }
 }
 
+/**
+ * Walk discovery again for one profile.
+ *
+ * Always a fresh walk, never the cache: this only runs because someone pressed the
+ * button, and handing back the answer they were trying to get past would be a button
+ * that appears to do nothing. It takes a few seconds against a real account, so the
+ * button says so while it runs.
+ */
+async function resolveProfile(name) {
+  try {
+    set({ error: null, resolving: name });
+    await api.resolveProfile(name);
+    await loadProfiles();
+  } catch (error) {
+    set({ error: error.message });
+  } finally {
+    set({ resolving: null });
+  }
+}
+
 async function deleteProfile(name) {
   const message =
     `Delete the profile "${name}"?
@@ -318,6 +338,7 @@ document.addEventListener("click", (event) => {
   if (action === "profile-edit") editProfile(profile);
   if (action === "profile-delete") deleteProfile(profile);
   if (action === "profile-reload") reloadProfiles();
+  if (action === "profile-resolve") resolveProfile(profile);
   if (action === "profile-cancel") set({ profileDraft: null });
   if (action === "profile-save") saveProfile();
   if (action === "endpoint-add") {

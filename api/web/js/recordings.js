@@ -1,7 +1,7 @@
 // The archive. Observation-only recordings and load runs are the same object with
 // different sections populated, so one list shows both.
 
-import { bytes, duration, escape, timestamp } from "./format.js";
+import { bytes, duration, escape, targetLabel, timestamp } from "./format.js";
 import { empty, field, icon } from "./ui.js";
 
 export function render(state) {
@@ -111,6 +111,84 @@ function hostsCard(recording) {
   </div>`;
 }
 
+/**
+ * What the recording ran against, pinned at the time it ran.
+ *
+ * Read from the pin, not resolved again: the tasks named here have very likely been
+ * replaced since, and the answer to "what did this measure" must not change when the
+ * environment does. The task definition and the image digest are the columns that
+ * earn their place — they are what a later comparison uses to say *different build*
+ * rather than *regression*.
+ */
+function inventoryCard(recording) {
+  const found = recording.inventory;
+  if (!found) return "";
+
+  const rows = found.resources
+    .filter((r) => r.role !== "container")
+    .map((resource) => {
+      const build = found.resources
+        .filter((c) => c.role === "container" && c.parent === resource.id)
+        .map(
+          (c) => `<div><code>${escape(c.container)}</code>
+            <span class="text-secondary">${escape(shortDigest(c.image_digest))}</span></div>`
+        )
+        .join("");
+      return `<tr>
+        <td class="name" title="${escape(resource.id)}">${escape(targetLabel(resource.id))}</td>
+        <td><span class="badge bg-secondary-lt">${escape(resource.role)}</span></td>
+        <td><code>${escape(endpointOf(resource))}</code></td>
+        <td>${escape(resource.instance_type ?? resource.availability_zone ?? "—")}</td>
+        <td>${resource.task_definition ? `<code>${escape(resource.task_definition)}</code>` : "—"}</td>
+        <td>${build || '<span class="text-secondary">—</span>'}</td>
+      </tr>`;
+    })
+    .join("");
+
+  const notes = found.notes.length
+    ? `<div class="card-body py-2 border-top text-secondary">
+         ${found.notes.map((n) => `<div>${escape(n.hop)}: ${escape(n.message)}</div>`).join("")}
+       </div>`
+    : "";
+
+  return `<div class="card">
+    <div class="card-header">
+      <div>
+        <h3 class="card-title">What it ran against</h3>
+        <div class="card-subtitle">Discovered from <code>${escape(found.source)}</code>,
+          reached ${escape(found.reached)}. Pinned to this recording — it does not
+          change when the environment does.</div>
+      </div>
+    </div>
+    <div class="table-responsive">
+      <table class="table card-table table-vcenter metrix-table">
+        <thead><tr>
+          <th style="width:19%">Resource</th>
+          <th style="width:7%">Role</th>
+          <th style="width:27%">Address</th>
+          <th style="width:11%">Placement</th>
+          <th style="width:14%">Task definition</th>
+          <th style="width:22%">Build</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    ${notes}
+  </div>`;
+}
+
+function endpointOf(resource) {
+  if (!resource.address) return "—";
+  return resource.port ? `${resource.address}:${resource.port}` : resource.address;
+}
+
+// The first twelve characters identify a build in practice, and the whole digest is
+// 71 of them -- enough to push every other column off the screen.
+function shortDigest(digest) {
+  if (!digest) return "";
+  return digest.startsWith("sha256:") ? digest.slice(0, 19) + "…" : digest.slice(0, 12) + "…";
+}
+
 // Disk before and after, and what the run consumed. Two readings rather than a
 // series: the question is "did this eat space", which a delta answers.
 function diskCard(recording) {
@@ -201,12 +279,18 @@ function detail(recording) {
           ${field("Profile", escape(recording.profile ?? "—"))}
           ${field("Addressing", escape(recording.addressing_mode))}
           ${field("Length", duration(recording.duration_ms))}
-          ${field("Targets", recording.targets.map(escape).join(", ") || "—")}
+          ${field(
+            "Targets",
+            recording.targets
+              .map((t) => `<span title="${escape(t)}">${escape(targetLabel(t))}</span>`)
+              .join(", ") || "—"
+          )}
           ${field("Metrics", String(recording.metrics.length))}
           ${field("Series", `<code>${escape(recording.series_key)}</code>`)}
         </div>
       </div>
     </div>
+    ${inventoryCard(recording)}
     ${hostsCard(recording)}
     ${diskCard(recording)}
     <div class="metrix-split">

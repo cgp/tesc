@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import sqlite3
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Response
 
 from metrix_api import profiles
-from metrix_api.config import Config
-from metrix_api.deps import get_config
+from metrix_api.config import Config, format_duration
+from metrix_api.deps import get_config, get_db
+from metrix_api.discovery import DiscoveryError, Resolver, to_endpoints
 from metrix_api.observer import transport_for
+from metrix_api.store import inventories
 
 router = APIRouter(prefix="/api/profiles", tags=["profiles"])
 
@@ -29,11 +32,26 @@ def _collects_from(endpoint: profiles.Endpoint) -> str | None:
         return f"unusable: {exc}"
 
 
+def _discover(profile: profiles.Profile) -> dict[str, Any] | None:
+    """Where the endpoints come from, when they are not written down."""
+    if profile.discover is None:
+        return None
+    return {
+        "source": profile.discover.source,
+        "hostname": profile.discover.hostname,
+        "cluster": profile.discover.cluster,
+        "service": profile.discover.service,
+        "ttl": format_duration(profile.discover.ttl),
+        "transport": profile.discover.collect.transport,
+    }
+
+
 def _summary(profile: profiles.Profile) -> dict[str, Any]:
     return {
         "name": profile.name,
         "description": profile.description,
         "addressing": profile.addressing,
+        "discover": _discover(profile),
         "endpoints": [
             {
                 "id": e.id,
@@ -51,12 +69,15 @@ def _summary(profile: profiles.Profile) -> dict[str, Any]:
 
 
 @router.get("")
-def list_profiles(config: Config = Depends(get_config)) -> dict[str, Any]:
+def list_profiles(
+    config: Config = Depends(get_config), conn: sqlite3.Connection = Depends(get_db)
+) -> dict[str, Any]:
     names = profiles.list_profiles(config)
     items, broken = [], []
     for name in names:
         try:
-            items.append(_summary(profiles.load_profile(config, name)))
+            resolved, inventory = _resolved(conn, profiles.load_profile(config, name))
+            items.append({**_summary(resolved), "inventory": inventory})
         except profiles.ProfileError as exc:
             # A profile that will not parse is reported rather than dropped: an
             # environment silently missing from the list is worse than a visible error.
@@ -65,11 +86,93 @@ def list_profiles(config: Config = Depends(get_config)) -> dict[str, Any]:
 
 
 @router.get("/{name}")
-def get_profile(name: str, config: Config = Depends(get_config)) -> dict[str, Any]:
+def get_profile(
+    name: str,
+    config: Config = Depends(get_config),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
     try:
-        return _summary(profiles.load_profile(config, name))
+        profile = profiles.load_profile(config, name)
     except profiles.ProfileError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    resolved, inventory = _resolved(conn, profile)
+    return {**_summary(resolved), "inventory": inventory}
+
+
+def _resolved(
+    conn: sqlite3.Connection, profile: profiles.Profile
+) -> tuple[profiles.Profile, dict[str, Any] | None]:
+    """A discovered profile, filled in from the snapshot already stored for it.
+
+    Reads the store, never AWS: opening a page must not start a walk. A profile whose
+    inventory has never been resolved comes back with no endpoints, which is the
+    truth about it.
+    """
+    if profile.discover is None:
+        return profile, None
+    stored = inventories.latest(conn, profile=profile.name)
+    if stored is None:
+        return profile, None
+    endpoints, notes = to_endpoints(
+        stored.inventory,
+        addressing=profile.addressing,
+        collect=profile.discover.collect,
+        host_header=profile.discover.header,
+        tls=profile.discover.tls,
+    )
+    return profile.with_endpoints(endpoints), _inventory_summary(stored, notes)
+
+
+def _inventory_summary(
+    stored: inventories.Stored, extra: list[Any] | None = None
+) -> dict[str, Any]:
+    return {
+        "id": stored.id,
+        "source": stored.inventory.source,
+        "reached": stored.inventory.reached,
+        "partial": stored.inventory.partial,
+        "discovered_at": stored.discovered_at,
+        "confirmed_at": stored.confirmed_at,
+        "resources": stored.inventory.to_document()["resources"],
+        "notes": [
+            {"hop": n.hop, "message": n.message}
+            for n in [*stored.inventory.notes, *(extra or [])]
+        ],
+    }
+
+
+@router.post("/{name}/resolve")
+def resolve_profile(
+    name: str,
+    config: Config = Depends(get_config),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    """Walk discovery now and store what it finds.
+
+    Always a fresh walk: this endpoint exists because someone pressed a button, and
+    handing them the cached answer they were trying to get past would be a button
+    that does nothing.
+    """
+    try:
+        profile = profiles.load_profile(config, name)
+    except profiles.ProfileError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    resolver = Resolver(conn=conn, aws=config.aws)
+    try:
+        resolution = resolver.resolve(profile, force=True)
+    except DiscoveryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except profiles.ProfileError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # ResolveError: the profile has nothing to resolve
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return {
+        **_summary(profile.with_endpoints(resolution.endpoints)),
+        "inventory": _inventory_summary(resolution.stored, resolution.notes),
+        "cached": resolution.cached,
+    }
 
 
 @router.get("/{name}/document")

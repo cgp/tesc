@@ -13,6 +13,10 @@ const state = {
   //: DOM because a render replaces the markup wholesale -- adding an endpoint row
   //: would otherwise wipe every field typed so far.
   profileDraft: null,
+  //: The profile currently being walked, if any. A discovery walk is several
+  //: seconds of control-plane calls, and a button with no sign of life reads as a
+  //: broken one.
+  resolving: null,
   recordings: [],
   selectedRecording: null,
   live: null,

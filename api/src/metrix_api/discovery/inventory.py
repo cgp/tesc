@@ -15,9 +15,12 @@ There is no boto3 here. This module is the shape; `ecs.py` is the walk.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+
+from metrix_api.profiles import Collection, Endpoint, Tls
 
 #: The chain, in the order it is walked. An inventory records the furthest hop that
 #: yielded something, which is what "partial resolution" means concretely.
@@ -254,3 +257,116 @@ def from_document(raw: Any, *, source: str = "<inventory>") -> Inventory:
             for n in raw.get("notes", [])
         ],
     )
+
+
+# ------------------------------------------------- what the two subsystems attach to
+
+
+def hosts(inventory: Inventory) -> list[Resource]:
+    """The resources worth collecting host statistics from.
+
+    An instance when the walk resolved one, and a task only when it did not. Host
+    statistics are whole-machine (design-api 2.3): collecting from both a box and the
+    tasks on it would count the same CPU twice under two names. Fargate resolves no
+    box -- there is nothing to log into -- so there the task is the host.
+    """
+    return [
+        *inventory.by_role("instance"),
+        *[t for t in inventory.by_role("task") if t.instance_id is None],
+    ]
+
+
+def host_key(inventory: Inventory) -> str:
+    """A digest of the host set, for "did the environment change under us".
+
+    Over the ids rather than the whole document, because a task that changed its
+    health or its image digest is the same box: what this answers is whether the
+    *set of machines* being measured moved, which is what makes two halves of a
+    recording incomparable.
+    """
+    identities = sorted(host.id for host in hosts(inventory))
+    return hashlib.sha256("\n".join(identities).encode()).hexdigest()[:16]
+
+
+def to_endpoints(
+    inventory: Inventory,
+    *,
+    addressing: str = "load_balancer",
+    collect: Collection | None = None,
+    host_header: str | None = None,
+    tls: Tls | None = None,
+) -> tuple[list[Endpoint], list[Note]]:
+    """Turn a snapshot into the endpoint list a profile carries.
+
+    This is the point design-api 3.3 is making when it says one inventory serves both
+    subsystems: the same resources become the engine's targets and the observer's
+    collection list, so the two attach to identical identities. The endpoint id *is*
+    the resource id for that reason -- shortening it for the sake of a nicer table
+    would break the join it exists to make.
+
+    Under `load_balancer` addressing the balancer is an endpoint too, with no
+    collector: an ALB cannot be logged into, and it is still where the traffic goes.
+    Under `direct` addressing it is left out, because nothing would be sent there.
+    """
+    endpoints: list[Endpoint] = []
+    notes: list[Note] = []
+
+    if addressing == "load_balancer":
+        for balancer in inventory.by_role("lb"):
+            if balancer.endpoint is None:
+                notes.append(Note("load_balancer", f"{balancer.id} has no port; not addressable"))
+                continue
+            endpoints.append(
+                Endpoint(
+                    id=balancer.id,
+                    address=balancer.endpoint,
+                    host_header=host_header,
+                    tls=Tls(enabled=balancer.attributes.get("protocol") in ("HTTPS", "TLS")),
+                    attributes={"role": "lb", **balancer.attributes},
+                )
+            )
+
+    for host in hosts(inventory):
+        if host.endpoint is None:
+            # An address with no port cannot be written down as an endpoint, and
+            # inventing one would produce a plausible-looking test of nothing.
+            notes.append(
+                Note(
+                    "instance" if host.role == "instance" else "task",
+                    f"{host.id} resolved to {host.address or 'no address'} with no port; "
+                    "it is recorded in the inventory but cannot be an endpoint",
+                )
+            )
+            continue
+        endpoints.append(
+            Endpoint(
+                id=host.id,
+                address=host.endpoint,
+                host_header=host_header,
+                tls=tls or Tls(),
+                attributes=_endpoint_attributes(host),
+                collect=collect or Collection(),
+            )
+        )
+
+    return endpoints, notes
+
+
+def _endpoint_attributes(host: Resource) -> dict[str, str]:
+    """The inventory detail that explains an outlier, flattened onto the endpoint.
+
+    Instance type and AZ because hardware and placement differences show up in the
+    numbers; task definition and image digest because they are what later says
+    *different build* rather than *regression* (design-api 17.2).
+    """
+    named = {
+        "role": host.role,
+        "instance_id": host.instance_id,
+        "instance_type": host.instance_type,
+        "availability_zone": host.availability_zone,
+        "cluster": host.cluster,
+        "service": host.service,
+        "task_definition": host.task_definition,
+        "asg": host.asg.name if host.asg else None,
+    }
+    return {**host.attributes, **{k: str(v) for k, v in named.items() if v is not None}}

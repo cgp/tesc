@@ -4,9 +4,10 @@ A profile is a named description of an environment. Plans reference it by name, 
 one mixture runs against staging, against production, or against a single suspect
 container with no edit to the plan.
 
-This module covers **explicit endpoint lists** -- hosts written down by a person.
-ECS discovery (A2) produces the same :class:`Endpoint` shape from a hostname, so
-everything downstream is indifferent to which one was used.
+A profile gets its endpoints one of two ways (design-api 3.1): written down by a
+person, or resolved from a hostname by discovery. The second is a ``discover`` block
+here and an :class:`Endpoint` list produced from an inventory there, so everything
+downstream is indifferent to which one was used.
 
 A profile serves two consumers:
 
@@ -18,7 +19,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,39 @@ class Collection:
 
 
 @dataclass(frozen=True, slots=True)
+class Discover:
+    """Where a profile's endpoints come from, when a person did not write them down.
+
+    Resolution is cached and refreshed on a TTL rather than performed per run: the
+    walk behind it is several seconds of rate-limited control-plane calls, and an
+    environment does not change between two runs an hour apart (design-api 3.2).
+    """
+
+    hostname: str | None = None
+    #: The other entry point: an ECS service named directly, skipping DNS and the
+    #: load balancer.
+    cluster: str | None = None
+    service: str | None = None
+    #: How long a resolution stands before it is walked again.
+    ttl: timedelta = timedelta(minutes=10)
+    #: Sent as Host to every discovered endpoint. Defaults to the hostname asked for,
+    #: which is what the service is vhosted on.
+    host_header: str | None = None
+    tls: Tls = field(default_factory=Tls)
+    #: Applied to every host found. One setting for the environment, because
+    #: discovery yields boxes that are alike by construction.
+    collect: Collection = field(default_factory=Collection)
+
+    @property
+    def source(self) -> str:
+        return self.hostname or f"{self.cluster}/{self.service}"
+
+    @property
+    def header(self) -> str | None:
+        return self.host_header or self.hostname
+
+
+@dataclass(frozen=True, slots=True)
 class Endpoint:
     id: str
     address: str
@@ -103,9 +137,12 @@ class Endpoint:
 @dataclass(frozen=True, slots=True)
 class Profile:
     name: str
+    #: Written down, or produced from an inventory by discovery. A profile with a
+    #: `discover` block and no endpoints has simply not been resolved yet.
     endpoints: list[Endpoint]
     description: str = ""
     addressing: str = "load_balancer"
+    discover: Discover | None = None
     #: Sweep defaults. Shuffling decouples results from position, since the first
     #: target pays cold-cache costs on shared dependencies that the rest do not.
     order: str = "as_resolved"
@@ -123,8 +160,17 @@ class Profile:
         for candidate in self.endpoints:
             if candidate.id == endpoint_id:
                 return candidate
-        known = ", ".join(e.id for e in self.endpoints)
+        known = ", ".join(e.id for e in self.endpoints) or "none"
         raise ProfileError(f"profile {self.name!r} has no endpoint {endpoint_id!r}; has: {known}")
+
+    def with_endpoints(self, endpoints: list[Endpoint]) -> Profile:
+        """The same profile, resolved. Everything else about it is unchanged.
+
+        A discovered profile is never written back to disk with its endpoints filled
+        in: the file says what to discover, and the answer belongs in the inventory,
+        which is stored with a timestamp and pinned to the runs that used it.
+        """
+        return replace(self, endpoints=endpoints)
 
 
 def to_targets(profile: Profile, *, only: list[str] | None = None) -> dict[str, Any]:
@@ -207,6 +253,8 @@ def to_document(profile: Profile) -> dict[str, Any]:
     if profile.description:
         doc["description"] = profile.description
     doc["addressing"] = profile.addressing
+    if profile.discover is not None:
+        doc["discover"] = _discover_document(profile.discover)
     if profile.order != "as_resolved":
         doc["order"] = profile.order
     if profile.gap is not None:
@@ -220,8 +268,10 @@ def to_document(profile: Profile) -> dict[str, Any]:
     if observe:
         doc["observe"] = observe
 
+    # A discovered profile's endpoints are the inventory's, not the file's: writing
+    # them back would freeze one resolution into a document that asks for a fresh one.
     doc["endpoints"] = []
-    for endpoint in profile.endpoints:
+    for endpoint in profile.endpoints if profile.discover is None else ():
         entry: dict[str, Any] = {"id": endpoint.id, "address": endpoint.address}
         if endpoint.host_header:
             entry["host_header"] = endpoint.host_header
@@ -254,6 +304,40 @@ def to_document(profile: Profile) -> dict[str, Any]:
     return doc
 
 
+def _discover_document(discover: Discover) -> dict[str, Any]:
+    doc: dict[str, Any] = {}
+    for key, value in (
+        ("hostname", discover.hostname),
+        ("cluster", discover.cluster),
+        ("service", discover.service),
+        ("host_header", discover.host_header),
+    ):
+        if value:
+            doc[key] = value
+    doc["ttl"] = format_duration(discover.ttl)
+    if discover.tls != Tls():
+        doc["tls"] = {
+            "enabled": discover.tls.enabled,
+            **({"sni": discover.tls.sni} if discover.tls.sni else {}),
+            **({"insecure_skip_verify": True} if discover.tls.insecure_skip_verify else {}),
+        }
+    if discover.collect.transport != "none":
+        collect: dict[str, Any] = {"transport": discover.collect.transport}
+        for key, value in (
+            ("host", discover.collect.host),
+            ("port", discover.collect.port),
+            ("user", discover.collect.user),
+        ):
+            if value is not None:
+                collect[key] = value
+        if discover.collect.key is not None:
+            collect["key"] = str(discover.collect.key)
+        if discover.collect.path != "/metrics":
+            collect["path"] = discover.collect.path
+        doc["collect"] = collect
+    return doc
+
+
 # --------------------------------------------------------------------- parsing
 
 
@@ -280,7 +364,16 @@ def parse_profile(
 
     _reject_unknown(
         raw,
-        {"name", "description", "addressing", "order", "gap", "observe", "endpoints"},
+        {
+            "name",
+            "description",
+            "addressing",
+            "discover",
+            "order",
+            "gap",
+            "observe",
+            "endpoints",
+        },
         where,
     )
 
@@ -303,9 +396,18 @@ def parse_profile(
         raise ProfileError(f"{where}: 'observe' must be an object")
     _reject_unknown(observe, {"interval", "collect"}, f"{where}: observe")
 
-    endpoints_raw = raw.get("endpoints")
-    if not isinstance(endpoints_raw, list) or not endpoints_raw:
-        raise ProfileError(f"{where}: 'endpoints' must be a non-empty list")
+    discover = (
+        _discover(raw["discover"], addressing, f"{where}: discover") if "discover" in raw else None
+    )
+
+    endpoints_raw = raw.get("endpoints") or []
+    if not isinstance(endpoints_raw, list):
+        raise ProfileError(f"{where}: 'endpoints' must be a list")
+    if not endpoints_raw and discover is None:
+        raise ProfileError(
+            f"{where}: 'endpoints' must be a non-empty list, or a 'discover' block "
+            "saying where to find them"
+        )
 
     endpoints = [
         _endpoint(entry, addressing, f"{where}: endpoints[{i}]")
@@ -325,6 +427,7 @@ def parse_profile(
         name=str(declared),
         description=str(raw.get("description", "")),
         addressing=addressing,
+        discover=discover,
         order=_choice(
             raw.get("order", "as_resolved"), ("as_resolved", "shuffle"), f"{where}: order"
         ),
@@ -371,6 +474,48 @@ def _endpoint(raw: Any, addressing: str, where: str) -> Endpoint:
         host_header=str(host_header) if host_header else None,
         tls=_tls(raw.get("tls", {}), f"{where}: tls"),
         attributes={str(k): str(v) for k, v in raw.get("attributes", {}).items()},
+        collect=_collect(raw.get("collect", {}), f"{where}: collect"),
+    )
+
+
+def _discover(raw: Any, addressing: str, where: str) -> Discover:
+    if not isinstance(raw, dict):
+        raise ProfileError(f"{where}: must be an object")
+    _reject_unknown(
+        raw, {"hostname", "cluster", "service", "ttl", "host_header", "tls", "collect"}, where
+    )
+
+    hostname = str(raw["hostname"]).strip() if raw.get("hostname") else None
+    cluster = str(raw["cluster"]).strip() if raw.get("cluster") else None
+    service = str(raw["service"]).strip() if raw.get("service") else None
+
+    # The two entry points of design-api 3.1, and they are alternatives: a hostname
+    # resolves through the load balancer, a cluster and service skip it entirely.
+    if hostname and (cluster or service):
+        raise ProfileError(f"{where}: give a hostname, or a cluster and a service -- not both")
+    if not hostname and not (cluster and service):
+        raise ProfileError(f"{where}: needs a hostname, or both a cluster and a service")
+
+    host_header = str(raw["host_header"]).strip() if raw.get("host_header") else None
+    if addressing == "direct" and not (host_header or hostname):
+        # Same rule the endpoint form enforces, applied where the answer is decided:
+        # discovered boxes are addressed by IP, and most services route on the header.
+        raise ProfileError(
+            f"{where}: addressing is 'direct' and discovery is by cluster and service, "
+            "so host_header is required -- a raw address gets a 404 or a default backend"
+        )
+
+    return Discover(
+        hostname=hostname,
+        cluster=cluster,
+        service=service,
+        ttl=(
+            parse_duration(raw["ttl"], key=f"{where}: ttl")
+            if "ttl" in raw
+            else Discover().ttl
+        ),
+        host_header=host_header,
+        tls=_tls(raw.get("tls", {}), f"{where}: tls"),
         collect=_collect(raw.get("collect", {}), f"{where}: collect"),
     )
 
