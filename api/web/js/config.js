@@ -36,8 +36,8 @@ export function render(state) {
     );
   }
 
-  return `${broken}<div class="row row-cards">${state.profiles
-    .map((profile) => `<div class="col-12">${profileCard(profile)}</div>`)
+  return `${broken}<div class="metrix-stack">${state.profiles
+    .map(profileCard)
     .join("")}</div>`;
 }
 

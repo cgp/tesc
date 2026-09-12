@@ -182,3 +182,10 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - **Corners softened** to Tabler's own large radius, 8px for cards and 6px for small controls; 2px beside an 8px card read as a mistake rather than a hierarchy.
 - **The gap beside the menu halved, 31px to 16px.** Half of it was never margin: `.navbar-vertical` is `overflow-y: scroll`, which reserves a scrollbar gutter whether or not a four-item menu overflows, and an empty gutter reads as dead space. Now `auto`.
 - Verified: `scripts/check.sh` all green — 170 passed, 1 skipped. Every route re-rendered in the browser with no new console errors.
+
+## 2026-09-12 — Fullscreen fluid layout.
+
+- **The page fills the window.** `container-xl` capped the content at 1320px and centred it, so on a wide screen the cards sat in a column with dead space either side — the actual complaint, which the previous pass misread as the gap beside the menu. Both containers are `container-fluid` now, and their gutter is zero: cards run flush to the menu on the left and to the window edge on the right.
+- Recorded in design §2.4 so it does not get "fixed" back to a centred column: horizontal space in a measurement tool belongs to target columns, not to a reading margin.
+- **Bootstrap's grid could not do this without a compensation to undo.** A `.row` carries a negative horizontal margin that its container's padding is meant to absorb; with the padding gone it hung 8px past the viewport and raised a horizontal scrollbar. Replaced with two rules in our own namespace — `.metrix-stack` for the single-column pages, `.metrix-split` (a two-column grid) for the recording detail. A single-column page did not need a row in the first place.
+- Verified at 1920 and 1440: every route has cards at exactly the menu edge and the window edge, and zero horizontal overflow.

@@ -86,6 +86,32 @@
   gap: .5rem;
 }
 
+/* --------------------------------------------------------------- fluid layout */
+
+/* A fullscreen fluid layout: the page fills the window and the cards run to the
+   edges. `container-xl` would cap at 1320px and centre, which on a wide screen
+   leaves the content in a column with dead space either side -- width this tool
+   would rather spend on target columns. Zeroing the container gutter takes the
+   remaining reading margin off the edges; the row gutter inside is unaffected,
+   since `.row` declares its own. */
+.page-header > .container-fluid,
+.page-body > .container-fluid {
+  --tblr-gutter-x: 0;
+}
+
+/* Card layout, in our own namespace rather than Bootstrap's grid. A `.row` carries
+   a negative horizontal margin that its container's padding is meant to absorb --
+   with the padding gone it hangs 8px past the viewport and raises a horizontal
+   scrollbar. A grid reaches the edges with nothing to compensate for, and a
+   single-column page does not need a row at all. */
+.metrix-stack > * + * { margin-top: var(--tblr-page-padding); }
+
+.metrix-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--tblr-page-padding);
+}
+
 /* ------------------------------------------------------------- the page header */
 
 .page-lede { margin-top: .25rem; font-size: .875rem; max-width: 60ch; }

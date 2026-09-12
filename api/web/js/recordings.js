@@ -93,32 +93,28 @@ function detail(recording) {
   return `<div class="mb-3">
     <a href="#/recordings" class="btn btn-sm">${icon("arrow-left")} All recordings</a>
   </div>
-  <div class="row row-cards">
-    <div class="col-12">
-      <div class="card">
-        <div class="card-header">
-          <h3 class="card-title">${escape(recording.id)}</h3>
-          <div class="card-actions">${statusBadge(recording.status)}</div>
-        </div>
-        <div class="card-body">
-          <div class="datagrid">
-            ${field("Profile", escape(recording.profile ?? "—"))}
-            ${field("Addressing", escape(recording.addressing_mode))}
-            ${field("Length", duration(recording.duration_ms))}
-            ${field("Targets", recording.targets.map(escape).join(", ") || "—")}
-            ${field("Metrics", String(recording.metrics.length))}
-            ${field("Series", `<code>${escape(recording.series_key)}</code>`)}
-          </div>
+  <div class="metrix-stack">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">${escape(recording.id)}</h3>
+        <div class="card-actions">${statusBadge(recording.status)}</div>
+      </div>
+      <div class="card-body">
+        <div class="datagrid">
+          ${field("Profile", escape(recording.profile ?? "—"))}
+          ${field("Addressing", escape(recording.addressing_mode))}
+          ${field("Length", duration(recording.duration_ms))}
+          ${field("Targets", recording.targets.map(escape).join(", ") || "—")}
+          ${field("Metrics", String(recording.metrics.length))}
+          ${field("Series", `<code>${escape(recording.series_key)}</code>`)}
         </div>
       </div>
     </div>
-    <div class="col-6">
+    <div class="metrix-split">
       <div class="card">
         <div class="card-header"><h3 class="card-title">Notes</h3></div>
         <div class="card-body">${annotations}</div>
       </div>
-    </div>
-    <div class="col-6">
       <div class="card">
         <div class="card-header">
           <h3 class="card-title">Collection gaps
