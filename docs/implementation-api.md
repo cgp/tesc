@@ -95,7 +95,7 @@ Nothing here requires the engine. Through A3 the product is a host-observation t
 
 - [x] **A1.1** — `METRIX_HOME` layout, config, SQLite schema and migrations
 - [x] **A1.2** — Target profiles with explicit endpoint lists
-- [ ] **A1.3** — Observer: SSH collection, 1s samples, normalized metric shape (§2.3)
+- [x] **A1.3** — Observer: SSH collection, 1s samples, normalized metric shape (§2.3)
 - [ ] **A1.4** — HTTP scrape collector; graceful degradation, `collection_gap` annotation
 - [ ] **A1.5** — Observation-only recordings: start/stop, phases, persistence (§10.2)
 - [ ] **A1.6** — Static front end: `index.html`, Tabler, left nav, ES module skeleton

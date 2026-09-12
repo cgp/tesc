@@ -35,6 +35,8 @@ packages = ["src/metrix_api"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 100
@@ -43,3 +45,8 @@ line-length = 100
 # Beyond the defaults: E501 so line-length above is enforced rather than decorative,
 # plus import order, modern syntax, and the bug-prone patterns bugbear catches.
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# Captured /proc text, reproduced verbatim. Wrapping a fixture line would make it
+# stop being a fixture.
+"tests/test_observer_linux.py" = ["E501"]

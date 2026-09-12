@@ -90,3 +90,14 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - Found: `line-length = 100` in the ruff config was decorative, because ruff's default rule set does not include E501. Now selecting `E, F, I, UP, B, SIM`; two over-long lines fixed.
 - `examples/profiles/local.json` is the day-one path: a dev server on this machine, no AWS, no discovery.
 - Verified: `scripts/check.sh` all green — 78 Python tests, 12 Rust.
+
+## 2026-09-12 — A1.3 the observer
+
+- **A1.3 done.** SSH collection at 1s with a normalized metric shape: `observer/metrics.py` (names and `Sample`/`Gap`), `linux.py` (parse and derive), `collector.py` (scheduling, gaps, reconnect), `ssh.py` (transport).
+- **The remote side is deliberately dumb** — a POSIX `sh` loop printing `/proc` files with markers, nothing installed. All parsing and arithmetic happen in Python, which is what makes the part that can be quietly wrong testable against captured text with no host involved.
+- One long-lived SSH channel rather than an exec per sample: at 1s, per-sample connection and process spawn would dominate and the collector would be measuring itself.
+- Deliberate behaviors, each with a test: the first sample emits gauges but **no rates** (inventing one would put a wrong number at t=0 on every chart); a counter going backwards is a reboot, not a negative rate; a stalled stream emits a gap and **restarts rate accumulation** rather than averaging across the hole; a dead transport is a gap plus a reconnect, never an aborted recording; one unreachable host does not stop the others; partitions do not double-count their disk and loopback is not network traffic.
+- `iowait` and `steal` are separate metrics and excluded from `cpu.busy` — iowait is the disk, steal is a neighbour, and "CPU is busy" hides both.
+- Nearly shipped a real bug: while shortening a line I changed the meminfo grep to `Swap:`, which matches neither `SwapTotal` nor `SwapFree`. The fixtures bypass grep, so no test would have caught it — the remote script is now structured so its lines fit without pattern surgery.
+- **Untested against a live host.** The parser, the derivations, and the collector's failure handling are covered; `ssh.py` itself needs a real box.
+- Verified: `scripts/check.sh` all green — 107 Python tests, 12 Rust.
