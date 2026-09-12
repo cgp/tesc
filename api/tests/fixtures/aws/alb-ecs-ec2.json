@@ -1,0 +1,368 @@
+{
+  "description": "orders.example.com: a CNAME to an ALB -> the listener default action -> an instance target group -> an ECS service on the EC2 launch type -> tasks in bridge networking (no ENI) -> container instances -> EC2 -> an autoscaling group. The service is one task short of its desired count.",
+  "route53": {
+    "list_hosted_zones": [
+      {
+        "request": {},
+        "response": {
+          "HostedZones": [
+            {"Id": "/hostedzone/Z0EXAMPLE1", "Name": "example.com.", "CallerReference": "1"}
+          ],
+          "IsTruncated": false
+        }
+      }
+    ],
+    "list_resource_record_sets": [
+      {
+        "request": {"HostedZoneId": "/hostedzone/Z0EXAMPLE1"},
+        "response": {
+          "ResourceRecordSets": [
+            {
+              "Name": "orders.example.com.",
+              "Type": "CNAME",
+              "TTL": 60,
+              "ResourceRecords": [
+                {"Value": "metrix-orders-alb-2087654321.us-east-1.elb.amazonaws.com"}
+              ]
+            }
+          ],
+          "IsTruncated": false
+        }
+      }
+    ]
+  },
+  "elbv2": {
+    "describe_load_balancers": [
+      {
+        "request": {},
+        "response": {
+          "LoadBalancers": [
+            {
+              "LoadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/metrix-orders-alb/5a6b7c8d9e0f1a2b",
+              "DNSName": "metrix-orders-alb-2087654321.us-east-1.elb.amazonaws.com",
+              "LoadBalancerName": "metrix-orders-alb",
+              "Scheme": "internet-facing",
+              "Type": "application",
+              "VpcId": "vpc-0d1e2f3a",
+              "State": {"Code": "active"},
+              "AvailabilityZones": [{"ZoneName": "us-east-1a"}, {"ZoneName": "us-east-1b"}]
+            }
+          ]
+        }
+      }
+    ],
+    "describe_listeners": [
+      {
+        "request": {
+          "LoadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/metrix-orders-alb/5a6b7c8d9e0f1a2b"
+        },
+        "response": {
+          "Listeners": [
+            {
+              "ListenerArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:listener/app/metrix-orders-alb/5a6b7c8d9e0f1a2b/abcdef0123456789",
+              "LoadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/metrix-orders-alb/5a6b7c8d9e0f1a2b",
+              "Port": 80,
+              "Protocol": "HTTP",
+              "DefaultActions": [
+                {
+                  "Type": "forward",
+                  "ForwardConfig": {
+                    "TargetGroups": [
+                      {
+                        "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/metrix-orders/44556677889900aa",
+                        "Weight": 1
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "describe_rules": [
+      {
+        "request": {
+          "ListenerArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:listener/app/metrix-orders-alb/5a6b7c8d9e0f1a2b/abcdef0123456789"
+        },
+        "response": {
+          "Rules": [
+            {
+              "RuleArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:listener-rule/app/metrix-orders-alb/5a6b7c8d9e0f1a2b/abcdef0123456789/default",
+              "Priority": "default",
+              "IsDefault": true,
+              "Conditions": [],
+              "Actions": [
+                {
+                  "Type": "forward",
+                  "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/metrix-orders/44556677889900aa"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "describe_target_groups": [
+      {
+        "request": {
+          "TargetGroupArns": [
+            "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/metrix-orders/44556677889900aa"
+          ]
+        },
+        "response": {
+          "TargetGroups": [
+            {
+              "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/metrix-orders/44556677889900aa",
+              "TargetGroupName": "metrix-orders",
+              "Protocol": "HTTP",
+              "Port": 80,
+              "TargetType": "instance",
+              "VpcId": "vpc-0d1e2f3a"
+            }
+          ]
+        }
+      }
+    ],
+    "describe_target_health": [
+      {
+        "request": {
+          "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/metrix-orders/44556677889900aa"
+        },
+        "response": {
+          "TargetHealthDescriptions": [
+            {
+              "Target": {"Id": "i-0aaa1111bbbb2222c", "Port": 32768},
+              "HealthCheckPort": "32768",
+              "TargetHealth": {"State": "healthy"}
+            },
+            {
+              "Target": {"Id": "i-0bbb2222cccc3333d", "Port": 32769},
+              "HealthCheckPort": "32769",
+              "TargetHealth": {"State": "healthy"}
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "ecs": {
+    "list_clusters": [
+      {
+        "request": {},
+        "response": {"clusterArns": ["arn:aws:ecs:us-east-1:123456789012:cluster/orders"]}
+      }
+    ],
+    "list_services": [
+      {
+        "request": {"cluster": "arn:aws:ecs:us-east-1:123456789012:cluster/orders"},
+        "response": {
+          "serviceArns": ["arn:aws:ecs:us-east-1:123456789012:service/orders/orders-api"]
+        }
+      }
+    ],
+    "describe_services": [
+      {
+        "request": {"cluster": "arn:aws:ecs:us-east-1:123456789012:cluster/orders"},
+        "response": {
+          "services": [
+            {
+              "serviceArn": "arn:aws:ecs:us-east-1:123456789012:service/orders/orders-api",
+              "serviceName": "orders-api",
+              "clusterArn": "arn:aws:ecs:us-east-1:123456789012:cluster/orders",
+              "status": "ACTIVE",
+              "desiredCount": 3,
+              "runningCount": 2,
+              "launchType": "EC2",
+              "taskDefinition": "arn:aws:ecs:us-east-1:123456789012:task-definition/orders-api:118",
+              "loadBalancers": [
+                {
+                  "targetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/metrix-orders/44556677889900aa",
+                  "containerName": "orders",
+                  "containerPort": 8000
+                }
+              ]
+            }
+          ],
+          "failures": []
+        }
+      }
+    ],
+    "list_tasks": [
+      {
+        "request": {
+          "cluster": "arn:aws:ecs:us-east-1:123456789012:cluster/orders",
+          "serviceName": "orders-api"
+        },
+        "response": {
+          "taskArns": [
+            "arn:aws:ecs:us-east-1:123456789012:task/orders/aa11bb22cc33dd44ee55ff6677889900",
+            "arn:aws:ecs:us-east-1:123456789012:task/orders/bb22cc33dd44ee55ff6677889900aa11"
+          ]
+        }
+      }
+    ],
+    "describe_tasks": [
+      {
+        "request": {"cluster": "arn:aws:ecs:us-east-1:123456789012:cluster/orders"},
+        "response": {
+          "tasks": [
+            {
+              "taskArn": "arn:aws:ecs:us-east-1:123456789012:task/orders/aa11bb22cc33dd44ee55ff6677889900",
+              "clusterArn": "arn:aws:ecs:us-east-1:123456789012:cluster/orders",
+              "containerInstanceArn": "arn:aws:ecs:us-east-1:123456789012:container-instance/orders/1111aaaa2222bbbb3333cccc4444dddd",
+              "taskDefinitionArn": "arn:aws:ecs:us-east-1:123456789012:task-definition/orders-api:118",
+              "lastStatus": "RUNNING",
+              "desiredStatus": "RUNNING",
+              "healthStatus": "HEALTHY",
+              "launchType": "EC2",
+              "availabilityZone": "us-east-1a",
+              "attachments": [],
+              "containers": [
+                {
+                  "name": "orders",
+                  "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/orders-api:1.44.2",
+                  "imageDigest": "sha256:5f4e3d2c1b0a9f8e7d6c5b4a3928170615243342516071829304a5b6c7d8e9f0",
+                  "lastStatus": "RUNNING",
+                  "healthStatus": "HEALTHY",
+                  "networkBindings": [
+                    {"bindIP": "0.0.0.0", "containerPort": 8000, "hostPort": 32768, "protocol": "tcp"}
+                  ]
+                }
+              ]
+            },
+            {
+              "taskArn": "arn:aws:ecs:us-east-1:123456789012:task/orders/bb22cc33dd44ee55ff6677889900aa11",
+              "clusterArn": "arn:aws:ecs:us-east-1:123456789012:cluster/orders",
+              "containerInstanceArn": "arn:aws:ecs:us-east-1:123456789012:container-instance/orders/2222bbbb3333cccc4444dddd5555eeee",
+              "taskDefinitionArn": "arn:aws:ecs:us-east-1:123456789012:task-definition/orders-api:117",
+              "lastStatus": "RUNNING",
+              "desiredStatus": "RUNNING",
+              "healthStatus": "HEALTHY",
+              "launchType": "EC2",
+              "availabilityZone": "us-east-1b",
+              "attachments": [],
+              "containers": [
+                {
+                  "name": "orders",
+                  "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/orders-api:1.44.1",
+                  "imageDigest": "sha256:0f9e8d7c6b5a4938271605142332415061728394a5b6c7d8e9f0a1b2c3d4e5f6",
+                  "lastStatus": "RUNNING",
+                  "healthStatus": "HEALTHY",
+                  "networkBindings": [
+                    {"bindIP": "0.0.0.0", "containerPort": 8000, "hostPort": 32769, "protocol": "tcp"}
+                  ]
+                }
+              ]
+            }
+          ],
+          "failures": []
+        }
+      }
+    ],
+    "describe_container_instances": [
+      {
+        "request": {"cluster": "arn:aws:ecs:us-east-1:123456789012:cluster/orders"},
+        "response": {
+          "containerInstances": [
+            {
+              "containerInstanceArn": "arn:aws:ecs:us-east-1:123456789012:container-instance/orders/1111aaaa2222bbbb3333cccc4444dddd",
+              "ec2InstanceId": "i-0aaa1111bbbb2222c",
+              "status": "ACTIVE",
+              "agentConnected": true,
+              "runningTasksCount": 1
+            },
+            {
+              "containerInstanceArn": "arn:aws:ecs:us-east-1:123456789012:container-instance/orders/2222bbbb3333cccc4444dddd5555eeee",
+              "ec2InstanceId": "i-0bbb2222cccc3333d",
+              "status": "ACTIVE",
+              "agentConnected": true,
+              "runningTasksCount": 1
+            }
+          ],
+          "failures": []
+        }
+      }
+    ]
+  },
+  "ec2": {
+    "describe_instances": [
+      {
+        "request": {"InstanceIds": ["i-0aaa1111bbbb2222c", "i-0bbb2222cccc3333d"]},
+        "response": {
+          "Reservations": [
+            {
+              "ReservationId": "r-0123456789abcdef0",
+              "Instances": [
+                {
+                  "InstanceId": "i-0aaa1111bbbb2222c",
+                  "InstanceType": "m6i.large",
+                  "PrivateIpAddress": "10.1.1.11",
+                  "PrivateDnsName": "ip-10-1-1-11.ec2.internal",
+                  "State": {"Code": 16, "Name": "running"},
+                  "Placement": {"AvailabilityZone": "us-east-1a", "Tenancy": "default"},
+                  "VpcId": "vpc-0d1e2f3a"
+                },
+                {
+                  "InstanceId": "i-0bbb2222cccc3333d",
+                  "InstanceType": "m6i.xlarge",
+                  "PrivateIpAddress": "10.1.2.12",
+                  "PrivateDnsName": "ip-10-1-2-12.ec2.internal",
+                  "State": {"Code": 16, "Name": "running"},
+                  "Placement": {"AvailabilityZone": "us-east-1b", "Tenancy": "default"},
+                  "VpcId": "vpc-0d1e2f3a"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "autoscaling": {
+    "describe_auto_scaling_instances": [
+      {
+        "request": {"InstanceIds": ["i-0aaa1111bbbb2222c", "i-0bbb2222cccc3333d"]},
+        "response": {
+          "AutoScalingInstances": [
+            {
+              "InstanceId": "i-0aaa1111bbbb2222c",
+              "AutoScalingGroupName": "orders-ecs-asg",
+              "AvailabilityZone": "us-east-1a",
+              "LifecycleState": "InService",
+              "HealthStatus": "HEALTHY"
+            },
+            {
+              "InstanceId": "i-0bbb2222cccc3333d",
+              "AutoScalingGroupName": "orders-ecs-asg",
+              "AvailabilityZone": "us-east-1b",
+              "LifecycleState": "InService",
+              "HealthStatus": "HEALTHY"
+            }
+          ]
+        }
+      }
+    ],
+    "describe_auto_scaling_groups": [
+      {
+        "request": {"AutoScalingGroupNames": ["orders-ecs-asg"]},
+        "response": {
+          "AutoScalingGroups": [
+            {
+              "AutoScalingGroupName": "orders-ecs-asg",
+              "MinSize": 2,
+              "MaxSize": 6,
+              "DesiredCapacity": 2,
+              "AvailabilityZones": ["us-east-1a", "us-east-1b"],
+              "Instances": [
+                {"InstanceId": "i-0aaa1111bbbb2222c", "LifecycleState": "InService"},
+                {"InstanceId": "i-0bbb2222cccc3333d", "LifecycleState": "InService"}
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

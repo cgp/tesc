@@ -144,7 +144,9 @@ Discovery produces a versioned snapshot, stored with the profile and **pinned in
 | Task ARN, **task definition revision** | Identifies the deployment |
 | Container name, **image digest** | Identifies the build |
 | ASG name, desired/min/max | Autoscaling context (§18) |
-| Health status, discovered_at | Freshness and eligibility |
+| Health status | Eligibility, and whether a target was mid-deregistration |
+
+Per snapshot rather than per entry: the source it was resolved from, one `discovered_at` — a walk is a single instant, and per-entry times would differ only by the latency of the call that found each one — **the furthest hop the walk reached**, and the notes saying what it could not determine. Those last two are how partial resolution is reported as a result rather than an error (§3.1).
 
 The inventory serves both subsystems: it is the engine's endpoint list *and* the observer's collection target list (§2.3), so load metrics and host metrics attach to the same identities and can be joined without guesswork.
 

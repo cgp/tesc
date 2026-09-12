@@ -1,0 +1,447 @@
+{
+  "description": "api.staging.example.com: Route 53 alias -> ALB -> a host-header rule -> an ip target group -> a Fargate service -> two tasks, four containers. One target is mid-deregistration. describe_load_balancers is paginated, as it is in any account with more than a handful.",
+  "route53": {
+    "list_hosted_zones": [
+      {
+        "request": {},
+        "response": {
+          "HostedZones": [
+            {"Id": "/hostedzone/Z0EXAMPLE1", "Name": "example.com.", "CallerReference": "1"},
+            {"Id": "/hostedzone/Z0EXAMPLE2", "Name": "staging.example.com.", "CallerReference": "2"}
+          ],
+          "IsTruncated": false
+        }
+      }
+    ],
+    "list_resource_record_sets": [
+      {
+        "request": {"HostedZoneId": "/hostedzone/Z0EXAMPLE1"},
+        "response": {
+          "ResourceRecordSets": [
+            {
+              "Name": "staging.example.com.",
+              "Type": "NS",
+              "TTL": 172800,
+              "ResourceRecords": [{"Value": "ns-1.awsdns-00.co.uk."}]
+            },
+            {
+              "Name": "www.example.com.",
+              "Type": "A",
+              "TTL": 300,
+              "ResourceRecords": [{"Value": "203.0.113.10"}]
+            }
+          ],
+          "IsTruncated": false
+        }
+      },
+      {
+        "request": {"HostedZoneId": "/hostedzone/Z0EXAMPLE2"},
+        "response": {
+          "ResourceRecordSets": [
+            {
+              "Name": "api.staging.example.com.",
+              "Type": "A",
+              "AliasTarget": {
+                "HostedZoneId": "Z32O12XQLNTSW2",
+                "DNSName": "dualstack.metrix-staging-alb-1904471234.eu-west-1.elb.amazonaws.com.",
+                "EvaluateTargetHealth": true
+              }
+            },
+            {
+              "Name": "www.staging.example.com.",
+              "Type": "CNAME",
+              "TTL": 300,
+              "ResourceRecords": [{"Value": "api.staging.example.com"}]
+            }
+          ],
+          "IsTruncated": false
+        }
+      }
+    ]
+  },
+  "elbv2": {
+    "describe_load_balancers": [
+      {
+        "request": {},
+        "response": {
+          "LoadBalancers": [
+            {
+              "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:loadbalancer/app/metrix-staging-internal/6b0f1c2d3e4f5a6b",
+              "DNSName": "internal-metrix-staging-internal-1119876543.eu-west-1.elb.amazonaws.com",
+              "LoadBalancerName": "metrix-staging-internal",
+              "Scheme": "internal",
+              "Type": "application",
+              "VpcId": "vpc-0a1b2c3d",
+              "State": {"Code": "active"},
+              "AvailabilityZones": [{"ZoneName": "eu-west-1a"}, {"ZoneName": "eu-west-1b"}]
+            }
+          ],
+          "NextMarker": "page-2"
+        }
+      },
+      {
+        "request": {"Marker": "page-2"},
+        "response": {
+          "LoadBalancers": [
+            {
+              "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:loadbalancer/app/metrix-staging-alb/1a2b3c4d5e6f7a8b",
+              "DNSName": "metrix-staging-alb-1904471234.eu-west-1.elb.amazonaws.com",
+              "LoadBalancerName": "metrix-staging-alb",
+              "Scheme": "internet-facing",
+              "Type": "application",
+              "VpcId": "vpc-0a1b2c3d",
+              "State": {"Code": "active"},
+              "AvailabilityZones": [{"ZoneName": "eu-west-1a"}, {"ZoneName": "eu-west-1b"}]
+            }
+          ]
+        }
+      }
+    ],
+    "describe_listeners": [
+      {
+        "request": {
+          "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:loadbalancer/app/metrix-staging-alb/1a2b3c4d5e6f7a8b"
+        },
+        "response": {
+          "Listeners": [
+            {
+              "ListenerArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:listener/app/metrix-staging-alb/1a2b3c4d5e6f7a8b/9f8e7d6c5b4a3210",
+              "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:loadbalancer/app/metrix-staging-alb/1a2b3c4d5e6f7a8b",
+              "Port": 80,
+              "Protocol": "HTTP",
+              "DefaultActions": [
+                {
+                  "Type": "redirect",
+                  "RedirectConfig": {"Protocol": "HTTPS", "Port": "443", "StatusCode": "HTTP_301"}
+                }
+              ]
+            },
+            {
+              "ListenerArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:listener/app/metrix-staging-alb/1a2b3c4d5e6f7a8b/0123456789abcdef",
+              "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:loadbalancer/app/metrix-staging-alb/1a2b3c4d5e6f7a8b",
+              "Port": 443,
+              "Protocol": "HTTPS",
+              "DefaultActions": [
+                {
+                  "Type": "forward",
+                  "TargetGroupArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:targetgroup/metrix-staging-web/aa11bb22cc33dd44"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "describe_rules": [
+      {
+        "request": {
+          "ListenerArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:listener/app/metrix-staging-alb/1a2b3c4d5e6f7a8b/9f8e7d6c5b4a3210"
+        },
+        "response": {
+          "Rules": [
+            {
+              "RuleArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:listener-rule/app/metrix-staging-alb/1a2b3c4d5e6f7a8b/9f8e7d6c5b4a3210/default",
+              "Priority": "default",
+              "IsDefault": true,
+              "Conditions": [],
+              "Actions": [
+                {
+                  "Type": "redirect",
+                  "RedirectConfig": {"Protocol": "HTTPS", "Port": "443", "StatusCode": "HTTP_301"}
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "request": {
+          "ListenerArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:listener/app/metrix-staging-alb/1a2b3c4d5e6f7a8b/0123456789abcdef"
+        },
+        "response": {
+          "Rules": [
+            {
+              "RuleArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:listener-rule/app/metrix-staging-alb/1a2b3c4d5e6f7a8b/0123456789abcdef/1111",
+              "Priority": "10",
+              "IsDefault": false,
+              "Conditions": [
+                {
+                  "Field": "host-header",
+                  "Values": ["api.*.example.com"],
+                  "HostHeaderConfig": {"Values": ["api.*.example.com"]}
+                }
+              ],
+              "Actions": [
+                {
+                  "Type": "forward",
+                  "TargetGroupArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:targetgroup/metrix-staging-api/1122334455667788"
+                }
+              ]
+            },
+            {
+              "RuleArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:listener-rule/app/metrix-staging-alb/1a2b3c4d5e6f7a8b/0123456789abcdef/2222",
+              "Priority": "20",
+              "IsDefault": false,
+              "Conditions": [
+                {
+                  "Field": "host-header",
+                  "Values": ["admin.staging.example.com"],
+                  "HostHeaderConfig": {"Values": ["admin.staging.example.com"]}
+                }
+              ],
+              "Actions": [
+                {
+                  "Type": "forward",
+                  "TargetGroupArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:targetgroup/metrix-staging-admin/9988776655443322"
+                }
+              ]
+            },
+            {
+              "RuleArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:listener-rule/app/metrix-staging-alb/1a2b3c4d5e6f7a8b/0123456789abcdef/default",
+              "Priority": "default",
+              "IsDefault": true,
+              "Conditions": [],
+              "Actions": [
+                {
+                  "Type": "forward",
+                  "TargetGroupArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:targetgroup/metrix-staging-web/aa11bb22cc33dd44"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "describe_target_groups": [
+      {
+        "request": {
+          "TargetGroupArns": [
+            "arn:aws:elasticloadbalancing:eu-west-1:123456789012:targetgroup/metrix-staging-api/1122334455667788"
+          ]
+        },
+        "response": {
+          "TargetGroups": [
+            {
+              "TargetGroupArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:targetgroup/metrix-staging-api/1122334455667788",
+              "TargetGroupName": "metrix-staging-api",
+              "Protocol": "HTTP",
+              "Port": 8080,
+              "TargetType": "ip",
+              "VpcId": "vpc-0a1b2c3d",
+              "HealthCheckPath": "/healthz"
+            }
+          ]
+        }
+      }
+    ],
+    "describe_target_health": [
+      {
+        "request": {
+          "TargetGroupArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:targetgroup/metrix-staging-api/1122334455667788"
+        },
+        "response": {
+          "TargetHealthDescriptions": [
+            {
+              "Target": {"Id": "10.0.11.21", "Port": 8080, "AvailabilityZone": "eu-west-1a"},
+              "HealthCheckPort": "8080",
+              "TargetHealth": {"State": "healthy"}
+            },
+            {
+              "Target": {"Id": "10.0.12.22", "Port": 8080, "AvailabilityZone": "eu-west-1b"},
+              "HealthCheckPort": "8080",
+              "TargetHealth": {"State": "healthy"}
+            },
+            {
+              "Target": {"Id": "10.0.11.23", "Port": 8080, "AvailabilityZone": "eu-west-1a"},
+              "HealthCheckPort": "8080",
+              "TargetHealth": {
+                "State": "draining",
+                "Reason": "Target.DeregistrationInProgress",
+                "Description": "Target deregistration is in progress"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "ecs": {
+    "list_clusters": [
+      {
+        "request": {},
+        "response": {
+          "clusterArns": ["arn:aws:ecs:eu-west-1:123456789012:cluster/staging"]
+        }
+      }
+    ],
+    "list_services": [
+      {
+        "request": {"cluster": "arn:aws:ecs:eu-west-1:123456789012:cluster/staging"},
+        "response": {
+          "serviceArns": [
+            "arn:aws:ecs:eu-west-1:123456789012:service/staging/api",
+            "arn:aws:ecs:eu-west-1:123456789012:service/staging/web"
+          ]
+        }
+      }
+    ],
+    "describe_services": [
+      {
+        "request": {"cluster": "arn:aws:ecs:eu-west-1:123456789012:cluster/staging"},
+        "response": {
+          "services": [
+            {
+              "serviceArn": "arn:aws:ecs:eu-west-1:123456789012:service/staging/api",
+              "serviceName": "api",
+              "clusterArn": "arn:aws:ecs:eu-west-1:123456789012:cluster/staging",
+              "status": "ACTIVE",
+              "desiredCount": 2,
+              "runningCount": 2,
+              "launchType": "FARGATE",
+              "taskDefinition": "arn:aws:ecs:eu-west-1:123456789012:task-definition/metrix-api:47",
+              "loadBalancers": [
+                {
+                  "targetGroupArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:targetgroup/metrix-staging-api/1122334455667788",
+                  "containerName": "api",
+                  "containerPort": 8080
+                }
+              ]
+            },
+            {
+              "serviceArn": "arn:aws:ecs:eu-west-1:123456789012:service/staging/web",
+              "serviceName": "web",
+              "clusterArn": "arn:aws:ecs:eu-west-1:123456789012:cluster/staging",
+              "status": "ACTIVE",
+              "desiredCount": 2,
+              "runningCount": 2,
+              "launchType": "FARGATE",
+              "taskDefinition": "arn:aws:ecs:eu-west-1:123456789012:task-definition/metrix-web:12",
+              "loadBalancers": [
+                {
+                  "targetGroupArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:targetgroup/metrix-staging-web/aa11bb22cc33dd44",
+                  "containerName": "web",
+                  "containerPort": 8080
+                }
+              ]
+            }
+          ],
+          "failures": []
+        }
+      }
+    ],
+    "list_tasks": [
+      {
+        "request": {
+          "cluster": "arn:aws:ecs:eu-west-1:123456789012:cluster/staging",
+          "serviceName": "api"
+        },
+        "response": {
+          "taskArns": [
+            "arn:aws:ecs:eu-west-1:123456789012:task/staging/3f1c5a7e9b2d4c6f8a0b1c2d3e4f5a6b",
+            "arn:aws:ecs:eu-west-1:123456789012:task/staging/7e2d4c6f8a0b1c2d3e4f5a6b3f1c5a7e"
+          ]
+        }
+      }
+    ],
+    "describe_tasks": [
+      {
+        "request": {"cluster": "arn:aws:ecs:eu-west-1:123456789012:cluster/staging"},
+        "response": {
+          "tasks": [
+            {
+              "taskArn": "arn:aws:ecs:eu-west-1:123456789012:task/staging/3f1c5a7e9b2d4c6f8a0b1c2d3e4f5a6b",
+              "clusterArn": "arn:aws:ecs:eu-west-1:123456789012:cluster/staging",
+              "taskDefinitionArn": "arn:aws:ecs:eu-west-1:123456789012:task-definition/metrix-api:47",
+              "lastStatus": "RUNNING",
+              "desiredStatus": "RUNNING",
+              "healthStatus": "HEALTHY",
+              "launchType": "FARGATE",
+              "platformVersion": "1.4.0",
+              "cpu": "1024",
+              "memory": "2048",
+              "availabilityZone": "eu-west-1a",
+              "attachments": [
+                {
+                  "id": "a1b2c3d4-0000-1111-2222-333344445555",
+                  "type": "ElasticNetworkInterface",
+                  "status": "ATTACHED",
+                  "details": [
+                    {"name": "subnetId", "value": "subnet-0aaa1111"},
+                    {"name": "networkInterfaceId", "value": "eni-0aaa1111bbbb2222"},
+                    {"name": "macAddress", "value": "02:1f:2a:3b:4c:5d"},
+                    {"name": "privateDnsName", "value": "ip-10-0-11-21.eu-west-1.compute.internal"},
+                    {"name": "privateIPv4Address", "value": "10.0.11.21"}
+                  ]
+                }
+              ],
+              "containers": [
+                {
+                  "containerArn": "arn:aws:ecs:eu-west-1:123456789012:container/staging/3f1c5a7e9b2d4c6f8a0b1c2d3e4f5a6b/1111",
+                  "name": "api",
+                  "image": "123456789012.dkr.ecr.eu-west-1.amazonaws.com/metrix-api:2026.09.03",
+                  "imageDigest": "sha256:9c1d0f2a4b6c8d0e2f4a6b8c0d2e4f6a8b0c2d4e6f8a0b2c4d6e8f0a2b4c6d8e",
+                  "lastStatus": "RUNNING",
+                  "healthStatus": "HEALTHY"
+                },
+                {
+                  "containerArn": "arn:aws:ecs:eu-west-1:123456789012:container/staging/3f1c5a7e9b2d4c6f8a0b1c2d3e4f5a6b/2222",
+                  "name": "log-router",
+                  "image": "public.ecr.aws/aws-observability/aws-for-fluent-bit:2.32.0",
+                  "imageDigest": "sha256:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b",
+                  "lastStatus": "RUNNING",
+                  "healthStatus": "UNKNOWN"
+                }
+              ]
+            },
+            {
+              "taskArn": "arn:aws:ecs:eu-west-1:123456789012:task/staging/7e2d4c6f8a0b1c2d3e4f5a6b3f1c5a7e",
+              "clusterArn": "arn:aws:ecs:eu-west-1:123456789012:cluster/staging",
+              "taskDefinitionArn": "arn:aws:ecs:eu-west-1:123456789012:task-definition/metrix-api:47",
+              "lastStatus": "RUNNING",
+              "desiredStatus": "RUNNING",
+              "healthStatus": "HEALTHY",
+              "launchType": "FARGATE",
+              "platformVersion": "1.4.0",
+              "cpu": "1024",
+              "memory": "2048",
+              "availabilityZone": "eu-west-1b",
+              "attachments": [
+                {
+                  "id": "b2c3d4e5-0000-1111-2222-333344445555",
+                  "type": "ElasticNetworkInterface",
+                  "status": "ATTACHED",
+                  "details": [
+                    {"name": "subnetId", "value": "subnet-0bbb2222"},
+                    {"name": "networkInterfaceId", "value": "eni-0bbb2222cccc3333"},
+                    {"name": "privateIPv4Address", "value": "10.0.12.22"}
+                  ]
+                }
+              ],
+              "containers": [
+                {
+                  "containerArn": "arn:aws:ecs:eu-west-1:123456789012:container/staging/7e2d4c6f8a0b1c2d3e4f5a6b3f1c5a7e/1111",
+                  "name": "api",
+                  "image": "123456789012.dkr.ecr.eu-west-1.amazonaws.com/metrix-api:2026.09.03",
+                  "imageDigest": "sha256:9c1d0f2a4b6c8d0e2f4a6b8c0d2e4f6a8b0c2d4e6f8a0b2c4d6e8f0a2b4c6d8e",
+                  "lastStatus": "RUNNING",
+                  "healthStatus": "HEALTHY"
+                },
+                {
+                  "containerArn": "arn:aws:ecs:eu-west-1:123456789012:container/staging/7e2d4c6f8a0b1c2d3e4f5a6b3f1c5a7e/2222",
+                  "name": "log-router",
+                  "image": "public.ecr.aws/aws-observability/aws-for-fluent-bit:2.32.0",
+                  "imageDigest": "sha256:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b",
+                  "lastStatus": "RUNNING",
+                  "healthStatus": "UNKNOWN"
+                }
+              ]
+            }
+          ],
+          "failures": []
+        }
+      }
+    ]
+  },
+  "ec2": {},
+  "autoscaling": {}
+}

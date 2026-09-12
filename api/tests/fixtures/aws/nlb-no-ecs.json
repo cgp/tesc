@@ -1,0 +1,155 @@
+{
+  "description": "The hostname is a network load balancer's own DNS name, so there is no Route 53 hop and no listener rules to read. Nothing in ECS is registered against its target group: one IP target resolves to an instance through its network interface, the other belongs to nothing in this account.",
+  "route53": {},
+  "elbv2": {
+    "describe_load_balancers": [
+      {
+        "request": {},
+        "response": {
+          "LoadBalancers": [
+            {
+              "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:loadbalancer/net/metrix-edge-nlb/7c8d9e0f1a2b3c4d",
+              "DNSName": "metrix-edge-nlb-abc123def456.elb.eu-west-1.amazonaws.com",
+              "LoadBalancerName": "metrix-edge-nlb",
+              "Scheme": "internet-facing",
+              "Type": "network",
+              "VpcId": "vpc-0a1b2c3d",
+              "State": {"Code": "active"},
+              "AvailabilityZones": [{"ZoneName": "eu-west-1a"}, {"ZoneName": "eu-west-1b"}]
+            }
+          ]
+        }
+      }
+    ],
+    "describe_listeners": [
+      {
+        "request": {
+          "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:loadbalancer/net/metrix-edge-nlb/7c8d9e0f1a2b3c4d"
+        },
+        "response": {
+          "Listeners": [
+            {
+              "ListenerArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:listener/net/metrix-edge-nlb/7c8d9e0f1a2b3c4d/1a2b3c4d5e6f7a8b",
+              "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:loadbalancer/net/metrix-edge-nlb/7c8d9e0f1a2b3c4d",
+              "Port": 443,
+              "Protocol": "TCP",
+              "DefaultActions": [
+                {
+                  "Type": "forward",
+                  "TargetGroupArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:targetgroup/metrix-edge-tcp/aabbccddeeff0011"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "describe_target_groups": [
+      {
+        "request": {
+          "TargetGroupArns": [
+            "arn:aws:elasticloadbalancing:eu-west-1:123456789012:targetgroup/metrix-edge-tcp/aabbccddeeff0011"
+          ]
+        },
+        "response": {
+          "TargetGroups": [
+            {
+              "TargetGroupArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:targetgroup/metrix-edge-tcp/aabbccddeeff0011",
+              "TargetGroupName": "metrix-edge-tcp",
+              "Protocol": "TCP",
+              "Port": 443,
+              "TargetType": "ip",
+              "VpcId": "vpc-0a1b2c3d"
+            }
+          ]
+        }
+      }
+    ],
+    "describe_target_health": [
+      {
+        "request": {
+          "TargetGroupArn": "arn:aws:elasticloadbalancing:eu-west-1:123456789012:targetgroup/metrix-edge-tcp/aabbccddeeff0011"
+        },
+        "response": {
+          "TargetHealthDescriptions": [
+            {
+              "Target": {"Id": "10.0.5.7", "Port": 443, "AvailabilityZone": "eu-west-1a"},
+              "TargetHealth": {"State": "healthy"}
+            },
+            {
+              "Target": {"Id": "10.0.6.8", "Port": 443, "AvailabilityZone": "all"},
+              "TargetHealth": {"State": "healthy"}
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "ecs": {
+    "list_clusters": [{"request": {}, "response": {"clusterArns": []}}]
+  },
+  "ec2": {
+    "describe_network_interfaces": [
+      {
+        "request": {
+          "Filters": [{"Name": "addresses.private-ip-address", "Values": ["10.0.5.7"]}]
+        },
+        "response": {
+          "NetworkInterfaces": [
+            {
+              "NetworkInterfaceId": "eni-0ccc3333dddd4444",
+              "PrivateIpAddress": "10.0.5.7",
+              "SubnetId": "subnet-0aaa1111",
+              "VpcId": "vpc-0a1b2c3d",
+              "AvailabilityZone": "eu-west-1a",
+              "Status": "in-use",
+              "Attachment": {
+                "AttachmentId": "eni-attach-0123456789abcdef0",
+                "InstanceId": "i-0ccc3333dddd4444e",
+                "DeviceIndex": 0,
+                "Status": "attached"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "request": {
+          "Filters": [{"Name": "addresses.private-ip-address", "Values": ["10.0.6.8"]}]
+        },
+        "response": {"NetworkInterfaces": []}
+      }
+    ],
+    "describe_instances": [
+      {
+        "request": {"InstanceIds": ["i-0ccc3333dddd4444e"]},
+        "response": {
+          "Reservations": [
+            {
+              "ReservationId": "r-0fedcba987654321f",
+              "Instances": [
+                {
+                  "InstanceId": "i-0ccc3333dddd4444e",
+                  "InstanceType": "c6i.2xlarge",
+                  "PrivateIpAddress": "10.0.5.7",
+                  "PrivateDnsName": "ip-10-0-5-7.eu-west-1.compute.internal",
+                  "State": {"Code": 16, "Name": "running"},
+                  "Placement": {"AvailabilityZone": "eu-west-1a", "Tenancy": "default"},
+                  "VpcId": "vpc-0a1b2c3d"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "autoscaling": {
+    "describe_auto_scaling_instances": [
+      {
+        "request": {"InstanceIds": ["i-0ccc3333dddd4444e"]},
+        "response": {"AutoScalingInstances": []}
+      }
+    ]
+  }
+}
