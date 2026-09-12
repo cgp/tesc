@@ -30,6 +30,8 @@ examples/  Worked plan bundles
 Skeleton. Track A (observation) is the active work; the engine is designed but
 not started.
 
+It should be obvious that the codebase was written with a model, early sept. Larger design decisions were made by humans, and the details were reviewed. The initial design was a launching point, further guidance was only captured in the design docs.
+
 ## Development
 
 ```bash
@@ -39,3 +41,4 @@ cd engine && cargo build
 bash scripts/check.sh                     # everything CI runs
 bash scripts/check.sh engine              # or one scope: engine | api | contract
 ```
+
