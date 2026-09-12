@@ -163,7 +163,8 @@
   justify-content: space-between;
   gap: var(--tblr-page-padding);
 }
-.metrix-toolbar > .btn { flex: none; }
+.metrix-toolbar > .btn,
+.metrix-toolbar > .btn-list { flex: none; }
 
 /* Form fields laid out by how much room each one needs, not by a column count:
    a port and a description do not want the same width. */

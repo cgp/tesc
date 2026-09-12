@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from datetime import timedelta
 from pathlib import Path
 
@@ -24,6 +25,25 @@ REPO = Path(__file__).resolve().parents[2]
 EXAMPLES = REPO / "examples" / "profiles"
 EXAMPLE = EXAMPLES / "local.json"
 TARGETS_SCHEMA = REPO / "schema" / "targets.schema.json"
+
+def shipped_examples() -> list[Path]:
+    """The example profiles the repo ships -- the tracked ones, not every file here.
+
+    `examples/profiles/` is a convenient place to keep a real profile while working,
+    and an ignored file of one's own must not fail the suite: this asserts something
+    about what Metrix publishes, not about what is on this disk.
+    """
+    listed = subprocess.run(
+        ["git", "ls-files", "--", str(EXAMPLES)],
+        capture_output=True,
+        text=True,
+        cwd=REPO,
+        check=False,
+    )
+    if listed.returncode != 0:  # not a checkout: judge every file rather than none
+        return sorted(EXAMPLES.glob("*.json"))
+    return sorted(REPO / line for line in listed.stdout.split() if line.endswith(".json"))
+
 
 STAGING = {
     "name": "staging",
@@ -70,7 +90,7 @@ class TestParsing:
     def test_every_shipped_example_parses(self) -> None:
         """These are what people copy. A broken example is worse than none, and
         nothing else in the suite reads this directory."""
-        found = sorted(EXAMPLES.glob("*.json"))
+        found = shipped_examples()
         assert found, "the examples people copy from have gone missing"
         for path in found:
             parsed = parse_profile(

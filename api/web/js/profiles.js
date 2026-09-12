@@ -59,9 +59,12 @@ export function render(state) {
         title: "No profiles yet",
         body: `A profile names the machines in one environment. Plans reference it by
           name, so the same mixture runs against staging or production with no edit.`,
-        action: `<button class="btn btn-primary" data-action="profile-new">
-                   ${icon("plus")} New profile
-                 </button>`,
+        action: `<div class="btn-list justify-content-center">
+                   <button class="btn btn-primary" data-action="profile-new">
+                     ${icon("plus")} New profile
+                   </button>
+                   ${reloadButton(state.profilesReadAt)}
+                 </div>`,
       })
     );
   }
@@ -70,9 +73,12 @@ export function render(state) {
     ${broken}
     <div class="metrix-toolbar">
       ${LEGEND}
-      <button class="btn btn-primary" data-action="profile-new">
-        ${icon("plus")} New profile
-      </button>
+      <div class="btn-list">
+        ${reloadButton(state.profilesReadAt)}
+        <button class="btn btn-primary" data-action="profile-new">
+          ${icon("plus")} New profile
+        </button>
+      </div>
     </div>
     ${state.profiles.map(profileCard).join("")}
   </div>`;
@@ -88,6 +94,30 @@ const LEGEND = `<p class="metrix-note text-secondary">
   does not probe that port or attach to whatever process is listening on it, and the
   statistics it collects are for the whole machine, not for one process.
 </p>`;
+
+/**
+ * Re-read the profile directory.
+ *
+ * Profiles are files, and the file is the primary form -- someone editing one in a
+ * text editor or pulling a change from version control has no reason to reload the
+ * whole page to see it. The list is deliberately not polled: replacing what a person
+ * is reading, unasked, would be worse than a button, and nothing here changes on its
+ * own.
+ *
+ * The timestamp is the point of the label. Without it, a reload that found no change
+ * looks exactly like a button that does nothing.
+ */
+function reloadButton(readAt) {
+  const when = readAt
+    ? `<span class="text-secondary ms-2">read ${escape(
+        new Date(readAt).toLocaleTimeString()
+      )}</span>`
+    : "";
+  return `<button class="btn" data-action="profile-reload"
+                  title="Re-read the profile files from disk">
+    ${icon("refresh")} Reload ${when}
+  </button>`;
+}
 
 function profileCard(profile) {
   const rows = profile.endpoints

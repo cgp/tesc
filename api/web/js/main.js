@@ -73,8 +73,7 @@ async function load(route) {
     if (route.name === "config") return;
 
     if (route.name === "profiles") {
-      const { profiles: rows, broken } = await api.profiles();
-      set({ profiles: rows, brokenProfiles: broken });
+      await loadProfiles();
       return;
     }
 
@@ -113,6 +112,14 @@ async function latestValues(recording) {
     }
   }
   return latest;
+}
+
+// Profiles are files on disk, so the list can go stale while the page is open. The
+// only way it refreshes is this, called on arrival and by the Reload button -- the
+// timestamp is stored so the button can show that it did something.
+async function loadProfiles() {
+  const { profiles: rows, broken } = await api.profiles();
+  set({ profiles: rows, brokenProfiles: broken, profilesReadAt: Date.now() });
 }
 
 async function startObserving(profileName) {
@@ -267,6 +274,17 @@ async function saveProfile() {
   }
 }
 
+async function reloadProfiles() {
+  // Only reachable from the list -- the button is not drawn over an open editor,
+  // where re-reading the directory would throw away whatever was being typed.
+  try {
+    set({ error: null });
+    await loadProfiles();
+  } catch (error) {
+    set({ error: error.message });
+  }
+}
+
 async function deleteProfile(name) {
   const message =
     `Delete the profile "${name}"?
@@ -299,6 +317,7 @@ document.addEventListener("click", (event) => {
   if (action === "profile-new") newProfile();
   if (action === "profile-edit") editProfile(profile);
   if (action === "profile-delete") deleteProfile(profile);
+  if (action === "profile-reload") reloadProfiles();
   if (action === "profile-cancel") set({ profileDraft: null });
   if (action === "profile-save") saveProfile();
   if (action === "endpoint-add") {

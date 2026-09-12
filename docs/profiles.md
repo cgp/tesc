@@ -18,6 +18,12 @@ split its history in two. Copy and delete, deliberately, if that is what you wan
 A profile that will not parse is listed with its error rather than hidden, but it
 cannot be opened in the editor — there is nothing valid to load. Fix the file.
 
+The page reads the directory when you open it and when you press **Reload**, and
+at no other time — a list that rearranged itself under you while you were reading
+it would be worse than a button. Press Reload after editing a file by hand, or
+after pulling someone else's change; the timestamp beside the button says when
+the files were last read.
+
 ## The one thing to get right
 
 Each endpoint carries **two addresses, for two different purposes**:

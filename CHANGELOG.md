@@ -244,3 +244,12 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - New **Hosts** and **Disk** cards on the recording detail. The change column is signed and coloured: a run that freed space and one that consumed it are different findings, and "1.2 GB" alone does not say which.
 - Pseudo-filesystems (`/proc`, `/sys`, `/dev`, `/run`) and zero-sized overlays are dropped by both readers — an overlay with nothing behind it reads as 100% full every run otherwise.
 - Verified: `scripts/check.sh` all green — 209 passed, 1 skipped. Every route re-rendered with no console errors and no horizontal overflow.
+## 2026-09-12 — Reload the profile list.
+
+- **Reload** on the Profiles page re-reads `$METRIX_HOME/profiles/`. Profiles are files, and the file is the primary form — someone editing one in a text editor or pulling a change from version control had no way to see it short of reloading the whole page.
+- The list is **not polled**. Replacing what a person is reading, unasked, would be worse than a button, and nothing here changes on its own.
+- The button carries the time the files were last read. Without it, a reload that found no change looks exactly like a button that does nothing. It is offered on the empty state too, where a file appearing on disk is the likeliest reason to press it.
+- Not offered over an open editor, where re-reading the directory would throw away whatever was being typed.
+- **A test was asserting something it did not mean.** `test_every_shipped_example_parses` globbed `examples/profiles/` off disk, so a local profile kept there — ignored by git, which is exactly where one would put a real one while working — failed the suite. It now reads the tracked files, which is what "shipped" meant all along.
+- Verified in the browser: added a profile and a deliberately broken one on disk with the page open, pressed Reload, and watched both appear — one in the list, one in the *will not parse* alert — with the timestamp advancing and no console errors. Then emptied the directory, reloaded from the empty state, and restored it.
+- Verified: `scripts/check.sh` all green — 209 passed, 1 skipped.

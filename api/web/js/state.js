@@ -6,6 +6,9 @@ const state = {
   route: null,
   profiles: [],
   brokenProfiles: [],
+  //: When the profile list was last read off disk. Shown next to the reload
+  //: button so that pressing it has a visible effect even when nothing changed.
+  profilesReadAt: null,
   //: The profile being written, if any. Editing lives in state rather than in the
   //: DOM because a render replaces the markup wholesale -- adding an endpoint row
   //: would otherwise wipe every field typed so far.
