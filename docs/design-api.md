@@ -122,7 +122,7 @@ Three reasons, all of which would be violated by pushing it down:
 
 Resolution is cached with a TTL, refreshed on demand, at run start, and at phase boundaries (§10.1) so an instance-count change mid-run is detected rather than inferred.
 
-**IAM: read-only.** `route53:List*`, `elasticloadbalancing:Describe*`, `ecs:List*`, `ecs:Describe*`, `ec2:Describe*`, `autoscaling:Describe*`. The repo ships the policy document, because working this out from permission errors is a bad first hour with a tool.
+**IAM: read-only.** `route53:List*`, `elasticloadbalancing:Describe*`, `ecs:List*`, `ecs:Describe*`, `ec2:Describe*`, `autoscaling:Describe*`. The repo ships the policy document, because working this out from permission errors is a poor introduction to a tool.
 
 ### 3.3 The resolved inventory
 
@@ -364,7 +364,7 @@ A sweep (§3.5) is its own comparison view: one plan, many targets, one time win
 
 - Targets ranked on each headline metric, with the sweep's own spread as the reference — the outlier logic of §17.4 applied across targets rather than across time.
 - Per-target attributes from the inventory shown alongside (instance type, AZ, image digest, task definition revision), because the explanation for an outlier is usually sitting in that row: an older digest, a different instance type, a lone task in another AZ.
-- Baseline-phase stats compared across targets, which catches the case that otherwise wastes an afternoon — one container was already loaded before the test started.
+- Baseline-phase stats compared across targets, which catches the case that otherwise sends you chasing a phantom regression — one container was already loaded before the test started.
 - Repeated sweeps form a series of sweeps, giving per-target trends: is that container reliably slow, or was it unlucky once?
 
 ---

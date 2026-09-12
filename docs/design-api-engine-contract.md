@@ -95,7 +95,7 @@ The engine never calls back. It has no address for the API, no notion that one e
 
 ### C1.3 Build order
 
-The shared foundation comes first and is small:
+The shared foundation comes first:
 
 | Step | Deliverable |
 |---|---|

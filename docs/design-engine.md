@@ -601,7 +601,7 @@ The general rule the engine applies: a percentile needs roughly 10 samples beyon
 
 ## 13. Run annotations, validity, and our own limits
 
-Two related problems: a run can be invalidated by the generator rather than the target, and the person reading the chart three weeks later will not remember which. Both are solved by attaching structured, automatic annotations to the run itself.
+Two related problems: a run can be invalidated by the generator rather than the target, and whoever reads the chart later will not remember which. Both are solved by attaching structured, automatic annotations to the run itself.
 
 ### 13.1 Run annotations
 

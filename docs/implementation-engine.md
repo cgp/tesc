@@ -161,7 +161,7 @@ The mock target (B1.1) is the measurement ground truth: configurable latency dis
 
 ---
 
-## 7. First milestone
+## 7. Where to start
 
 B1.1 then B1.2–B1.4: the mock with a dial-able latency distribution, then a fixed-rate scheduler holding 75 RPS for 30s and writing NDJSON.
 

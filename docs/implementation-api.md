@@ -174,10 +174,12 @@ Nothing here requires the engine. Through A3 the product is a host-observation t
 
 ---
 
-## 7. First week
+## 7. Where to start
 
-F0.1–F0.3 first — skeleton, plan types, frozen schemas — an afternoon's work that both tracks build on.
+F0.1–F0.3 first — skeleton, plan types, frozen schemas — since both tracks build on them.
 
 Then **A1.1–A1.3**: `METRIX_HOME`, a profile with two explicit hosts, and the SSH collector sampling them at 1s. The milestone is a JSON series of real CPU and memory off a real box, persisted and reopenable.
 
 Genuinely useful on its own, requires no Rust, and makes the domain concrete before any statistics work begins.
+
+After that, A1.4–A1.7 complete the observation loop — scrape collector, recordings, the static page, and the live stream — which is the point at which the tool is worth showing to someone.
