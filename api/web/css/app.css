@@ -1,42 +1,69 @@
-/* Our own layer over Tabler: density, and the things a live table needs.
-   Desktop only -- no breakpoints, deliberately (design §2.4). */
+/* Our own layer over Tabler: brand, menu, and the density a live table needs.
+   Desktop only -- no breakpoints, deliberately (design §2.4).
+
+   Everything here either names a Tabler variable or sits in a namespace Tabler does
+   not use. Restyling by overriding Tabler's own rules is how a vendored theme stops
+   being upgradable, so we do not. */
 
 :root {
   --metrix-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
 }
 
-.navbar-vertical .brand-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.6rem;
-  height: 1.6rem;
-  margin-right: .4rem;
-  border-radius: .25rem;
-  background: var(--tblr-primary, #206bc4);
-  color: #fff;
-  font-weight: 600;
+/* ------------------------------------------------------------------ the shell */
+
+.navbar-vertical .navbar-brand {
+  justify-content: flex-start;
+  gap: .5rem;
+  padding: 1rem var(--tblr-page-padding);
+  font-size: 1.125rem;
+  letter-spacing: -.01em;
 }
 
-.nav-section {
-  padding: .75rem 1rem .25rem;
-  font-size: .7rem;
-  text-transform: uppercase;
-  letter-spacing: .04em;
-  color: var(--tblr-secondary, #6c7a91);
+.brand-mark { width: 2rem; height: 2rem; flex: none; }
+.brand-mark-field { fill: var(--tblr-primary); }
+.brand-mark-trace {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
-.nav-link.nav-sub { padding-left: 1.75rem; }
-.nav-item.active > .nav-link { font-weight: 600; color: var(--tblr-primary, #206bc4); }
+/* Section labels. `subheader` gives the type; this gives it room. */
+.nav-heading {
+  padding: 1rem var(--tblr-page-padding) .25rem;
+  list-style: none;
+}
+.nav-heading:first-child { padding-top: .5rem; }
+
+#nav .nav-link { border-radius: 0; }
+#nav .nav-link:hover { background: var(--tblr-bg-surface-secondary); }
+
+/* Tabler already draws the 3px rail on `.nav-item.active`; the tint and the weight
+   are what make the current page findable without reading the labels. */
+#nav .nav-item.active > .nav-link {
+  background: rgba(var(--tblr-primary-rgb), .06);
+  color: var(--tblr-primary);
+  font-weight: var(--tblr-font-weight-medium, 500);
+}
+#nav .nav-item.active .nav-link-icon { color: var(--tblr-primary); }
 
 .nav-footer {
   margin-top: auto;
-  padding: .75rem 1rem;
+  padding: .75rem var(--tblr-page-padding);
+  border-top: var(--tblr-border-width) var(--tblr-border-style) var(--tblr-border-color);
   font-size: .75rem;
   display: flex;
   align-items: center;
-  gap: .4rem;
+  gap: .5rem;
 }
+
+/* ------------------------------------------------------------- the page header */
+
+.page-lede { margin-top: .25rem; font-size: .875rem; max-width: 60ch; }
+.page-lede:empty { display: none; }
+
+/* ------------------------------------------------------------------- the table */
 
 /* Numbers that update once a second must not make the row jump. Tabular figures and
    fixed column widths are the whole difference between a live view people watch and
@@ -55,19 +82,16 @@
 }
 
 .metrix-table td.name { font-weight: 500; }
+.metrix-table tbody tr:hover { background: var(--tblr-bg-surface-tertiary); }
+
+/* ------------------------------------------------------------------- the rest */
 
 /* A value the sample count cannot support is shown, but never as a bare number. */
 .unsupported { opacity: .55; font-style: italic; }
-.sample-count { color: var(--tblr-secondary, #6c7a91); font-size: .75rem; margin-left: .25rem; }
+.sample-count { color: var(--tblr-secondary); font-size: .75rem; margin-left: .25rem; }
 
-.empty-note {
-  padding: 2rem;
-  text-align: center;
-  color: var(--tblr-secondary, #6c7a91);
-}
+.severity-warn { color: var(--tblr-warning); }
+.severity-invalid { color: var(--tblr-danger); font-weight: 600; }
+.severity-info { color: var(--tblr-secondary); }
 
-.severity-warn { color: var(--tblr-warning, #f76707); }
-.severity-invalid { color: var(--tblr-danger, #d63939); font-weight: 600; }
-.severity-info { color: var(--tblr-secondary, #6c7a91); }
-
-.gap-note { font-family: var(--metrix-mono); font-size: .8rem; }
+.gap-note { font-family: var(--metrix-mono); font-size: .8125rem; }

@@ -23,9 +23,10 @@ Design: [design-api.md](design-api.md). Boundary and shared foundation (**F0, do
 │   │   └── store/                   # SQLite schema, migrations, queries
 │   ├── web/                         # the static front end — no templating
 │   │   ├── index.html
-│   │   ├── css/                     # Tabler + a little of our own
-│   │   └── js/                      # api, stream, state, table, charts,
-│   │                                #   config, recordings  (ES modules)
+│   │   ├── vendor/tabler/           # vendored Tabler; nothing is fetched at runtime
+│   │   ├── css/app.css              # our own layer over Tabler
+│   │   └── js/                      # api, stream, state, table, charts, config,
+│   │                                #   recordings, ui  (ES modules)
 │   └── tests/
 ```
 
@@ -101,6 +102,7 @@ Nothing here requires the engine. Through A3 the product is a host-observation t
 - [x] **A1.6** — Observation-only recordings: start/stop, phases, persistence (§10.2)
 - [x] **A1.7** — Static front end: `index.html`, Tabler, left nav, ES module skeleton
 - [x] **A1.8** — SSE stream at 1s with `Last-Event-ID` replay; live host stats on the Stats page
+- [x] **A1.9** — Visual pass: Tabler vendored (no CDN), menu icons, Tabler components throughout
 
 **Done when:** an observation-only recording of a live host streams to the browser at 1s, survives a reconnect with no gap, persists, and reopens later — with no engine built.
 

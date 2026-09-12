@@ -6,6 +6,7 @@
 // people wait out rather than watch.
 
 import { duration, escape, metricValue } from "./format.js";
+import { empty, icon } from "./ui.js";
 
 export function render(state) {
   const live = state.live;
@@ -13,15 +14,20 @@ export function render(state) {
 
   if (live && live.latest) return liveTable(live);
   if (!recording) {
-    return `<div class="card"><div class="empty-note">
-      Open a recording from <a href="#/recordings">Recordings</a>, or start one from
-      <a href="#/config">Config</a>.
-    </div></div>`;
+    return empty({
+      icon: "chart-line",
+      title: "Nothing to read yet",
+      body: `Open a recording from <a href="#/recordings">Recordings</a>, or start one
+        from <a href="#/config">Config</a>.`,
+    });
   }
   if (!recording.metrics.length) {
-    return `<div class="card"><div class="empty-note">
-      This recording holds no samples.
-    </div></div>`;
+    return empty({
+      icon: "alert-triangle",
+      title: "This recording holds no samples",
+      body: `It was started, but nothing was ever collected. The notes on the
+        <a href="#/recordings/${encodeURIComponent(recording.id)}">recording</a> say why.`,
+    });
   }
   return staticTable(recording);
 }
@@ -53,11 +59,21 @@ export function patch(state) {
   const meta = card.querySelector("[data-live-meta]");
   if (meta) meta.textContent = metaText(live);
 
-  const badge = card.querySelector("[data-live-badge]");
-  if (badge) badge.outerHTML = connectionBadge(live.connection);
+  // Replace the status only when it actually changed: the pulsing dot is a CSS
+  // animation with a delay, and a node rebuilt every second never reaches it.
+  const status = card.querySelector("[data-live-status]");
+  if (status && status.dataset.liveStatus !== live.connection) {
+    status.outerHTML = connectionStatus(live.connection);
+  }
 
   const gaps = card.querySelector("[data-live-gaps]");
-  if (gaps) gaps.innerHTML = gapNote(live);
+  if (gaps) {
+    const count = String((live.gaps ?? []).length);
+    if (gaps.dataset.count !== count) {
+      gaps.dataset.count = count;
+      gaps.innerHTML = gapNote(live);
+    }
+  }
 
   return true;
 }
@@ -70,18 +86,24 @@ function metaText(live) {
   return `${duration(live.elapsedMs)} · ${live.counts?.samples ?? 0} samples`;
 }
 
-function connectionBadge(connection) {
+function connectionStatus(connection) {
   const label = { live: "live", reconnecting: "reconnecting…", ended: "ended" }[connection];
   const tone = { live: "green", reconnecting: "orange", ended: "secondary" }[connection];
-  return `<span class="badge bg-${tone ?? "secondary"}-lt" data-live-badge>${escape(
-    label ?? "—"
-  )}</span>`;
+  // Only a connection actually delivering data gets the pulse.
+  const pulse = connection === "live" ? " status-dot-animated" : "";
+  return `<span class="status status-${tone ?? "secondary"}"
+                data-live-status="${escape(connection ?? "")}"
+          ><span class="status-dot${pulse}"></span>${escape(label ?? "—")}</span>`;
 }
 
 function gapNote(live) {
   if (!(live.gaps ?? []).length) return "";
-  return `<div class="alert alert-warning mt-2 mb-0">
-    ${live.gaps.length} collection gap(s). Drawn as gaps, never interpolated.
+  return `<div class="alert alert-warning m-3" role="alert">
+    <div class="d-flex">
+      <div class="me-3">${icon("alert-triangle")}</div>
+      <div>${live.gaps.length} collection gap(s) so far. Drawn as gaps, never
+        interpolated.</div>
+    </div>
   </div>`;
 }
 
@@ -107,21 +129,25 @@ function liveTable(live) {
 
   return `<div class="card" data-live-table="${escape(live.recordingId)}">
     <div class="card-header">
-      <h3 class="card-title">${escape(live.recordingId)}</h3>
-      <div class="card-actions">
-        ${connectionBadge(live.connection)}
-        <span class="text-secondary ms-2" data-live-meta>${metaText(live)}</span>
-        <button class="btn btn-sm btn-outline-danger ms-2" data-action="stop"
-                data-recording="${escape(live.recordingId)}">Stop</button>
+      <div>
+        <h3 class="card-title">${escape(live.recordingId)}</h3>
+        <div class="card-subtitle" data-live-meta>${metaText(live)}</div>
+      </div>
+      <div class="card-actions d-flex align-items-center gap-2">
+        ${connectionStatus(live.connection)}
+        <button class="btn btn-sm btn-outline-danger" data-action="stop"
+                data-recording="${escape(live.recordingId)}">
+          ${icon("player-stop")} Stop
+        </button>
       </div>
     </div>
     <div class="table-responsive">
-      <table class="table card-table metrix-table">
+      <table class="table card-table table-vcenter metrix-table">
         <thead><tr><th style="width:30%">Metric</th>${header}</tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
-    <div data-live-gaps>${gapNote(live)}</div>
+    <div data-live-gaps data-count="${(live.gaps ?? []).length}">${gapNote(live)}</div>
   </div>`;
 }
 
@@ -144,11 +170,19 @@ function staticTable(recording) {
 
   return `<div class="card">
     <div class="card-header">
-      <h3 class="card-title">${escape(recording.id)}</h3>
-      <div class="card-actions text-secondary">last value per target</div>
+      <div>
+        <h3 class="card-title">${escape(recording.id)}</h3>
+        <div class="card-subtitle">last value per target · ${recording.metrics.length}
+          metrics</div>
+      </div>
+      <div class="card-actions">
+        <a class="btn btn-sm" href="#/recordings/${encodeURIComponent(recording.id)}">
+          Recording details
+        </a>
+      </div>
     </div>
     <div class="table-responsive">
-      <table class="table card-table metrix-table">
+      <table class="table card-table table-vcenter metrix-table">
         <thead><tr><th style="width:30%">Metric</th>${header}</tr></thead>
         <tbody>${rows}</tbody>
       </table>

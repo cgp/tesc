@@ -46,6 +46,8 @@ Three sections, per the discussion:
 
 **A single static page.** One `index.html`, Tabler's CSS, and JavaScript — all loaded up front, with the API serving JSON and the event stream and nothing else. No server-side templating, no Jinja, no framework, no build step.
 
+**Nothing on the page is fetched at render time.** Tabler is vendored under `web/vendor/` and the icons are inline SVG rather than a font or a sprite sheet: a tool that watches a private network must draw itself without the public one, and a menu whose icons arrive on a second request arrives late. `scripts/check.sh` fails if a CDN URL reappears.
+
 The JavaScript is split into ES modules along clear seams so it stays maintainable without tooling:
 
 | Module | Responsibility |
@@ -57,6 +59,7 @@ The JavaScript is split into ES modules along clear seams so it stays maintainab
 | `charts.js` | uPlot setup and updates (§15) |
 | `config.js` | Profiles, plans, validation display |
 | `recordings.js` | Archive, series, comparison views |
+| `ui.js` | Icons and empty states — the markup the views share |
 
 Views subscribe to `state.js` and re-render from it; nothing else talks to the network. Charts use uPlot, which handles thousands of points at 60fps without fighting us.
 

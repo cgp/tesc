@@ -159,3 +159,17 @@ This is a work log, not a reference — it records *what happened*, not *how thi
   - A hard-killed process left a recording `running` forever. Startup now closes any such row as `aborted` with an annotation saying why — nothing can be running when the process has just begun.
 - Verified in the browser: values updating (0.3% → 0.2% CPU, 102 → 105 samples), a full page reload **rejoining an in-progress recording**, Stop persisting a 116s recording.
 - Verified: `scripts/check.sh` all green — 170 passed, 1 skipped.
+
+## 2026-09-12 — A1.9 visual pass. Tabler vendored, icons, no CDN.
+
+- **The page no longer touches the network to draw itself.** Tabler 1.0.0 CSS and JS are vendored under `api/web/vendor/tabler/`, byte-for-byte as published, with provenance and update instructions in a README beside them. Checked before copying: the stylesheet has no `@import`, every image in it is an inline `data:` URI, and the font stack ends at the system UI font — so nothing is fetched at render time either.
+- **This is the point, not tidiness.** The tool watches private networks; a control plane that renders only when a CDN answers is a control plane that does not render on the box that needs it.
+- `scripts/check.sh` gained a fourth contract rule that fails if a CDN URL reappears in `index.html`, `css/`, or `js/`. Verified by putting one back and watching it fail, then removing it.
+- **Icons are inline SVG** (Tabler Icons, MIT) in `index.html` and a new `ui.js`, not a font or a sprite sheet — a menu whose icons arrive on a second request arrives late, and there is no flash before the modules load. `ui.js` throws on an unknown icon name rather than rendering a blank box nobody notices for weeks.
+- **Shell rebuilt against Tabler's own components** rather than our overrides: sectioned menu with a brand mark, page pretitle/title/subtitle, `card-header` + `card-subtitle`, `datagrid` for recording detail, `empty` states instead of a bare sentence in a card, and `status` pills for connection and health. `app.css` shrank to brand, menu, and table density — everything in it now names a Tabler variable or sits in a namespace Tabler does not use, so the next version bump stays cheap.
+- **Two bugs found while building it:**
+  - The live connection badge was rebuilt every tick. Its pulse is a CSS animation with a 2s delay, so a node replaced once a second never reached it — the "live" dot never actually pulsed. Both the status and the gap note are now replaced only when their value changes, which is the same rule the cells already followed.
+  - The Recordings table wrapped `observation` and the timestamps onto two lines at 1120px; column widths rebalanced against measured content widths rather than guessed.
+- Content is unchanged — same four pages, same routes, same numbers. The one addition is menu section labels (Setup / Performance / Archive), so Recordings no longer reads as part of Performance.
+- Verified in the browser against seeded data: every page, a live recording started from Config, the gap alert, Stop, and the status node surviving six seconds of ticks.
+- Verified: `scripts/check.sh` all green — 170 passed, 1 skipped.

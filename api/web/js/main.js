@@ -14,11 +14,33 @@ import { get, set, subscribe } from "./state.js";
 import * as stream from "./stream.js";
 import * as table from "./table.js";
 
+// `section` is the small-caps line above the title: it says which part of the menu
+// you are standing in, which the title alone does not once a page is bookmarked.
 const ROUTES = {
-  config: { title: "Config", subtitle: "Profiles and what is collected", view: config },
-  stats: { title: "Stats", subtitle: "The numbers, exactly", view: table },
-  charts: { title: "Charts", subtitle: "Shape and timing", view: charts },
-  recordings: { title: "Recordings", subtitle: "Everything captured", view: recordings },
+  config: {
+    section: "Setup",
+    title: "Config",
+    subtitle: "Profiles, and what will be collected from each of them.",
+    view: config,
+  },
+  stats: {
+    section: "Performance",
+    title: "Stats",
+    subtitle: "The numbers, exactly, with the sample count behind each one.",
+    view: table,
+  },
+  charts: {
+    section: "Performance",
+    title: "Charts",
+    subtitle: "Shape and timing. Gaps are drawn as gaps, never interpolated.",
+    view: charts,
+  },
+  recordings: {
+    section: "Archive",
+    title: "Recordings",
+    subtitle: "Everything captured, whether or not a load run was attached.",
+    view: recordings,
+  },
 };
 
 const DEFAULT_ROUTE = "recordings";
@@ -124,6 +146,7 @@ function renderView(state) {
   const route = state.route ?? { name: DEFAULT_ROUTE };
   const entry = ROUTES[route.name] ?? ROUTES[DEFAULT_ROUTE];
 
+  document.getElementById("page-pretitle").textContent = entry.section;
   document.getElementById("page-title").textContent = entry.title;
   document.getElementById("page-subtitle").textContent = entry.subtitle;
   document.title = `${entry.title} · Metrix`;
@@ -149,16 +172,22 @@ async function onRouteChange() {
 }
 
 async function pollHealth() {
-  const dot = document.getElementById("health");
+  const badge = document.getElementById("health");
+  const dot = badge.querySelector(".status-dot");
   const text = document.getElementById("health-text");
   try {
     const health = await api.health();
     set({ health });
-    dot.className = "status-dot status-dot-animated bg-green";
+    badge.className = "status status-green";
+    badge.title = health.home;
+    // Only a reachable API pulses. A dot still animating while nothing answers is
+    // the one thing this indicator must never do.
+    dot.classList.add("status-dot-animated");
     text.textContent = `v${health.version}`;
-    text.title = health.home;
   } catch {
-    dot.className = "status-dot bg-red";
+    badge.className = "status status-red";
+    badge.title = "";
+    dot.classList.remove("status-dot-animated");
     text.textContent = "API unreachable";
   }
 }

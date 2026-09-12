@@ -8,9 +8,12 @@
   One static page. Tabler for the shell, our own CSS for density, ES modules for
   behaviour. No build step and no framework: everything here is loaded as written.
 
-  Tabler comes from a CDN, pinned. Vendor it into css/ if this needs to run offline.
+  Nothing on this page reaches the network. Tabler is vendored under /vendor/tabler
+  and the icons are inline Tabler Icons rather than a font or a sprite sheet, which
+  is also why the menu has no blank frame before the modules load. A tool that
+  observes a private network must not need the public one to draw itself.
 -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0/dist/css/tabler.min.css">
+<link rel="stylesheet" href="/vendor/tabler/tabler.min.css">
 <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
@@ -18,45 +21,94 @@
   <aside class="navbar navbar-vertical navbar-expand-sm">
     <div class="container-fluid">
       <h1 class="navbar-brand">
-        <span class="brand-mark">M</span> Metrix
+        <svg class="brand-mark" viewBox="0 0 32 32" width="32" height="32" aria-hidden="true">
+          <rect class="brand-mark-field" width="32" height="32" rx="8"/>
+          <path class="brand-mark-trace" d="M6 20h3.2l2.4-8.2 3.2 11.4 2.8-9.2 1.8 6H26"/>
+        </svg>
+        <span>Metrix</span>
       </h1>
+
       <div class="navbar-collapse">
-        <ul class="navbar-nav pt-lg-2" id="nav">
+        <ul class="navbar-nav" id="nav">
+          <li class="nav-heading subheader">Setup</li>
           <li class="nav-item" data-route="config">
             <a class="nav-link" href="#/config">
+              <span class="nav-link-icon">
+                <!-- tabler: adjustments -->
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M4 10a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M6 4v4"/>
+                  <path d="M6 12v8"/><path d="M10 16a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/>
+                  <path d="M12 4v10"/><path d="M12 18v2"/>
+                  <path d="M16 7a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M18 4v1"/>
+                  <path d="M18 9v11"/>
+                </svg>
+              </span>
               <span class="nav-link-title">Config</span>
             </a>
           </li>
-          <li class="nav-item nav-section">Performance</li>
+
+          <li class="nav-heading subheader">Performance</li>
           <li class="nav-item" data-route="stats">
-            <a class="nav-link nav-sub" href="#/performance/stats">
+            <a class="nav-link" href="#/performance/stats">
+              <span class="nav-link-icon">
+                <!-- tabler: table -->
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 5a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2z"/>
+                  <path d="M3 10h18"/><path d="M10 3v18"/>
+                </svg>
+              </span>
               <span class="nav-link-title">Stats</span>
             </a>
           </li>
           <li class="nav-item" data-route="charts">
-            <a class="nav-link nav-sub" href="#/performance/charts">
+            <a class="nav-link" href="#/performance/charts">
+              <span class="nav-link-icon">
+                <!-- tabler: chart-line -->
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M4 19l16 0"/><path d="M4 15l4 -6l4 2l4 -5l4 4"/>
+                </svg>
+              </span>
               <span class="nav-link-title">Charts</span>
             </a>
           </li>
+
+          <li class="nav-heading subheader">Archive</li>
           <li class="nav-item" data-route="recordings">
             <a class="nav-link" href="#/recordings">
+              <span class="nav-link-icon">
+                <!-- tabler: archive -->
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 6a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2z"/>
+                  <path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-10"/><path d="M10 12h4"/>
+                </svg>
+              </span>
               <span class="nav-link-title">Recordings</span>
             </a>
           </li>
         </ul>
+
         <div class="nav-footer">
-          <span id="health" class="status-dot status-dot-animated"></span>
-          <span id="health-text" class="text-secondary">connecting…</span>
+          <span class="status status-secondary" id="health">
+            <span class="status-dot"></span>
+            <span id="health-text">connecting…</span>
+          </span>
         </div>
       </div>
     </div>
   </aside>
 
   <div class="page-wrapper">
-    <header class="page-header">
-      <h2 class="page-title" id="page-title">Metrix</h2>
-      <div class="page-subtitle text-secondary" id="page-subtitle"></div>
-    </header>
+    <div class="page-header">
+      <div class="container-xl">
+        <div class="page-pretitle" id="page-pretitle"></div>
+        <h2 class="page-title" id="page-title">Metrix</h2>
+        <div class="page-lede text-secondary" id="page-subtitle"></div>
+      </div>
+    </div>
     <div class="page-body">
       <div class="container-xl">
         <div id="view" aria-live="polite"></div>
@@ -65,6 +117,11 @@
   </div>
 </div>
 
+<!--
+  Tabler's own JS (Bootstrap's components, bundled). Deferred and vendored so the
+  dropdowns and tooltips its markup assumes work without a network round trip.
+-->
+<script src="/vendor/tabler/tabler.min.js" defer></script>
 <script type="module" src="/js/main.js"></script>
 </body>
 </html>

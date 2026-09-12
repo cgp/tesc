@@ -35,7 +35,8 @@ Section numbers (§N) are shared across the three design docs and are not contig
 ## Conventions
 
 - Python: **uv** (`uv sync`, `uv run`). No pip, no hand-managed venv.
-- Front end: one static page, ES modules, Tabler CSS. No framework, no build step. **Desktop only.**
+- Front end: one static page, ES modules, Tabler CSS **vendored under `api/web/vendor/`**.
+  No framework, no build step, nothing fetched at render time. **Desktop only.**
 - Scope: HTTP/1.1 and HTTP/2. ECS discovery only. No gRPC, WebSocket, Kubernetes, or distributed load generation.
 - Plans are three documents — calls, mix, targets — in a bundle directory.
 - Commits: imperative subject, body explains *why*. Do not co-author git comments.

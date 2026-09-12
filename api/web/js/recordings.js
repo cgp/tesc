@@ -2,15 +2,21 @@
 // different sections populated, so one list shows both.
 
 import { duration, escape, timestamp } from "./format.js";
+import { empty, icon } from "./ui.js";
 
 export function render(state) {
   if (state.selectedRecording) return detail(state.selectedRecording);
 
   if (!state.recordings.length) {
-    return `<div class="card"><div class="empty-note">
-      No recordings yet. An observation-only recording needs no engine — it is the
-      whole product until one exists.
-    </div></div>`;
+    return empty({
+      icon: "archive",
+      title: "No recordings yet",
+      body: `An observation-only recording needs no engine — it is the whole product
+        until one exists.`,
+      action: `<a href="#/config" class="btn btn-primary">
+                 ${icon("player-play")} Start observing
+               </a>`,
+    });
   }
 
   const rows = state.recordings
@@ -19,27 +25,32 @@ export function render(state) {
         <td class="name">
           <a href="#/recordings/${encodeURIComponent(r.id)}">${escape(r.id)}</a>
         </td>
-        <td>${escape(r.kind)}</td>
+        <td class="text-secondary">${escape(r.kind)}</td>
         <td>${statusBadge(r.status)}</td>
         <td>${escape(r.profile ?? "—")}</td>
         <td class="num">${duration(r.duration_ms)}</td>
         <td class="num">${r.targets.length}</td>
-        <td>${timestamp(r.started_at)}</td>
+        <td class="text-secondary">${timestamp(r.started_at)}</td>
       </tr>`
     )
     .join("");
 
   return `<div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Recordings
+        <span class="card-subtitle">${state.recordings.length} captured</span>
+      </h3>
+    </div>
     <div class="table-responsive">
-      <table class="table card-table metrix-table">
+      <table class="table card-table table-vcenter metrix-table">
         <thead><tr>
-          <th style="width:24%">Recording</th>
-          <th style="width:11%">Kind</th>
-          <th style="width:11%">Status</th>
+          <th style="width:22%">Recording</th>
+          <th style="width:12%">Kind</th>
+          <th style="width:10%">Status</th>
           <th style="width:14%">Profile</th>
-          <th class="num" style="width:10%">Length</th>
+          <th class="num" style="width:9%">Length</th>
           <th class="num" style="width:8%">Targets</th>
-          <th style="width:22%">Started</th>
+          <th style="width:25%">Started</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -52,19 +63,26 @@ function statusBadge(status) {
   return `<span class="badge bg-${tone ?? "secondary"}-lt">${escape(status)}</span>`;
 }
 
+function field(title, content) {
+  return `<div class="datagrid-item">
+    <div class="datagrid-title">${escape(title)}</div>
+    <div class="datagrid-content">${content}</div>
+  </div>`;
+}
+
 function detail(recording) {
   const annotations = recording.annotations.length
-    ? recording.annotations
+    ? `<div class="list-group list-group-flush">${recording.annotations
         .map(
-          (a) => `<li class="severity-${escape(a.severity)}">
+          (a) => `<div class="list-group-item px-0 severity-${escape(a.severity)}">
             <strong>${escape(a.code)}</strong> — ${escape(a.message)}
-          </li>`
+          </div>`
         )
-        .join("")
-    : `<li class="text-secondary">None.</li>`;
+        .join("")}</div>`
+    : `<p class="text-secondary mb-0">None.</p>`;
 
   const gaps = recording.gaps.length
-    ? `<ul class="gap-note">${recording.gaps
+    ? `<ul class="gap-note mb-0">${recording.gaps
         .map(
           (g) =>
             `<li>${escape(g.target_id)}: ${g.from_ms}–${g.to_ms}ms — ${escape(g.reason)}</li>`
@@ -73,38 +91,41 @@ function detail(recording) {
     : `<p class="text-secondary mb-0">None. Every interval was collected.</p>`;
 
   return `<div class="mb-3">
-    <a href="#/recordings" class="btn btn-sm">&larr; All recordings</a>
+    <a href="#/recordings" class="btn btn-sm">${icon("arrow-left")} All recordings</a>
   </div>
   <div class="row row-cards">
-    <div class="col-6">
+    <div class="col-12">
       <div class="card">
-        <div class="card-header"><h3 class="card-title">Recording</h3></div>
+        <div class="card-header">
+          <h3 class="card-title">${escape(recording.id)}</h3>
+          <div class="card-actions">${statusBadge(recording.status)}</div>
+        </div>
         <div class="card-body">
-          <dl class="row mb-0">
-            <dt class="col-4">Status</dt><dd class="col-8">${escape(recording.status)}</dd>
-            <dt class="col-4">Profile</dt>
-            <dd class="col-8">${escape(recording.profile ?? "—")}</dd>
-            <dt class="col-4">Addressing</dt>
-            <dd class="col-8">${escape(recording.addressing_mode)}</dd>
-            <dt class="col-4">Length</dt>
-            <dd class="col-8">${duration(recording.duration_ms)}</dd>
-            <dt class="col-4">Targets</dt>
-            <dd class="col-8">${recording.targets.map(escape).join(", ") || "—"}</dd>
-            <dt class="col-4">Metrics</dt><dd class="col-8">${recording.metrics.length}</dd>
-            <dt class="col-4">Series</dt>
-            <dd class="col-8"><code>${escape(recording.series_key)}</code></dd>
-          </dl>
+          <div class="datagrid">
+            ${field("Profile", escape(recording.profile ?? "—"))}
+            ${field("Addressing", escape(recording.addressing_mode))}
+            ${field("Length", duration(recording.duration_ms))}
+            ${field("Targets", recording.targets.map(escape).join(", ") || "—")}
+            ${field("Metrics", String(recording.metrics.length))}
+            ${field("Series", `<code>${escape(recording.series_key)}</code>`)}
+          </div>
         </div>
       </div>
     </div>
     <div class="col-6">
       <div class="card">
         <div class="card-header"><h3 class="card-title">Notes</h3></div>
-        <div class="card-body">
-          <ul class="mb-3">${annotations}</ul>
-          <h4 class="mb-1">Collection gaps</h4>
-          ${gaps}
+        <div class="card-body">${annotations}</div>
+      </div>
+    </div>
+    <div class="col-6">
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">Collection gaps
+            <span class="card-subtitle">drawn as gaps, never interpolated</span>
+          </h3>
         </div>
+        <div class="card-body">${gaps}</div>
       </div>
     </div>
   </div>`;

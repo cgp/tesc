@@ -67,6 +67,24 @@ if [[ $scope == all || $scope == contract ]]; then
         fi
         echo "ok"
     ' _ "$root"
+
+    # The front end must draw itself without the public internet: this tool watches
+    # private networks, and a menu that renders only when a CDN answers is a menu
+    # that does not render on the box that needs it. Tabler is vendored under
+    # api/web/vendor/ -- see the README there.
+    run "contract: the front end fetches nothing" bash -c '
+        root="$1"
+        pattern="(src|href)=\"https?:|url\([\"'"'"']?https?:|@import[^;]*https?:"
+        offenders=$(grep -rnE "$pattern" \
+            "$root/api/web/index.html" "$root/api/web/css" "$root/api/web/js" || true)
+        if [[ -n $offenders ]]; then
+            echo "the page would fetch from the network at render time:"
+            echo "$offenders" | sed "s/^/  /"
+            exit 1
+        fi
+        echo "ok"
+    ' _ "$root"
+
 fi
 
 # ----------------------------------------------------------------------- report
