@@ -97,12 +97,10 @@ The engine never calls back. It has no address for the API, no notion that one e
 
 The shared foundation comes first:
 
-| Step | Deliverable |
-|---|---|
-| F0.1 | Repo skeleton, Rust workspace, `uv init`, committed lockfiles |
-| F0.2 | `metrix-plan` types: call, mix, targets — separate from the start |
-| F0.3 | Generated schemas + `scripts/check-schema.sh`; NDJSON shapes frozen in `schema/events.schema.json` |
-| F0.4 | CI: `cargo test`, `cargo clippy -D warnings`, `uv run pytest`, schema drift check |
+- [ ] **F0.1** — Repo skeleton, Rust workspace, `uv init`, committed lockfiles
+- [ ] **F0.2** — `metrix-plan` types: call, mix, targets — separate from the start
+- [ ] **F0.3** — Generated schemas + `scripts/check-schema.sh`; NDJSON shapes frozen in `schema/events.schema.json`
+- [ ] **F0.4** — CI: `cargo test`, `cargo clippy -D warnings`, `uv run pytest`, schema drift check
 
 After that the tracks are independent: [implementation-api.md](implementation-api.md) and [implementation-engine.md](implementation-engine.md). Track A through A3 is a working host-observation tool with no engine installed; track B runs bundles from a shell with no API.
 

@@ -93,52 +93,44 @@ Nothing here requires the engine. Through A3 the product is a host-observation t
 
 ### A1 — Observation (start here)
 
-| Step | Deliverable |
-|---|---|
-| A1.1 | `METRIX_HOME` layout, config, SQLite schema and migrations |
-| A1.2 | Target profiles with explicit endpoint lists |
-| A1.3 | Observer: SSH collection, 1s samples, normalized metric shape (§2.3) |
-| A1.4 | HTTP scrape collector; graceful degradation, `collection_gap` annotation |
-| A1.5 | Observation-only recordings: start/stop, phases, persistence (§10.2) |
-| A1.6 | Static front end: `index.html`, Tabler, left nav, ES module skeleton |
-| A1.7 | SSE stream at 1s with `Last-Event-ID` replay; live host stats on the Stats page |
+- [ ] **A1.1** — `METRIX_HOME` layout, config, SQLite schema and migrations
+- [ ] **A1.2** — Target profiles with explicit endpoint lists
+- [ ] **A1.3** — Observer: SSH collection, 1s samples, normalized metric shape (§2.3)
+- [ ] **A1.4** — HTTP scrape collector; graceful degradation, `collection_gap` annotation
+- [ ] **A1.5** — Observation-only recordings: start/stop, phases, persistence (§10.2)
+- [ ] **A1.6** — Static front end: `index.html`, Tabler, left nav, ES module skeleton
+- [ ] **A1.7** — SSE stream at 1s with `Last-Event-ID` replay; live host stats on the Stats page
 
 **Done when:** an observation-only recording of a live host streams to the browser at 1s, survives a reconnect with no gap, persists, and reopens later — with no engine built.
 
 ### A2 — Discovery
 
-| Step | Deliverable |
-|---|---|
-| A2.1 | ECS discovery: hostname → ALB → target group → service → tasks → containers → instances (§3.1) |
-| A2.2 | Resolved inventory: storage, run pinning, refresh at phase boundaries, `host_count_changed` |
-| A2.3 | Reachability verification at profile setup; `targets.json` written from a profile |
-| A2.4 | Environment baselines; baseline/settle deltas, recovery curves, leak detection (§9.7) |
+- [ ] **A2.1** — ECS discovery: hostname → ALB → target group → service → tasks → containers → instances (§3.1)
+- [ ] **A2.2** — Resolved inventory: storage, run pinning, refresh at phase boundaries, `host_count_changed`
+- [ ] **A2.3** — Reachability verification at profile setup; `targets.json` written from a profile
+- [ ] **A2.4** — Environment baselines; baseline/settle deltas, recovery curves, leak detection (§9.7)
 
 **Done when:** a hostname resolves to a task list with image digests, and observation attaches to those identities.
 
 ### A3 — Analysis of recordings
 
-| Step | Deliverable |
-|---|---|
-| A3.1 | Stats table (§14): rows, columns, live update, TSV/CSV export |
-| A3.2 | Charts page (§15): phase bands, host overlays, gaps drawn as gaps |
-| A3.3 | Recordings archive, filters, baseline marking with `invalid` gating |
-| A3.4 | Run series by setup identity; trends with measured noise bands (§17.3) |
-| A3.5 | Regression flagging: outside band **and** sample-supported **and** not invalid (§17.4) |
-| A3.6 | Comparison mode (§14.4), multi-run overlay, histogram merging (§17.5) |
-| A3.7 | Purge button; exports (JSON/CSV/static HTML) |
+- [ ] **A3.1** — Stats table (§14): rows, columns, live update, TSV/CSV export
+- [ ] **A3.2** — Charts page (§15): phase bands, host overlays, gaps drawn as gaps
+- [ ] **A3.3** — Recordings archive, filters, baseline marking with `invalid` gating
+- [ ] **A3.4** — Run series by setup identity; trends with measured noise bands (§17.3)
+- [ ] **A3.5** — Regression flagging: outside band **and** sample-supported **and** not invalid (§17.4)
+- [ ] **A3.6** — Comparison mode (§14.4), multi-run overlay, histogram merging (§17.5)
+- [ ] **A3.7** — Purge button; exports (JSON/CSV/static HTML)
 
 **Done when:** ten recordings of one environment produce a trend with a believable noise band.
 
 ### A4 — Integration with the engine
 
-| Step | Deliverable |
-|---|---|
-| A4.1 | Bundle assembly and export (`GET /api/plans/{name}/bundle`) |
-| A4.2 | Engine supervision, NDJSON ingest, load + host series on one timeline |
-| A4.3 | Plan editor: calls, chains, percentages with implied RPS, validation display |
-| A4.4 | `POST /api/plans/generate` — calls from OpenAPI/WSDL, starter mix (§8) |
-| A4.5 | Sweep comparison view (§17.6) |
+- [ ] **A4.1** — Bundle assembly and export (`GET /api/plans/{name}/bundle`)
+- [ ] **A4.2** — Engine supervision, NDJSON ingest, load + host series on one timeline
+- [ ] **A4.3** — Plan editor: calls, chains, percentages with implied RPS, validation display
+- [ ] **A4.4** — `POST /api/plans/generate` — calls from OpenAPI/WSDL, starter mix (§8)
+- [ ] **A4.5** — Sweep comparison view (§17.6)
 
 **Done when:** a run launched from the browser shows load and host metrics against one clock.
 

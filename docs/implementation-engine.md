@@ -68,13 +68,11 @@ Buildable and testable with nothing but a shell, a bundle, and the mock target.
 
 ### B1 — Core load path
 
-| Step | Deliverable |
-|---|---|
-| B1.1 | `metrix-mock`: configurable latency distribution, error injection, slow start, capacity ceiling |
-| B1.2 | Open-model fixed-rate scheduler, HTTP/1.1 + HTTP/2 via `hyper`/`rustls` |
-| B1.3 | `metrix-metrics`: per-worker HDR histograms and counters, merged on a 250ms tick |
-| B1.4 | NDJSON `--summary` and `--events` output per the F0.3 contract |
-| B1.5 | Self-metrics: send-schedule drift, in-flight, queue depth (§13.2) |
+- [ ] **B1.1** — `metrix-mock`: configurable latency distribution, error injection, slow start, capacity ceiling
+- [ ] **B1.2** — Open-model fixed-rate scheduler, HTTP/1.1 + HTTP/2 via `hyper`/`rustls`
+- [ ] **B1.3** — `metrix-metrics`: per-worker HDR histograms and counters, merged on a 250ms tick
+- [ ] **B1.4** — NDJSON `--summary` and `--events` output per the F0.3 contract
+- [ ] **B1.5** — Self-metrics: send-schedule drift, in-flight, queue depth (§13.2)
 
 **Done when:** `metrix-engine --plan dir/` holds 75 RPS for 30s against the mock from a bare shell, with drift reported and no API in existence.
 
@@ -82,32 +80,28 @@ Buildable and testable with nothing but a shell, a bundle, and the mock target.
 
 ### B2 — Measurement you can trust
 
-| Step | Deliverable |
-|---|---|
-| B2.1 | Phase timeline: baseline → warmup → measure → drain → settle (§10.1) |
-| B2.2 | Percentile support rules: the 2250 floor, CIs on p99, p99.9 suppression (§12.1) |
-| B2.3 | Coordinated-omission correction reported beside raw (§12.2) |
-| B2.4 | Annotation detectors: `concurrency_cap_reached`, `rate_not_achieved`, `send_schedule_drift`, `sample_count_low` (§13.1) |
-| B2.5 | `--calibrate` + machine profile; headroom check and refusal above 90% (§13.2) |
-| B2.6 | Run metadata: plan hash, engine version, seed, machine profile (§9.8) |
+- [ ] **B2.1** — Phase timeline: baseline → warmup → measure → drain → settle (§10.1)
+- [ ] **B2.2** — Percentile support rules: the 2250 floor, CIs on p99, p99.9 suppression (§12.1)
+- [ ] **B2.3** — Coordinated-omission correction reported beside raw (§12.2)
+- [ ] **B2.4** — Annotation detectors: `concurrency_cap_reached`, `rate_not_achieved`, `send_schedule_drift`, `sample_count_low` (§13.1)
+- [ ] **B2.5** — `--calibrate` + machine profile; headroom check and refusal above 90% (§13.2)
+- [ ] **B2.6** — Run metadata: plan hash, engine version, seed, machine profile (§9.8)
 
 **Done when:** against a known injected distribution, reported percentiles match within their stated intervals; a capped run annotates correctly; a run past the calibrated ceiling is refused.
 
 ### B3 — Calls, chains, and the mixture
 
-| Step | Deliverable |
-|---|---|
-| B3.1 | Calls as a separate document; `call` references resolved from mix steps |
-| B3.2 | Chaining: sequential steps, variable scope, JSONPath + XPath extraction (§5) |
-| B3.3 | Chains with percentages of a total rate; sum-to-100 validation (§4.5) |
-| B3.4 | Assertions, `on_failure`, `repeat_until`, chain-abort accounting, expected-failure chains |
-| B3.5 | Datasets and inline templating |
-| B3.6 | Generation tiers: **Lua via `mlua` first** (§7.2), then Rust plugin, then exec sidecar |
-| B3.7 | Lua corpus loading: read-only, bundle-rooted, in-memory, size-ceilinged |
-| B3.8 | `auth` block (§6): all modes, single-flight refresh, auth traffic excluded |
-| B3.9 | Session policy per chain: `fresh` / `reuse` / `pool` (§4.2) |
-| B3.10 | Error-sample capture: first N per error class, redaction (§9.3) |
-| B3.11 | Validation errors with JSON Pointer paths; single-chain execution (`--chain`) |
+- [ ] **B3.1** — Calls as a separate document; `call` references resolved from mix steps
+- [ ] **B3.2** — Chaining: sequential steps, variable scope, JSONPath + XPath extraction (§5)
+- [ ] **B3.3** — Chains with percentages of a total rate; sum-to-100 validation (§4.5)
+- [ ] **B3.4** — Assertions, `on_failure`, `repeat_until`, chain-abort accounting, expected-failure chains
+- [ ] **B3.5** — Datasets and inline templating
+- [ ] **B3.6** — Generation tiers: **Lua via `mlua` first** (§7.2), then Rust plugin, then exec sidecar
+- [ ] **B3.7** — Lua corpus loading: read-only, bundle-rooted, in-memory, size-ceilinged
+- [ ] **B3.8** — `auth` block (§6): all modes, single-flight refresh, auth traffic excluded
+- [ ] **B3.9** — Session policy per chain: `fresh` / `reuse` / `pool` (§4.2)
+- [ ] **B3.10** — Error-sample capture: first N per error class, redaction (§9.3)
+- [ ] **B3.11** — Validation errors with JSON Pointer paths; single-chain execution (`--chain`)
 
 **Done when:** the `examples/plans/checkout-mixed` bundle runs end to end — six chains at declared percentages, XML and JSON, extraction between steps, a Lua generator, OAuth with refresh, and a deliberately-failing chain whose 401s count as passes.
 
@@ -115,15 +109,13 @@ Buildable and testable with nothing but a shell, a bundle, and the mock target.
 
 ### B4 — Many targets, and limits
 
-| Step | Deliverable |
-|---|---|
-| B4.1 | Sequential multi-target execution: target list, ordering, inter-target gap (§3.5) |
-| B4.2 | Direct container addressing: Host override, SNI, `insecure_skip_verify` annotation (§3.4) |
-| B4.3 | Breakpoint mode: stepped ramp, per-step statistics, `step_recovery` (§11) |
-| B4.4 | Stop conditions incl. generator-vs-target discrimination and `generator_limited` (§11.3) |
-| B4.5 | Refinement pass; report with knee / cliff / max-sustained / limiting resource |
-| B4.6 | SLO evaluation and exit codes for CI (§16) |
-| B4.7 | Static build, `engine/dist` bundle, ship-and-run over SSH (§2.2) |
+- [ ] **B4.1** — Sequential multi-target execution: target list, ordering, inter-target gap (§3.5)
+- [ ] **B4.2** — Direct container addressing: Host override, SNI, `insecure_skip_verify` annotation (§3.4)
+- [ ] **B4.3** — Breakpoint mode: stepped ramp, per-step statistics, `step_recovery` (§11)
+- [ ] **B4.4** — Stop conditions incl. generator-vs-target discrimination and `generator_limited` (§11.3)
+- [ ] **B4.5** — Refinement pass; report with knee / cliff / max-sustained / limiting resource
+- [ ] **B4.6** — SLO evaluation and exit codes for CI (§16)
+- [ ] **B4.7** — Static build, `engine/dist` bundle, ship-and-run over SSH (§2.2)
 
 **Done when:** a hand-written bundle listing three mock targets runs all three in sequence; a breakpoint run finds a known ceiling within one step width; the same run against an under-provisioned generator aborts as `generator_limited` rather than reporting a number.
 
