@@ -67,3 +67,15 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - `scripts/check.sh` is now step 2 of the process in `AGENTS.md`, ahead of committing.
 
 **Next:** A1.1 — `METRIX_HOME` layout, config, SQLite schema and migrations ([implementation-api.md](docs/implementation-api.md)).
+
+## 2026-09-12 — A1.1 home, config, store
+
+- **A1.1 done.** Track A has somewhere to put things.
+- `config.py`: `METRIX_HOME` resolved once (explicit → `$METRIX_HOME` → `~/.metrix`), every path derived from that one root. `config.toml` is optional; unknown sections and keys are named rather than ignored, since a silently-ignored typo in an observation interval is a bad afternoon. `parse_duration` mirrors the engine's spelling, rejecting a bare `"30"` the same way.
+- `store/`: forward-only numbered SQL migrations with gap and naming checks, WAL, foreign keys on per connection. Migration 001 covers observation — `recording`, `recording_target`, `phase`, `host_sample`, `collection_gap`, `annotation`. Load-run tables wait for A4; adding them later is what the mechanism is for.
+- Schema decisions: `host_sample` is narrow (one row per metric per sample) so collectors can report whatever a host exposes without a schema change; `series_key` is stored on the recording and computed in code; `addressing_mode` is a column because through-the-LB and direct-to-container must never land in one series; `STRICT` tables and `CHECK` constraints throughout.
+- Three bugs, all caught by tests asserting on messages and behavior rather than on success:
+  - `slots=True` makes dataclass class attributes **slot descriptors, not defaults** — `ServerConfig.port` was being compared as a descriptor, so a config typo surfaced as a nonsense port error.
+  - `sqlite3.executescript` **commits any open transaction before it runs**, so an outer `BEGIN` is discarded. The transaction now lives inside the script, which also makes the schema change and its version row atomic.
+  - A failed migration left a half-applied schema until the rollback moved inside the same script.
+- Verified: `scripts/check.sh` all green — 54 Python tests, 12 Rust.
