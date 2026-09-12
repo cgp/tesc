@@ -158,126 +158,148 @@ scp engine/dist/metrix-engine loadbox:~/ && scp -r plans/checkout-mixed loadbox:
 ssh loadbox 'metrix-engine --plan checkout-mixed/ --summary -' > summary.ndjson
 ```
 
-Nothing about that path is special-cased. It is the plain shape of the tool, which is why it will still work when it is wired up properly later (M6.7).
+Nothing about that path is special-cased. It is the plain shape of the tool, which is why it will still work when it is wired up properly later (B4.7).
 
 ---
 
 ## 3. Milestones
 
-Ordered so that the riskiest assumptions get tested earliest and each milestone leaves the tool usable for something.
+**Two independent tracks**, either buildable to completion without the other. The engine runs hand-written bundles from a shell; the API does observation-only recordings with no engine installed. They meet only at F0's contracts and at A4. **Start with track A** — observing hosts and containers has no engine dependency and is useful on its own (§10.2 of the design).
 
-### M0 — Foundations
-
-| Step | Deliverable |
-|---|---|
-| 0.1 | Repo skeleton, Rust workspace, `uv init` for the API, committed lockfiles |
-| 0.2 | `metrix-plan` types: call, mix, targets — minimal but separate from the start |
-| 0.3 | `schemars` schema generation + `scripts/check-schema.sh` |
-| 0.4 | `metrix-mock`: HTTP target with configurable latency distribution, error injection, and slow-start behavior |
-| 0.5 | CI: `cargo test`, `cargo clippy -D warnings`, `uv run pytest`, schema drift check |
-
-**Done when:** `cargo run -p metrix-mock` serves a target whose p50/p99 you can dial, and the schema check passes in CI.
-
-*Why the mock comes first:* every statistical claim in the design needs a target with known behavior to verify against. Building it later means validating the measurement tool against a service whose real latency you do not know.
-
-### M1 — Walking skeleton
-
-A thin vertical slice through every layer, before any layer is complete.
+### F0 — Shared foundation (both tracks depend on this)
 
 | Step | Deliverable |
 |---|---|
-| 1.1 | Engine: open-model fixed-rate scheduler, HTTP/1.1 + HTTP/2 via `hyper`/`rustls`, one call, **bundle in / NDJSON out with no API present** |
-| 1.2 | `metrix-metrics`: per-worker HDR histograms + counters, merged on a 250ms tick |
-| 1.3 | NDJSON summary output; `--events` per-request stream |
-| 1.4 | Engine self-metrics: send-schedule drift, in-flight, queue depth (§13.2) |
-| 1.5 | API: bundle assembly + export, engine supervision, NDJSON ingest, SQLite + run directory |
-| 1.6 | Static front end: `index.html`, Tabler, left nav, ES module skeleton (`api` / `stream` / `state` / `table`) |
-| 1.7 | SSE stream at 1s with `Last-Event-ID` replay; **Stats table page live** (§14) |
+| F0.1 | Repo skeleton, Rust workspace, `uv init`, committed lockfiles |
+| F0.2 | `metrix-plan` types: call, mix, targets — separate from the start |
+| F0.3 | Generated schemas + `scripts/check-schema.sh`; NDJSON event shapes frozen in `schema/events.schema.json` |
+| F0.4 | CI: `cargo test`, `cargo clippy -D warnings`, `uv run pytest`, schema drift check |
 
-**Done when:** `metrix-engine --plan ...` runs 30s at 75 RPS against the mock **from a bare shell with the API stopped**, and separately, the same run launched from the browser updates the stats table once per second without lag or column jitter, with reconnect leaving no gap.
+**Done when:** both tracks can build and test independently, and the NDJSON contract is written down before either side implements it.
 
-*Why this shape:* the pipeline is where integration risk lives — subprocess supervision, backpressure, stream reconnect. Proving it end-to-end at week two is worth far more than a feature-complete engine with nothing to display it.
+---
 
-### M2 — Measurement you can trust
+### Track A — API, observation, and analysis
 
-Nothing after this point is meaningful if this milestone is wrong.
+Nothing here requires the engine. Through A3 the product is a host-observation tool; A4 is the only integration point.
 
-| Step | Deliverable |
-|---|---|
-| 2.1 | Phase timeline: baseline → warmup → measure → drain → settle (§10.1), phase events on the stream |
-| 2.2 | Percentile support rules: the 2250 floor, CIs on p99, p99.9 suppression (§12.1) |
-| 2.3 | Coordinated-omission correction reported beside raw (§12.2) |
-| 2.4 | Run annotations + detector framework (§13.1), starting with `concurrency_cap_reached`, `rate_not_achieved`, `send_schedule_drift`, `sample_count_low` |
-| 2.5 | `metrix-engine --calibrate` + machine profile; headroom check and refusal above 90% (§13.2) |
-| 2.6 | Run metadata: plan hash, engine version, API version + lock hash, seed, machine profile (§9.8) |
-
-**Done when:** against a mock with a known injected distribution, reported percentiles match the true values within their stated confidence intervals; a deliberately capped run raises `concurrency_cap_reached` with the right window percentage; and a run driven past the calibrated ceiling is refused rather than reported.
-
-### M3 — Expressive plans
+#### A1 — Observation (start here)
 
 | Step | Deliverable |
 |---|---|
-| 3.1 | Calls as a separate document, `call` references from mix steps, cross-document validation |
-| 3.2 | Chains with percentages of a total rate; sum-to-100 validation; implied per-chain RPS and req/s display (§4.5) |
-| 3.3 | Chaining: sequential steps, variable scope, JSONPath + XPath extraction (§5) |
-| 3.4 | Assertions, `on_failure` policy, `repeat_until`, chain-abort accounting |
-| 3.5 | Datasets: CSV/JSONL, round_robin / random / unique_per_iteration |
-| 3.6 | Inline templating (`{{ }}`, `rand`, `uuid`, `now`, `seq`, `pick`) |
-| 3.7 | Generation tiers: **Lua via `mlua` first** (§7.2), then Rust plugin trait, then exec sidecar |
-| 3.8 | Lua corpus loading: read-only, plan-directory-rooted, in-memory, size-ceilinged |
-| 3.9 | `auth` block (§6): all modes, single-flight refresh, auth traffic excluded from load metrics |
-| 3.10 | Session policy per chain: `fresh` / `reuse` / `pool`, cookie jar bound to auth identity (§4.2) |
-| 3.11 | Error-sample capture: first N per error class, redaction (§9.3) |
-| 3.12 | `POST /api/plans/validate`: JSON Pointer paths, unresolved `call` names, percentages not summing to 100; single-chain execution (`--chain`) |
+| A1.1 | `METRIX_HOME` layout, config, SQLite schema and migrations |
+| A1.2 | Target profiles with explicit endpoint lists |
+| A1.3 | Observer: SSH collection, 1s samples, normalized metric shape (§2.3) |
+| A1.4 | HTTP scrape collector; graceful degradation, `collection_gap` annotation |
+| A1.5 | Observation-only recordings: start/stop, phases, persistence (§10.2) |
+| A1.6 | Static front end: `index.html`, Tabler, left nav, ES module skeleton |
+| A1.7 | SSE stream at 1s with `Last-Event-ID` replay; live host stats on the Stats page |
 
-**Done when:** the `examples/plans/checkout-mixed` bundle runs end to end — six chains at declared percentages, XML and JSON, extraction between steps, a Lua generator producing path and body, OAuth with refresh, and a deliberately-failing chain whose 401s count as passes — and a broken plan returns errors an LLM can repair from, including a mixture that does not total 100.
+**Done when:** an observation-only recording of a live host streams to the browser at 1s, survives a reconnect with no gap, persists, and reopens later — with no engine built.
 
-*Sequencing notes:* calls before chains before the mixture (3.1 → 3.3 → 3.2 order of dependency), so each layer is testable alone. Lua before the exec sidecar, deliberately — it is the default tier, and building the escape hatch first tends to make the escape hatch the default.
-
-### M4 — Targets and observation
+#### A2 — Discovery
 
 | Step | Deliverable |
 |---|---|
-| 4.1 | Target profiles with explicit endpoint lists (no discovery); profile → run-spec targets block |
-| 4.2 | Observer: SSH collection, 1s samples, normalized metric shape (§2.3) |
-| 4.3 | HTTP scrape collector; graceful degradation and `collection_gap` annotation |
-| 4.4 | Baseline/settle host statistics: delta-from-baseline, recovery curves, leak detection (§9.7) |
-| 4.5 | Observation-only mode + environment baselines (§10.2) |
-| 4.6 | ECS discovery: hostname → ALB → target group → service → tasks → containers → instances (§3.1) |
-| 4.7 | Resolved inventory: storage, pinning to runs, refresh at phase boundaries |
-| 4.8 | Direct container addressing: Host override, SNI, reachability verification at setup (§3.4) |
-| 4.9 | **Engine: sequential multi-target execution** — target list, ordering, inter-target gap, per-target phased runs (§3.5) |
+| A2.1 | ECS discovery: hostname → ALB → target group → service → tasks → containers → instances (§3.1) |
+| A2.2 | Resolved inventory: storage, run pinning, refresh at phase boundaries, `host_count_changed` |
+| A2.3 | Reachability verification at profile setup; `targets.json` written from a profile |
+| A2.4 | Environment baselines; baseline/settle deltas, recovery curves, leak detection (§9.7) |
 
-**Done when:** a hostname resolves to a task list with image digests; observation-only recording starts and stops from the front end with no plan attached; a run against one container carries correct Host and SNI; a hand-written spec listing three mock targets runs all three in sequence from a bare shell; and an unreachable VPC fails at profile setup rather than at run time.
+**Done when:** a hostname resolves to a task list with image digests, and observation attaches to those identities.
 
-### M5 — Analysis
+#### A3 — Analysis of recordings
 
 | Step | Deliverable |
 |---|---|
-| 5.1 | Charts page (§15): RPS, percentile bands, histogram/CDF, errors, phase-breakdown, host overlay |
-| 5.2 | Phase bands, annotation shading, collection gaps drawn as gaps |
-| 5.3 | Recordings: archive, filters, baseline marking with `invalid` gating |
-| 5.4 | Run series by setup identity; trend charts with measured noise bands (§17.3) |
-| 5.5 | Regression flagging: outside band **and** sample-supported **and** not invalid (§17.4) |
-| 5.6 | Comparison mode for the stats table (§14.4) and multi-run overlay |
-| 5.7 | Run-group histogram merging (§17.5) |
-| 5.8 | Purge button for events and error bodies; exports (JSON/CSV/static HTML) |
+| A3.1 | Stats table (§14): rows, columns, live update, TSV/CSV export |
+| A3.2 | Charts page (§15): phase bands, host overlays, gaps drawn as gaps |
+| A3.3 | Recordings archive, filters, baseline marking with `invalid` gating |
+| A3.4 | Run series by setup identity; trends with measured noise bands (§17.3) |
+| A3.5 | Regression flagging: outside band **and** sample-supported **and** not invalid (§17.4) |
+| A3.6 | Comparison mode (§14.4), multi-run overlay, histogram merging (§17.5) |
+| A3.7 | Purge button; exports (JSON/CSV/static HTML) |
 
-**Done when:** ten runs of one plan produce a trend with a believable noise band, an injected 30% regression is flagged while a 3% wobble is not, and merging five 30s runs yields a p99 with materially tighter bounds than any single run.
+**Done when:** ten recordings of one environment produce a trend with a believable noise band.
 
-### M6 — Automation
+#### A4 — Integration with the engine
 
 | Step | Deliverable |
 |---|---|
-| 6.1 | Breakpoint mode (§11): stepped ramp, per-step statistics, `step_recovery` |
-| 6.2 | Stop conditions incl. generator-vs-target discrimination and `generator_limited` abort (§11.3) |
-| 6.3 | Refinement pass; breakpoint report with knee / cliff / max-sustained / limiting resource |
-| 6.4 | Sweep comparison view (§17.6) over the multi-target runs from 4.9 |
-| 6.5 | `POST /api/plans/generate` — calls deterministically from OpenAPI/WSDL, starter mix with flat weights (§8) |
-| 6.6 | SLO evaluation, engine exit codes, machine-readable verdict for CI (§16) |
-| 6.7 | **Remote execution**: static build, `engine/dist` bundle, ship-and-run over SSH, stream collection back to the API |
+| A4.1 | Bundle assembly and export (`GET /api/plans/{name}/bundle`) |
+| A4.2 | Engine supervision, NDJSON ingest, load + host series on one timeline |
+| A4.3 | Plan editor: calls, chains, percentages with implied RPS, validation display |
+| A4.4 | `POST /api/plans/generate` — calls from OpenAPI/WSDL, starter mix (§8) |
+| A4.5 | Sweep comparison view (§17.6) |
 
-**Done when:** a breakpoint run against a mock with a known capacity ceiling finds it within one step width; the same run against a deliberately under-provisioned generator aborts as `generator_limited` rather than reporting a number; and a generated draft plan validates and runs without hand-editing.
+**Done when:** a run launched from the browser shows load and host metrics against one clock.
+
+---
+
+### Track B — Engine
+
+Buildable and testable with nothing but a shell, a bundle, and the mock target.
+
+#### B1 — Core load path
+
+| Step | Deliverable |
+|---|---|
+| B1.1 | `metrix-mock`: configurable latency distribution, error injection, slow start, capacity ceiling |
+| B1.2 | Open-model fixed-rate scheduler, HTTP/1.1 + HTTP/2 via `hyper`/`rustls` |
+| B1.3 | `metrix-metrics`: per-worker HDR histograms and counters, merged on a 250ms tick |
+| B1.4 | NDJSON `--summary` and `--events` output per the F0.3 contract |
+| B1.5 | Self-metrics: send-schedule drift, in-flight, queue depth (§13.2) |
+
+**Done when:** `metrix-engine --plan dir/` holds 75 RPS for 30s against the mock from a bare shell, with drift reported and no API in existence.
+
+*Why the mock first:* every statistical claim needs a target whose true behavior is known. Built later, the measurement tool gets validated against a service whose real latency nobody knows.
+
+#### B2 — Measurement you can trust
+
+| Step | Deliverable |
+|---|---|
+| B2.1 | Phase timeline: baseline → warmup → measure → drain → settle (§10.1) |
+| B2.2 | Percentile support rules: the 2250 floor, CIs on p99, p99.9 suppression (§12.1) |
+| B2.3 | Coordinated-omission correction reported beside raw (§12.2) |
+| B2.4 | Annotation detectors: `concurrency_cap_reached`, `rate_not_achieved`, `send_schedule_drift`, `sample_count_low` (§13.1) |
+| B2.5 | `--calibrate` + machine profile; headroom check and refusal above 90% (§13.2) |
+| B2.6 | Run metadata: plan hash, engine version, seed, machine profile (§9.8) |
+
+**Done when:** against a known injected distribution, reported percentiles match within their stated intervals; a capped run annotates correctly; a run past the calibrated ceiling is refused.
+
+#### B3 — Calls, chains, and the mixture
+
+| Step | Deliverable |
+|---|---|
+| B3.1 | Calls as a separate document; `call` references resolved from mix steps |
+| B3.2 | Chaining: sequential steps, variable scope, JSONPath + XPath extraction (§5) |
+| B3.3 | Chains with percentages of a total rate; sum-to-100 validation (§4.5) |
+| B3.4 | Assertions, `on_failure`, `repeat_until`, chain-abort accounting, expected-failure chains |
+| B3.5 | Datasets and inline templating |
+| B3.6 | Generation tiers: **Lua via `mlua` first** (§7.2), then Rust plugin, then exec sidecar |
+| B3.7 | Lua corpus loading: read-only, bundle-rooted, in-memory, size-ceilinged |
+| B3.8 | `auth` block (§6): all modes, single-flight refresh, auth traffic excluded |
+| B3.9 | Session policy per chain: `fresh` / `reuse` / `pool` (§4.2) |
+| B3.10 | Error-sample capture: first N per error class, redaction (§9.3) |
+| B3.11 | Validation errors with JSON Pointer paths; single-chain execution (`--chain`) |
+
+**Done when:** the `examples/plans/checkout-mixed` bundle runs end to end — six chains at declared percentages, XML and JSON, extraction between steps, a Lua generator, OAuth with refresh, and a deliberately-failing chain whose 401s count as passes.
+
+*Sequencing note:* calls before chains before the mixture, so each layer is testable alone. Lua before the exec sidecar — it is the default tier, and building the escape hatch first tends to make the escape hatch the default.
+
+#### B4 — Many targets, and limits
+
+| Step | Deliverable |
+|---|---|
+| B4.1 | Sequential multi-target execution: target list, ordering, inter-target gap (§3.5) |
+| B4.2 | Direct container addressing: Host override, SNI, `insecure_skip_verify` annotation (§3.4) |
+| B4.3 | Breakpoint mode: stepped ramp, per-step statistics, `step_recovery` (§11) |
+| B4.4 | Stop conditions incl. generator-vs-target discrimination and `generator_limited` (§11.3) |
+| B4.5 | Refinement pass; report with knee / cliff / max-sustained / limiting resource |
+| B4.6 | SLO evaluation and exit codes for CI (§16) |
+| B4.7 | Static build, `engine/dist` bundle, ship-and-run over SSH (§2.2) |
+
+**Done when:** a hand-written bundle listing three mock targets runs all three in sequence; a breakpoint run finds a known ceiling within one step width; the same run against an under-provisioned generator aborts as `generator_limited` rather than reporting a number.
 
 ---
 
@@ -299,7 +321,7 @@ These are easy to erode step by step, so they are worth restating as build-time 
 
 ### 5.1 The mock target is the measurement ground truth
 
-`metrix-mock` serves configurable latency distributions (fixed, normal, lognormal, bimodal), injectable error rates and types, connection-refusal at a configurable concurrency, slow-start/warmup behavior, and a capacity ceiling for breakpoint testing. Because its true distribution is known, the engine's reported statistics can be asserted against it — which is the only way to test a measurement tool.
+`metrix-mock` (B1.1) serves configurable latency distributions (fixed, normal, lognormal, bimodal), injectable error rates and types, connection-refusal at a configurable concurrency, slow-start/warmup behavior, and a capacity ceiling for breakpoint testing. Because its true distribution is known, the engine's reported statistics can be asserted against it — which is the only way to test a measurement tool.
 
 ### 5.2 Layers
 
@@ -319,21 +341,21 @@ Discovery is tested against committed JSON fixtures of real `describe_*` respons
 
 | Risk | Mitigation |
 |---|---|
-| Measuring the generator instead of the target | Self-metrics land in M1.4, before any feature that would tempt a conclusion |
-| Percentile math wrong but plausible | M0.4 mock before M2, so statistics are asserted against known truth |
-| Schema drift between engine and API | Generated schemas + CI check from M0.3 |
-| Exec generators becoming the default | Lua built first (M3.6) |
-| SSE backpressure perturbing a run | Engine never blocks (rule 2); verified in M1 acceptance |
-| Discovery complexity leaking into the engine | Rules 1–2, with a CI job that runs the full M1 acceptance with the API stopped |
+| **Tracks integrating late and badly** | The NDJSON shapes are frozen in F0.3 before either side implements them, and the API ingests a recorded fixture stream from day one — so A4 is wiring, not discovery |
+| Measuring the generator instead of the target | Self-metrics land in B1.5, before any feature that would tempt a conclusion |
+| Percentile math wrong but plausible | Mock at B1.1, before B2, so statistics are asserted against known truth |
+| Schema drift between engine and API | Generated schemas + CI check from F0.3 |
+| Exec generators becoming the default | Lua built first (B3.6) |
+| SSE backpressure perturbing a run | Engine never blocks (rule 3); verified in B1 acceptance |
+| Discovery complexity leaking into the engine | Rules 1–2, with a CI job that runs B1 acceptance with the API absent |
 | Front end drifting into a framework | One static page, no build step; if a bundler becomes necessary, that is a decision to revisit deliberately |
 
 ---
 
 ## 7. First week
 
-1. M0.1–0.3 — skeleton, plan types (call/mix/targets), schema generation.
-2. M0.4 — the mock target, with a dial-able latency distribution.
-3. M1.1–1.3 — fixed-rate scheduler and NDJSON output.
-4. Run 30s at 75 RPS against the mock and compare the reported p50/p95/p99 against the injected distribution by hand.
+F0.1–F0.3 first — skeleton, plan types, and the frozen schemas — since both tracks build on them and they are an afternoon's work.
 
-Step 4 is the real milestone. Everything downstream assumes those numbers are right.
+Then **A1.1–A1.3**: `METRIX_HOME`, a profile with two explicit hosts, and the SSH collector sampling them at 1s. The milestone is a JSON series of real CPU and memory off a real box, persisted and reopenable.
+
+That is a genuinely useful thing on its own, it requires no Rust, and it makes the domain concrete before any of the statistics work begins. Track B's own first milestone — the mock target, then a fixed-rate scheduler holding 75 RPS for 30s — can start whenever, by whoever, without waiting.
