@@ -38,7 +38,12 @@ class RawSample:
     #: RetransSegs, CurrEstab, ListenOverflows.
     tcp: dict[str, float] = field(default_factory=dict)
     fd_open: float | None = None
+    #: Three distinct counts. A transport that cannot supply one leaves it None and
+    #: the metric is absent: a number of the wrong kind is worse than no number, and
+    #: absent is what the charts already know how to draw.
     proc_count: float | None = None
+    thread_count: float | None = None
+    proc_running: float | None = None
 
 
 def derive(previous: RawSample | None, current: RawSample, elapsed_s: float) -> dict[str, float]:
@@ -53,6 +58,10 @@ def derive(previous: RawSample | None, current: RawSample, elapsed_s: float) -> 
         out[m.LOAD_1M], out[m.LOAD_5M], out[m.LOAD_15M] = current.load
     if current.proc_count is not None:
         out[m.PROC_COUNT] = current.proc_count
+    if current.thread_count is not None:
+        out[m.THREAD_COUNT] = current.thread_count
+    if current.proc_running is not None:
+        out[m.PROC_RUNNING] = current.proc_running
     if current.fd_open is not None:
         out[m.FD_OPEN] = current.fd_open
 

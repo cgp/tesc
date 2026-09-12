@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 
+from metrix_api.observer.facts import HostFacts, parse_df, parse_identity
 from metrix_api.observer.raw import RawSample
 
 #: Marks the start of a sample block; the number is the remote host's epoch seconds.
@@ -26,7 +27,7 @@ MEM='^(MemTotal|MemFree|MemAvailable|Buffers|Cached|SwapTotal|SwapFree):'
 while :; do
   echo "===metrix $(date +%s)"
   echo "--stat"
-  grep -E '^(cpu |intr )' /proc/stat
+  grep -E '^(cpu |intr |procs_running )' /proc/stat
   echo "--loadavg"
   cat /proc/loadavg
   echo "--meminfo"
@@ -43,10 +44,34 @@ while :; do
   cat /proc/sys/fs/file-nr
   echo "--sockstat"
   grep -E '^TCP:' /proc/net/sockstat
+  echo "--procs"
+  set -- /proc/[0-9]*
+  [ -e "$1" ] && echo $# || echo 0
   echo "--end"
   sleep {interval}
 done
 """
+
+#: Run once at the start and again at the end of a recording, not in the loop.
+#:
+#: `.` rather than `source`, `uname` rather than /proc/version, and `df -Pk` rather
+#: than `df -B1 --output`: everything here is POSIX, because the boxes worth
+#: measuring include the ones with busybox on them.
+PROBE_SCRIPT = r"""
+PRETTY_NAME=""
+[ -r /etc/os-release ] && . /etc/os-release
+echo "hostname=$(uname -n)"
+echo "os=${PRETTY_NAME:-$(uname -s)}"
+echo "kernel=$(uname -sr)"
+echo "arch=$(uname -m)"
+echo "cpus=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo 0)"
+echo "--filesystems"
+df -Pk 2>/dev/null
+"""
+
+#: Splits the probe's two halves. The identity lines come first because a `df` that
+#: fails should not cost us the identity.
+PROBE_SEPARATOR = "--filesystems"
 
 #: Partitions and virtual devices double-count the physical device beneath them.
 _REAL_DISK = re.compile(r"^(sd[a-z]+|nvme\d+n\d+|vd[a-z]+|xvd[a-z]+)$")
@@ -70,6 +95,15 @@ def split_blocks(text: str) -> list[str]:
                 blocks.append("\n".join(current))
                 current = None
     return blocks
+
+
+def parse_probe(text: str) -> HostFacts:
+    """Split the probe output into identity and filesystems."""
+    identity_text, _, df_text = text.partition(PROBE_SEPARATOR)
+    return HostFacts(
+        identity=parse_identity(identity_text),
+        filesystems=parse_df(df_text),
+    )
 
 
 def parse_sample(block: str) -> RawSample:
@@ -101,6 +135,13 @@ def parse_sample(block: str) -> RawSample:
 
 def _stat(sample: RawSample, line: str) -> None:
     fields = line.split()
+    if not fields:
+        return
+    # Runnable tasks, not a total: on an idle box with hundreds of threads this is
+    # about 1. It is a different question from "how many processes exist".
+    if fields[0] == "procs_running" and len(fields) > 1:
+        sample.proc_running = float(fields[1])
+        return
     if fields[0] != "cpu":
         return
     # user nice system idle iowait irq softirq steal
@@ -113,9 +154,12 @@ def _loadavg(sample: RawSample, line: str) -> None:
     fields = line.split()
     if len(fields) >= 4:
         sample.load = (float(fields[0]), float(fields[1]), float(fields[2]))
-        # "running/total" -- total is the process count.
+        # "runnable/total", and `total` counts kernel scheduling entities --
+        # processes *and* threads. It was read as a process count for a while,
+        # which made it ~100x the number the scrape transport reported for the
+        # same host under the same metric name.
         if "/" in fields[3]:
-            sample.proc_count = float(fields[3].split("/")[1])
+            sample.thread_count = float(fields[3].split("/")[1])
 
 
 def _meminfo(sample: RawSample, line: str) -> None:
@@ -189,6 +233,17 @@ def _filenr(sample: RawSample, line: str) -> None:
         sample.fd_open = allocated - free
 
 
+def _procs(sample: RawSample, line: str) -> None:
+    """The count of numeric directories in /proc: one entry per process.
+
+    Counted by glob in the remote shell rather than by piping `ls` into `wc`, which
+    would be two more processes per second on a box being measured.
+    """
+    text = line.strip()
+    if text.isdigit():
+        sample.proc_count = float(text)
+
+
 def _sockstat(sample: RawSample, line: str) -> None:
     fields = line.split()
     if fields and fields[0] == "TCP:" and "inuse" in fields:
@@ -205,4 +260,5 @@ _HANDLERS = {
     "netstat": _netstat,
     "filenr": _filenr,
     "sockstat": _sockstat,
+    "procs": _procs,
 }

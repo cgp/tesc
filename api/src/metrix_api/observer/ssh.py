@@ -17,7 +17,14 @@ from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
-from metrix_api.observer.linux import REMOTE_SCRIPT, parse_sample, split_blocks
+from metrix_api.observer.facts import HostFacts
+from metrix_api.observer.linux import (
+    PROBE_SCRIPT,
+    REMOTE_SCRIPT,
+    parse_probe,
+    parse_sample,
+    split_blocks,
+)
 from metrix_api.observer.raw import RawSample
 from metrix_api.profiles import Collection
 
@@ -64,12 +71,7 @@ class SshTransport:
         user = f"{self.user}@" if self.user else ""
         return f"{user}{self.host}:{self.port}"
 
-    async def stream(self, interval: timedelta) -> AsyncIterator[RawSample]:
-        import asyncssh  # imported here so the module loads without a live SSH stack
-
-        seconds = max(1, int(interval.total_seconds()))
-        script = REMOTE_SCRIPT.replace("{interval}", str(seconds))
-
+    def _options(self) -> dict[str, object]:
         options: dict[str, object] = {"connect_timeout": self.connect_timeout}
         if self.user:
             options["username"] = self.user
@@ -86,6 +88,26 @@ class SshTransport:
         # A host key we have never seen should not stop a recording; the profile is
         # already an explicit statement about which boxes these are.
         options["known_hosts"] = str(self.known_hosts) if self.known_hosts else None
+        return options
+
+    async def probe(self) -> HostFacts:
+        """Identity and filesystem usage, once. Its own short connection.
+
+        Twice a recording, not once a second, so the cost of a second handshake is
+        not worth threading this through the streaming connection's lifetime.
+        """
+        import asyncssh
+
+        async with asyncssh.connect(self.host, port=self.port, **self._options()) as conn:
+            result = await conn.run(PROBE_SCRIPT, check=False)
+        return parse_probe(str(result.stdout or ""))
+
+    async def stream(self, interval: timedelta) -> AsyncIterator[RawSample]:
+        import asyncssh  # imported here so the module loads without a live SSH stack
+
+        seconds = max(1, int(interval.total_seconds()))
+        script = REMOTE_SCRIPT.replace("{interval}", str(seconds))
+        options = self._options()
 
         async with (
             asyncssh.connect(self.host, port=self.port, **options) as conn,

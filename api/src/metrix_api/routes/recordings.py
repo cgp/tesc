@@ -79,6 +79,10 @@ def get_recording(
              "detail": json.loads(a["detail"]) if a["detail"] else None}
             for a in store.annotations(conn, recording_id)
         ],
+        # What each box was, and what the run did to its disks. Neither is a series:
+        # identity does not change, and filesystem usage is read once at each end.
+        "identity": store.identities(conn, recording_id),
+        "filesystems": store.filesystem_usage(conn, recording_id),
     }
 
 

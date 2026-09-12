@@ -66,6 +66,67 @@ def recording(home):
     return recording_id
 
 
+class TestHostFacts:
+    """What the box was, and what the run did to its disks."""
+
+    def _probed(self, home, recording_id):
+        from metrix_api.observer.facts import Filesystem, HostFacts
+        from metrix_api.store.db import connect, migrate
+
+        conn = connect(home.database)
+        migrate(conn)
+        store.save_facts(
+            conn, recording_id, "task-a",
+            HostFacts(
+                identity={"hostname": "web-1", "os": "Ubuntu 24.04", "cpus": "8"},
+                filesystems=[Filesystem("/", 1000, 400), Filesystem("/data", 5000, 1000)],
+            ),
+            at="start",
+        )
+        store.save_facts(
+            conn, recording_id,  "task-a",
+            HostFacts(
+                identity={"hostname": "web-1"},
+                filesystems=[Filesystem("/", 1000, 450)],
+            ),
+            at="finish",
+        )
+        conn.close()
+
+    def test_identity_and_the_disk_delta_reach_the_recording(self, client, home, recording) -> None:
+        self._probed(home, recording)
+        body = client.get(f"/api/recordings/{recording}").json()
+
+        assert body["identity"]["task-a"]["os"] == "Ubuntu 24.04"
+        by_mount = {f["mount"]: f for f in body["filesystems"]}
+        assert by_mount["/"]["used_delta_bytes"] == 50, "450 - 400"
+
+    def test_a_mount_with_no_finish_reading_has_no_delta(self, client, home, recording) -> None:
+        """The second probe failing is not the same as nothing being written, and a
+        delta of zero would claim it was."""
+        self._probed(home, recording)
+        by_mount = {
+            f["mount"]: f for f in client.get(f"/api/recordings/{recording}").json()["filesystems"]
+        }
+        assert by_mount["/data"]["start_used_bytes"] == 1000
+        assert by_mount["/data"]["finish_used_bytes"] is None
+        assert by_mount["/data"]["used_delta_bytes"] is None
+
+    def test_a_second_probe_does_not_thin_out_the_identity(self, client, home, recording) -> None:
+        """The finish probe reported only a hostname -- a box under load can answer
+        less. The fuller first answer is the one worth keeping."""
+        self._probed(home, recording)
+        identity = client.get(f"/api/recordings/{recording}").json()["identity"]["task-a"]
+        assert identity["cpus"] == "8"
+
+    def test_a_recording_with_no_probe_reports_nothing_rather_than_zero(
+        self, client, recording
+    ) -> None:
+        body = client.get(f"/api/recordings/{recording}").json()
+        assert body["identity"] == {}
+        assert body["filesystems"] == []
+
+
 class TestHealth:
     def test_reports_version_and_home(self, client, home) -> None:
         body = client.get("/api/health").json()

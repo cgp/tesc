@@ -53,7 +53,9 @@ node_netstat_Tcp_RetransSegs {retrans}
 node_netstat_Tcp_CurrEstab 42
 node_netstat_TcpExt_ListenOverflows 11
 node_filefd_allocated 2048
-node_procs_running 431
+node_procs_running 3
+node_processes_pids 187
+node_processes_threads 431
 node_time_seconds 1.789e+09
 node_dmi_info{{bios_vendor="Whoever"}} 1
 node_scrape_collector_success{{collector="cpu"}} NaN
@@ -80,9 +82,23 @@ class TestParsing:
 
     def test_gauges(self, sample) -> None:
         assert sample.load == (0.52, 0.48, 0.44)
-        assert sample.proc_count == 431
         assert sample.fd_open == 2048
         assert sample.tcp["CurrEstab"] == 42
+
+    def test_the_three_task_counts_come_from_three_different_series(self, sample) -> None:
+        """`node_procs_running` is runnable processes. It was read as the process
+        count, which is a different question and about two orders of magnitude out."""
+        assert sample.proc_count == 187, "node_processes_pids"
+        assert sample.thread_count == 431, "node_processes_threads"
+        assert sample.proc_running == 3, "node_procs_running"
+
+    def test_without_the_processes_collector_the_counts_are_absent(self) -> None:
+        """node_exporter ships that collector disabled. Absent is the honest answer;
+        filling them from node_procs_running is what made the transports disagree."""
+        sample = parse_text("node_procs_running 3\nnode_filefd_allocated 10\n")
+        assert sample.proc_running == 3
+        assert sample.proc_count is None
+        assert sample.thread_count is None
 
     def test_virtual_devices_are_excluded(self, sample) -> None:
         # loop0 would otherwise add 100MB of phantom reads.
@@ -95,7 +111,7 @@ class TestParsing:
     def test_a_nan_reading_is_skipped_rather_than_treated_as_zero(self) -> None:
         """A missing reading is not a measurement of zero."""
         parse_text("node_procs_running NaN\n")  # must not raise
-        assert parse_text("node_procs_running NaN\n").proc_count is None
+        assert parse_text("node_procs_running NaN\n").proc_running is None
 
     def test_comments_and_unknown_series_are_ignored(self, sample) -> None:
         assert "bios_vendor" not in str(sample.mem)
@@ -139,6 +155,13 @@ class TestAgreementWithSsh:
         )
         scrape = derive(parse_text(exporter(io_s=0.0)), parse_text(exporter(io_s=0.25)), 1.0)
         assert scrape[m.DISK_IO_BUSY] == pytest.approx(proc[m.DISK_IO_BUSY])
+
+    def test_the_task_counts_agree(self) -> None:
+        """The number under a metric name must not depend on how it was collected."""
+        proc = derive(None, parse_sample(block(cpu_user=1, cpu_idle=1)), 1.0)
+        scrape = derive(None, parse_text(exporter()), 1.0)
+        for name in (m.PROC_COUNT, m.THREAD_COUNT, m.PROC_RUNNING):
+            assert scrape[name] == proc[name], f"{name} differs between transports"
 
     def test_every_group_metric_is_produced_by_this_transport_too(self) -> None:
         produced = set(

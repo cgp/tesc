@@ -37,10 +37,31 @@ simply not observed — it still receives load.
 
 ## What gets collected
 
+Two things are recorded that are *not* series, because they are not rates:
+
+- **Identity** — hostname, OS, kernel, architecture, core count. Read once at the
+  start. It is what answers "what was this measured on?" a year later.
+- **Filesystem usage** — read once before the run and once after it drains, per
+  mount. The question a run needs answered is "did this consume disk, and how
+  much", and two readings answer it for the cost of two `df` calls rather than one
+  per second on every mount. Both appear on the recording, with the change between
+  them. A mount with no reading at the end shows no change rather than a change of
+  zero — a probe failing is not the same as nothing being written.
+
+Both work over either transport. Over SSH they are a short POSIX script; over
+scrape they come from `node_uname_info`, `node_os_info` and `node_filesystem_*`.
+
 Whatever the transport reports is **whole-machine**, not per-process. Over SSH the
 remote side is a shell loop reading `/proc/stat`, `/proc/loadavg`, `/proc/meminfo`,
 `/proc/diskstats`, `/proc/net/dev`, `/proc/net/snmp`, `/proc/sys/fs/file-nr` and
 `/proc/net/sockstat`. `cpu.user` is the box's CPU, not your service's.
+
+Three task counts are collected, and they answer different questions: `proc.count`
+is how many processes exist, `thread.count` is processes *and* threads, and
+`proc.running` is how many are runnable right now. On an idle box with 200 threads
+the three read roughly 190, 431 and 1. Over scrape the first two need node_exporter's
+`processes` collector, which ships disabled; without it they are absent rather than
+filled in from something else.
 
 So if nginx reverse-proxies to your app on the same machine, one set of numbers
 covers both, and there is no way to split them. That is usually what you want for a

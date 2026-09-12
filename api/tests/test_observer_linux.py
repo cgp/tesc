@@ -28,6 +28,7 @@ def block(
 --stat
 cpu  {cpu_user} 20 300 {cpu_idle} 50 0 10 5
 intr 12345
+procs_running 3
 --loadavg
 0.52 0.48 0.44 2/431 9912
 --meminfo
@@ -56,6 +57,8 @@ TcpExt: 0 0 11 12
 2048	0	9223372036854775807
 --sockstat
 TCP: inuse 51 orphan 0 tw 3 alloc 60 mem 4
+--procs
+187
 --end"""
 
 
@@ -88,9 +91,21 @@ class TestParsing:
         assert sample.mem["MemTotal"] == 16007456 * 1024
         assert sample.mem["MemAvailable"] == 8003728 * 1024
 
-    def test_load_and_process_count(self, sample) -> None:
+    def test_load_and_the_three_task_counts(self, sample) -> None:
+        """Three different questions, and they were one metric once. The loadavg
+        denominator counts processes *and* threads, so reading it as a process
+        count made this transport report ~100x what the other one did."""
         assert sample.load == (0.52, 0.48, 0.44)
-        assert sample.proc_count == 431
+        assert sample.proc_count == 187, "numeric directories in /proc"
+        assert sample.thread_count == 431, "the loadavg denominator: all tasks"
+        assert sample.proc_running == 3, "/proc/stat procs_running: runnable only"
+
+    def test_a_missing_procs_section_leaves_the_count_absent(self) -> None:
+        """An older agent, or a /proc the glob could not read. Absent, not zero."""
+        text = block(cpu_user=1, cpu_idle=1).replace("--procs\n187\n", "")
+        sample = parse_sample(text)
+        assert sample.proc_count is None
+        assert sample.thread_count == 431
 
     def test_partitions_do_not_double_count_their_disk(self, sample) -> None:
         # sda and sda1 both appear; only sda is real.

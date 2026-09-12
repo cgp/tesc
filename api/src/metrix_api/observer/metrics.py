@@ -47,7 +47,12 @@ NET_RETRANSMITS = "net.retransmits_per_s"
 CONN_ESTABLISHED = "conn.established"
 CONN_LISTEN_OVERFLOWS = "conn.listen_overflows_per_s"
 
+#: Processes, threads and runnable tasks are three different numbers, and a box
+#: with 200 threads has about 2 of them runnable. They were one metric once, filled
+#: from a different quantity by each transport -- 100x apart for the same host.
 PROC_COUNT = "proc.count"
+THREAD_COUNT = "thread.count"
+PROC_RUNNING = "proc.running"
 FD_OPEN = "fd.open"
 
 #: Groups a profile can ask for, mapped to the metrics they contain. Used to keep a
@@ -59,7 +64,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
     "disk": (DISK_READ_BPS, DISK_WRITE_BPS, DISK_READS, DISK_WRITES, DISK_IO_BUSY),
     "net": (NET_RX_BPS, NET_TX_BPS, NET_RX_DROPS, NET_TX_DROPS, NET_RETRANSMITS,
             CONN_ESTABLISHED, CONN_LISTEN_OVERFLOWS),
-    "process": (PROC_COUNT, FD_OPEN),
+    "process": (PROC_COUNT, THREAD_COUNT, PROC_RUNNING, FD_OPEN),
 }
 
 ALL_METRICS: tuple[str, ...] = tuple(m for group in GROUPS.values() for m in group)

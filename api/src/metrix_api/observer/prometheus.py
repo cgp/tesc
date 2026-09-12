@@ -18,6 +18,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import timedelta
 
+from metrix_api.observer.facts import Filesystem, HostFacts, keep
 from metrix_api.observer.raw import RawSample
 from metrix_api.profiles import Collection
 
@@ -56,6 +57,75 @@ _NET = {
 }
 _LOAD = {"node_load1": 0, "node_load5": 1, "node_load15": 2}
 
+#: node_uname_info is a constant-1 gauge carrying everything in its labels, which is
+#: the usual exporter idiom for a fact that is not a number.
+_UNAME_LABELS = {"nodename": "hostname", "release": "kernel", "machine": "arch"}
+
+
+def _number(raw: str) -> float | None:
+    """A reading, or None for anything that is not one.
+
+    Exporters write NaN for "this collector failed" and +Inf for an unbounded limit;
+    `float()` accepts both happily. Shared by both readers in this module so there is
+    one rule about what counts as a measurement.
+    """
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if math.isfinite(value) else None
+
+
+def parse_facts(text: str) -> HostFacts:
+    """Identity and filesystem usage from one scrape of an exporter.
+
+    The same two questions the SSH probe answers, from series an exporter already
+    publishes -- so a recording carries the same record either way.
+    """
+    identity: dict[str, str] = {}
+    sizes: dict[str, float] = {}
+    avail: dict[str, float] = {}
+    cores: set[str] = set()
+
+    for line in text.splitlines():
+        match = _SAMPLE.match(line.strip())
+        if not match:
+            continue
+        name = match.group("name")
+        labels = dict(_LABEL.findall(match.group("labels") or ""))
+
+        if name == "node_uname_info":
+            for label, key in _UNAME_LABELS.items():
+                if labels.get(label):
+                    identity[key] = labels[label]
+            if labels.get("sysname"):
+                identity.setdefault("os", labels["sysname"])
+        elif name == "node_os_info" and labels.get("pretty_name"):
+            # More specific than uname's sysname, so it wins where both exist.
+            identity["os"] = labels["pretty_name"]
+        elif name == "node_cpu_seconds_total" and labels.get("cpu"):
+            cores.add(labels["cpu"])
+        elif name in ("node_filesystem_size_bytes", "node_filesystem_avail_bytes"):
+            mount = labels.get("mountpoint", "")
+            value = _number(match.group("value"))
+            if value is None or not keep(mount):
+                continue
+            (sizes if name.endswith("size_bytes") else avail)[mount] = value
+
+    if cores:
+        identity["cpus"] = str(len(cores))
+
+    filesystems = [
+        Filesystem(
+            mount=mount,
+            total_bytes=int(total),
+            used_bytes=int(total - avail.get(mount, 0.0)),
+        )
+        for mount, total in sorted(sizes.items())
+        if total > 0
+    ]
+    return HostFacts(identity=identity, filesystems=filesystems)
+
 
 def parse_text(text: str) -> RawSample:
     """Read exporter text into the same counter shape the SSH transport produces."""
@@ -70,14 +140,8 @@ def parse_text(text: str) -> RawSample:
         if not match:
             continue
         name = match.group("name")
-        try:
-            value = float(match.group("value"))
-        except ValueError:
-            continue
-        if not math.isfinite(value):
-            # Exporters write NaN for "this collector failed" and +Inf for an
-            # unbounded limit. Neither is a measurement, and float() accepts both
-            # happily, so they have to be rejected explicitly.
+        value = _number(match.group("value"))
+        if value is None:
             continue
         labels = dict(_LABEL.findall(match.group("labels") or ""))
 
@@ -108,7 +172,14 @@ def parse_text(text: str) -> RawSample:
         elif name == "node_filefd_allocated":
             sample.fd_open = value
         elif name == "node_procs_running":
+            sample.proc_running = value
+        # The `processes` collector is off by default in node_exporter. When it is
+        # off these stay absent rather than being filled from node_procs_running,
+        # which counts something else entirely.
+        elif name == "node_processes_pids":
             sample.proc_count = value
+        elif name == "node_processes_threads":
+            sample.thread_count = value
         elif name == "node_time_seconds":
             sample.wall_epoch_s = value
 
@@ -145,6 +216,15 @@ class ScrapeTransport:
     def describe(self) -> str:
         """Where this will fetch from, for the Config page. See SshTransport."""
         return self.url
+
+    async def probe(self) -> HostFacts:
+        """One scrape, read for facts rather than for counters."""
+        import httpx
+
+        async with httpx.AsyncClient(timeout=self.timeout, headers=self.headers) as client:
+            response = await client.get(self.url)
+            response.raise_for_status()
+        return parse_facts(response.text)
 
     async def stream(self, interval: timedelta) -> AsyncIterator[RawSample]:
         import anyio

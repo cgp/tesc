@@ -80,6 +80,28 @@ class Recorder:
         if self.tee_gap is not None:
             self.tee_gap(gap)
 
+    async def probe(self, *, at: str) -> None:
+        """Record what each box is, and how full its disks are, at one instant.
+
+        Best-effort and never fatal: a box that will not answer a `df` is still worth
+        observing, and a recording that refused to start because an identity probe
+        timed out would be a worse tool. A transport with nothing to report, or a
+        failure, simply leaves the rows absent -- which the UI draws as "not
+        collected" rather than as zero.
+        """
+        for endpoint in self.profile.observed:
+            try:
+                transport = transport_for(endpoint)
+                probe = getattr(transport, "probe", None)
+                if probe is None:
+                    continue
+                facts = await probe()
+            except Exception as exc:  # noqa: BLE001 - any failure here is non-fatal
+                log.warning("probe (%s) failed for %s: %s", at, endpoint.id, exc)
+                continue
+            if facts:
+                store.save_facts(self.conn, self.recording_id, endpoint.id, facts, at=at)
+
     def _start_task(self) -> None:
         endpoints = self.profile.observed
         for endpoint in endpoints:
@@ -113,6 +135,10 @@ class Recorder:
             # as a gap.
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._task
+
+        # After the collectors have stopped, so the second reading reflects a box
+        # that has finished doing whatever the run asked of it.
+        await self.probe(at="finish")
 
         ended = self.clock.now_ms()
         for endpoint in self.profile.observed:
@@ -170,6 +196,9 @@ async def start_observation(
         interval=interval,
         groups=list(groups or profile.collect_metrics),
     )
+    # Before the collectors, so the first disk reading is of a box the run has not
+    # touched yet. It is the baseline half of "how much did this consume".
+    await recorder.probe(at="start")
     recorder._start_task()
     log.info("recording %s started against profile %s", recording_id, profile.name)
     return recorder

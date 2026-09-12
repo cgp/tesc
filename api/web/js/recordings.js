@@ -1,7 +1,7 @@
 // The archive. Observation-only recordings and load runs are the same object with
 // different sections populated, so one list shows both.
 
-import { duration, escape, timestamp } from "./format.js";
+import { bytes, duration, escape, timestamp } from "./format.js";
 import { empty, field, icon } from "./ui.js";
 
 export function render(state) {
@@ -63,6 +63,110 @@ function statusBadge(status) {
   return `<span class="badge bg-${tone ?? "secondary"}-lt">${escape(status)}</span>`;
 }
 
+// What each box was. Not a series -- it does not change during a run -- but it is
+// what answers "what was this measured on?" once the run is a year old and the
+// machine is gone.
+function hostsCard(recording) {
+  const identity = recording.identity ?? {};
+  const targets = Object.keys(identity);
+  if (!targets.length) return "";
+
+  const columns = ["hostname", "os", "kernel", "arch", "cpus"];
+  const rows = targets
+    .map(
+      (target) => `<tr>
+        <td class="name">${escape(target)}</td>
+        ${columns
+          .map((key) => {
+            const value = identity[target][key];
+            // Absent is a real answer: a stripped container cannot always say.
+            return `<td>${value ? escape(value) : '<span class="text-secondary">—</span>'}</td>`;
+          })
+          .join("")}
+      </tr>`
+    )
+    .join("");
+
+  return `<div class="card">
+    <div class="card-header">
+      <div>
+        <h3 class="card-title">Hosts</h3>
+        <div class="card-subtitle">Read once at the start. Not a series — it does
+          not change while a run is going.</div>
+      </div>
+    </div>
+    <div class="table-responsive">
+      <table class="table card-table table-vcenter metrix-table">
+        <thead><tr>
+          <th style="width:16%">Target</th>
+          <th style="width:16%">Hostname</th>
+          <th style="width:26%">OS</th>
+          <th style="width:26%">Kernel</th>
+          <th style="width:10%">Arch</th>
+          <th class="num" style="width:6%">CPUs</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+// Disk before and after, and what the run consumed. Two readings rather than a
+// series: the question is "did this eat space", which a delta answers.
+function diskCard(recording) {
+  const filesystems = recording.filesystems ?? [];
+  if (!filesystems.length) return "";
+
+  const rows = filesystems
+    .map((fs) => {
+      const delta =
+        fs.used_delta_bytes == null
+          ? `<span class="text-secondary" title="No reading at the end of the run">—</span>`
+          : signedBytes(fs.used_delta_bytes);
+      return `<tr>
+        <td class="name">${escape(fs.target_id)}</td>
+        <td><code>${escape(fs.mount)}</code></td>
+        <td class="num">${bytes(fs.total_bytes)}</td>
+        <td class="num">${bytes(fs.start_used_bytes)}</td>
+        <td class="num">${bytes(fs.finish_used_bytes)}</td>
+        <td class="num">${delta}</td>
+      </tr>`;
+    })
+    .join("");
+
+  return `<div class="card">
+    <div class="card-header">
+      <div>
+        <h3 class="card-title">Disk</h3>
+        <div class="card-subtitle">Read once before the run and once after it
+          drained. A mount with no reading at the end has no delta rather than a
+          delta of zero.</div>
+      </div>
+    </div>
+    <div class="table-responsive">
+      <table class="table card-table table-vcenter metrix-table">
+        <thead><tr>
+          <th style="width:16%">Target</th>
+          <th style="width:28%">Mount</th>
+          <th class="num" style="width:14%">Size</th>
+          <th class="num" style="width:14%">Used before</th>
+          <th class="num" style="width:14%">Used after</th>
+          <th class="num" style="width:14%">Change</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+// A sign is the whole point of this column: a run that freed space and a run that
+// consumed it are different findings, and "1.2 GB" alone does not say which.
+function signedBytes(value) {
+  if (value === 0) return `<span class="text-secondary">none</span>`;
+  const tone = value > 0 ? "text-orange" : "text-green";
+  return `<span class="${tone}">${value > 0 ? "+" : "−"}${bytes(Math.abs(value))}</span>`;
+}
+
 function detail(recording) {
   const annotations = recording.annotations.length
     ? `<div class="list-group list-group-flush">${recording.annotations
@@ -103,6 +207,8 @@ function detail(recording) {
         </div>
       </div>
     </div>
+    ${hostsCard(recording)}
+    ${diskCard(recording)}
     <div class="metrix-split">
       <div class="card">
         <div class="card-header"><h3 class="card-title">Notes</h3></div>

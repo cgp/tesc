@@ -14,6 +14,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from metrix_api.observer.facts import HostFacts
 from metrix_api.observer.metrics import Annotation, Gap, Sample
 from metrix_api.profiles import Endpoint, Profile
 from metrix_api.store.db import transaction
@@ -250,6 +251,88 @@ def abandon_running(conn: sqlite3.Connection) -> list[str]:
                 ),
             )
     return stale
+
+
+def save_facts(
+    conn: sqlite3.Connection, recording_id: str, target_id: str, facts: HostFacts, *, at: str
+) -> None:
+    """Store one probe.
+
+    Identity is written once -- the first probe that reports any wins, and the second
+    does not overwrite it with a thinner answer if the box got busy. Filesystem rows
+    are per `at`, so start and finish sit side by side.
+    """
+    with transaction(conn):
+        if facts.identity:
+            conn.execute(
+                "INSERT OR IGNORE INTO host_identity (recording_id, target_id, facts) "
+                "VALUES (?, ?, ?)",
+                (recording_id, target_id, json.dumps(facts.identity, sort_keys=True)),
+            )
+        for filesystem in facts.filesystems:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO filesystem_usage
+                    (recording_id, target_id, at, mount, total_bytes, used_bytes)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    recording_id,
+                    target_id,
+                    at,
+                    filesystem.mount,
+                    filesystem.total_bytes,
+                    filesystem.used_bytes,
+                ),
+            )
+
+
+def identities(conn: sqlite3.Connection, recording_id: str) -> dict[str, dict[str, str]]:
+    rows = conn.execute(
+        "SELECT target_id, facts FROM host_identity WHERE recording_id = ? ORDER BY target_id",
+        (recording_id,),
+    ).fetchall()
+    return {row["target_id"]: json.loads(row["facts"]) for row in rows}
+
+
+def filesystem_usage(conn: sqlite3.Connection, recording_id: str) -> list[dict[str, object]]:
+    """Start and finish side by side, one row per mount.
+
+    The delta is computed here rather than in the UI so "how much did this run
+    consume" has one definition. A mount with no finish reading has no delta rather
+    than a delta of zero: the probe failing is not the same as nothing being written.
+    """
+    rows = conn.execute(
+        """
+        SELECT target_id, mount, at, total_bytes, used_bytes
+        FROM filesystem_usage WHERE recording_id = ?
+        ORDER BY target_id, mount, at
+        """,
+        (recording_id,),
+    ).fetchall()
+
+    merged: dict[tuple[str, str], dict[str, object]] = {}
+    for row in rows:
+        key = (row["target_id"], row["mount"])
+        entry = merged.setdefault(
+            key,
+            {
+                "target_id": row["target_id"],
+                "mount": row["mount"],
+                "total_bytes": row["total_bytes"],
+                "start_used_bytes": None,
+                "finish_used_bytes": None,
+                "used_delta_bytes": None,
+            },
+        )
+        entry["total_bytes"] = row["total_bytes"]
+        entry[f"{row['at']}_used_bytes"] = row["used_bytes"]
+
+    for entry in merged.values():
+        start, finish = entry["start_used_bytes"], entry["finish_used_bytes"]
+        if start is not None and finish is not None:
+            entry["used_delta_bytes"] = finish - start
+    return list(merged.values())
 
 
 def get(conn: sqlite3.Connection, recording_id: str) -> RecordingRow:

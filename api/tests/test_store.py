@@ -37,10 +37,15 @@ class TestMigrations:
         assert migrations[0].name == "observation"
 
     def test_applying_records_the_version(self, tmp_path: Path) -> None:
+        """Every shipped migration, in order, with no gaps -- rather than a literal
+        list that has to be edited each time one is added."""
+        expected = [m.version for m in discover_migrations()]
+        assert expected == list(range(1, len(expected) + 1))
+
         conn = connect(tmp_path / "metrix.db")
         applied = migrate(conn)
-        assert [m.version for m in applied] == [1]
-        assert applied_versions(conn) == [1]
+        assert [m.version for m in applied] == expected
+        assert applied_versions(conn) == expected
         conn.close()
 
     def test_migrating_twice_is_a_no_op(self, tmp_path: Path) -> None:
