@@ -1,0 +1,73 @@
+/* Our own layer over Tabler: density, and the things a live table needs.
+   Desktop only -- no breakpoints, deliberately (design §2.4). */
+
+:root {
+  --metrix-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+}
+
+.navbar-vertical .brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  margin-right: .4rem;
+  border-radius: .25rem;
+  background: var(--tblr-primary, #206bc4);
+  color: #fff;
+  font-weight: 600;
+}
+
+.nav-section {
+  padding: .75rem 1rem .25rem;
+  font-size: .7rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--tblr-secondary, #6c7a91);
+}
+
+.nav-link.nav-sub { padding-left: 1.75rem; }
+.nav-item.active > .nav-link { font-weight: 600; color: var(--tblr-primary, #206bc4); }
+
+.nav-footer {
+  margin-top: auto;
+  padding: .75rem 1rem;
+  font-size: .75rem;
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+}
+
+/* Numbers that update once a second must not make the row jump. Tabular figures and
+   fixed column widths are the whole difference between a live view people watch and
+   one they wait out. */
+.metrix-table {
+  font-variant-numeric: tabular-nums;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.metrix-table td.num,
+.metrix-table th.num {
+  text-align: right;
+  font-family: var(--metrix-mono);
+  white-space: nowrap;
+}
+
+.metrix-table td.name { font-weight: 500; }
+
+/* A value the sample count cannot support is shown, but never as a bare number. */
+.unsupported { opacity: .55; font-style: italic; }
+.sample-count { color: var(--tblr-secondary, #6c7a91); font-size: .75rem; margin-left: .25rem; }
+
+.empty-note {
+  padding: 2rem;
+  text-align: center;
+  color: var(--tblr-secondary, #6c7a91);
+}
+
+.severity-warn { color: var(--tblr-warning, #f76707); }
+.severity-invalid { color: var(--tblr-danger, #d63939); font-weight: 600; }
+.severity-info { color: var(--tblr-secondary, #6c7a91); }
+
+.gap-note { font-family: var(--metrix-mono); font-size: .8rem; }

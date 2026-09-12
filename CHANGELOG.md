@@ -132,3 +132,16 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - A profile with no collectable endpoint is **refused before a row is opened**, since an empty recording is indistinguishable from a failed one.
 - The live test now covers the whole A1 loop end to end: 4s against the real host, samples stored, groups honoured (disk absent when unrequested), no gaps, reopened from SQLite.
 - Verified: `scripts/check.sh` all green — 140 passed, 1 skipped.
+
+## 2026-09-12 — A1.7 the front end
+
+- **A1.7 done, and confirmed in a browser against real data.** One static page, Tabler CSS, seven ES modules, no build step, no framework.
+- Routes behind it: `/api/profiles`, `/api/recordings`, `/api/recordings/{id}`, `/api/recordings/{id}/series`. The series endpoint returns `[[t_ms, value], …]` per target — the shape a chart consumes.
+- `api.js` is the only module that touches the network; views are pure functions of `state.js`. That separation is what keeps the A1.8 stream from having to know anything about the DOM.
+- An unparseable profile is **listed as broken rather than dropped** — an environment silently missing is worse than a visible error.
+- **Two bugs the test suite did not catch, both found by opening the page:**
+  - `list_recordings` never populated `targets`, so the archive's target count always read zero. Now one query rather than N+1.
+  - **`sqlite3` objects are thread-bound, and FastAPI runs a sync dependency's setup and teardown on different threadpool threads.** Every request 500'd under uvicorn. `TestClient` hid it by reusing one thread — so the fix is pinned by a test that deliberately moves a connection across threads.
+- Removed `test_health.py`: the F0.1 stub asserted an exact body and is superseded by the route tests. It also built an app against the real `~/.metrix`.
+- `B008` ignored in ruff — `Depends()` in an argument default is how FastAPI declares a dependency.
+- Verified: `scripts/check.sh` all green — 153 passed, 1 skipped.

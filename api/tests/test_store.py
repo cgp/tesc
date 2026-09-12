@@ -165,3 +165,23 @@ class TestTransaction:
             conn.execute(RECORDING, ("rec-tx", "observation"))
             raise RuntimeError("collector died mid-write")
         assert db.execute("SELECT count(*) FROM recording").fetchone()[0] == 0
+
+
+class TestThreading:
+    def test_a_connection_survives_moving_between_threads(self, tmp_path: Path) -> None:
+        """FastAPI runs a sync dependency's setup and teardown on different threads.
+
+        sqlite3 objects are thread-bound by default, so without check_same_thread the
+        server raises on teardown -- and TestClient does not catch it, because it
+        tends to reuse one thread.
+        """
+        import concurrent.futures
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+            conn = pool.submit(connect, tmp_path / "metrix.db").result()
+            pool.submit(migrate, conn).result()
+            count = pool.submit(
+                lambda: conn.execute("SELECT count(*) FROM recording").fetchone()[0]
+            ).result()
+            assert count == 0
+            pool.submit(conn.close).result()

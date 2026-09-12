@@ -1,6 +1,70 @@
 <!doctype html>
+<html lang="en">
+<head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Metrix</title>
-<!-- Stub: F0.1 skeleton only. Single static page, no build step. See docs/design-api.md 2.4. -->
-<h1>Metrix</h1>
-<p>Not implemented.</p>
+<!--
+  One static page. Tabler for the shell, our own CSS for density, ES modules for
+  behaviour. No build step and no framework: everything here is loaded as written.
+
+  Tabler comes from a CDN, pinned. Vendor it into css/ if this needs to run offline.
+-->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0/dist/css/tabler.min.css">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div class="page">
+  <aside class="navbar navbar-vertical navbar-expand-sm">
+    <div class="container-fluid">
+      <h1 class="navbar-brand">
+        <span class="brand-mark">M</span> Metrix
+      </h1>
+      <div class="navbar-collapse">
+        <ul class="navbar-nav pt-lg-2" id="nav">
+          <li class="nav-item" data-route="config">
+            <a class="nav-link" href="#/config">
+              <span class="nav-link-title">Config</span>
+            </a>
+          </li>
+          <li class="nav-item nav-section">Performance</li>
+          <li class="nav-item" data-route="stats">
+            <a class="nav-link nav-sub" href="#/performance/stats">
+              <span class="nav-link-title">Stats</span>
+            </a>
+          </li>
+          <li class="nav-item" data-route="charts">
+            <a class="nav-link nav-sub" href="#/performance/charts">
+              <span class="nav-link-title">Charts</span>
+            </a>
+          </li>
+          <li class="nav-item" data-route="recordings">
+            <a class="nav-link" href="#/recordings">
+              <span class="nav-link-title">Recordings</span>
+            </a>
+          </li>
+        </ul>
+        <div class="nav-footer">
+          <span id="health" class="status-dot status-dot-animated"></span>
+          <span id="health-text" class="text-secondary">connecting…</span>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <div class="page-wrapper">
+    <header class="page-header">
+      <h2 class="page-title" id="page-title">Metrix</h2>
+      <div class="page-subtitle text-secondary" id="page-subtitle"></div>
+    </header>
+    <div class="page-body">
+      <div class="container-xl">
+        <div id="view" aria-live="polite"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="/js/main.js"></script>
+</body>
+</html>

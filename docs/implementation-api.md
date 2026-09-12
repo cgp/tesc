@@ -99,7 +99,7 @@ Nothing here requires the engine. Through A3 the product is a host-observation t
 - [x] **A1.4** — HTTP scrape collector; graceful degradation, `collection_gap` annotation
 - [x] **A1.5** — Live integration test against a real host (gitignored config, native SSH config)
 - [x] **A1.6** — Observation-only recordings: start/stop, phases, persistence (§10.2)
-- [ ] **A1.7** — Static front end: `index.html`, Tabler, left nav, ES module skeleton
+- [x] **A1.7** — Static front end: `index.html`, Tabler, left nav, ES module skeleton
 - [ ] **A1.8** — SSE stream at 1s with `Last-Event-ID` replay; live host stats on the Stats page
 
 **Done when:** an observation-only recording of a live host streams to the browser at 1s, survives a reconnect with no gap, persists, and reopens later — with no engine built.

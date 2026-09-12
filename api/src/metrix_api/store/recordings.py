@@ -253,7 +253,23 @@ def list_recordings(
     rows = conn.execute(
         f"SELECT * FROM recording{where} ORDER BY started_at DESC, id DESC LIMIT ?", params
     ).fetchall()
-    return [RecordingRow.from_row(r) for r in rows]
+    found = [RecordingRow.from_row(r) for r in rows]
+    if not found:
+        return found
+
+    # Targets in one query rather than one per recording: the archive lists a
+    # target count, and a list view should not fan out.
+    placeholders = ",".join("?" * len(found))
+    by_recording: dict[str, list[str]] = {}
+    for row in conn.execute(
+        f"SELECT recording_id, target_id FROM recording_target"
+        f" WHERE recording_id IN ({placeholders}) ORDER BY position",
+        [r.id for r in found],
+    ):
+        by_recording.setdefault(row["recording_id"], []).append(row["target_id"])
+    for recording in found:
+        recording.targets = by_recording.get(recording.id, [])
+    return found
 
 
 def samples(

@@ -61,7 +61,12 @@ def connect(path: Path | str) -> sqlite3.Connection:
     if target.parent and str(target) != ":memory:":
         target.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(target, isolation_level=None)
+    # check_same_thread=False because a request's connection is created, used, and
+    # closed on whichever threadpool threads the server happens to pick -- FastAPI
+    # runs a sync dependency's setup and its teardown on different threads. Safe
+    # here only because a connection is never shared between concurrent users: one
+    # per request, one per recorder.
+    conn = sqlite3.connect(target, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")
