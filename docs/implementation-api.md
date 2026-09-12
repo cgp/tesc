@@ -2,7 +2,7 @@
 
 The control plane, observation, and the front end. Nothing here requires the engine to exist — through A3 the product is a working host-observation tool. A4 is the single integration milestone.
 
-Design: [api-design.md](api-design.md). Boundary and shared foundation (**F0, do this first**): [contract.md](contract.md). The other track: [implementation-engine.md](implementation-engine.md).
+Design: [design-api.md](design-api.md). Boundary and shared foundation (**F0, do this first**): [design-api-engine-contract.md](design-api-engine-contract.md). The other track: [implementation-engine.md](implementation-engine.md).
 
 ---
 

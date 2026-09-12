@@ -1,6 +1,6 @@
 # Metrix — API and Front End Design
 
-The control plane: target discovery, host observation, storage and analysis, and the browser UI. Pairs with [engine-design.md](engine-design.md); the boundary between them is in [contract.md](contract.md).
+The control plane: target discovery, host observation, storage and analysis, and the browser UI. Pairs with [design-engine.md](design-engine.md); the boundary between them is in [design-api-engine-contract.md](design-api-engine-contract.md).
 
 Everything through §17 is buildable and useful with no engine installed — observation-only recordings are a first-class mode, not a degraded one.
 
@@ -189,7 +189,7 @@ codebase / OpenAPI / HAR
 
 ## 9. Metrics — target-side and derived
 
-*The load-side metric categories (§9.1–9.6, §9.8) are produced by the engine; see engine-design.md.*
+*The load-side metric categories (§9.1–9.6, §9.8) are produced by the engine; see design-engine.md.*
 
 ### 9.7 Target-side metrics (the observation capability)
 Collected by the observer (§2.3) over SSH, HTTP scrape, or container API, sampled at 1s and aligned to the run's monotonic clock. Captured in every phase — including the baseline and settle windows — and captured on its own in observation-only mode (§10.2). Each metric below is reported as an absolute value, as a **delta from its baseline-phase median**, and as a per-phase summary:
@@ -219,7 +219,7 @@ This channel answers *why*: p99 climbing exactly as iowait spikes is a different
 
 ## 10. Observation-only mode
 
-*The phased run timeline (§10.1) is engine-side; see engine-design.md.*
+*The phased run timeline (§10.1) is engine-side; see design-engine.md.*
 
 ### 10.2 Observation-only mode
 

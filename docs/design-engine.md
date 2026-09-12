@@ -1,6 +1,6 @@
 # Metrix — Engine Design
 
-The load generator: what it executes, how it measures, and why the numbers can be trusted. Pairs with [api-design.md](api-design.md); the boundary is in [contract.md](contract.md).
+The load generator: what it executes, how it measures, and why the numbers can be trusted. Pairs with [design-api.md](design-api.md); the boundary is in [design-api-engine-contract.md](design-api-engine-contract.md).
 
 > **Status: designed, not yet being implemented.** Work starts on the API and observation side ([implementation-api.md](implementation-api.md)); this document is the standing design for when the engine track begins ([implementation-engine.md](implementation-engine.md)). It is recorded now because several API-side decisions — the NDJSON contract, the bundle format, the statistics the front end must display honestly — only make sense against it.
 
@@ -33,7 +33,7 @@ A standalone binary that takes **one self-contained plan bundle** — calls, mix
 
 ## 3. Targets as the engine sees them
 
-*Profiles and ECS discovery are API-side (§3.1–3.3); the engine receives concrete addresses. See api-design.md.*
+*Profiles and ECS discovery are API-side (§3.1–3.3); the engine receives concrete addresses. See design-api.md.*
 
 ### 3.4 Addressing an individual container
 

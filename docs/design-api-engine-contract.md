@@ -2,7 +2,7 @@
 
 The short document. What the two halves are, how they hand off to each other, and what is settled.
 
-Companions: [api-design.md](api-design.md) — control plane, observation, front end. [engine-design.md](engine-design.md) — load generation and measurement.
+Companions: [design-api.md](design-api.md) — control plane, observation, front end. [design-engine.md](design-engine.md) — load generation and measurement.
 
 *Section numbers are preserved from the original combined outline, so cross-references between these three documents remain valid. Numbers are therefore not contiguous within any one file.*
 

@@ -4,7 +4,7 @@ The load generator. Buildable and testable with nothing but a shell, a bundle, a
 
 > **Status: not yet started.** Work begins on the API track; this plan stands ready for when the engine track opens.
 
-Design: [engine-design.md](engine-design.md). Boundary and shared foundation (**F0, do this first**): [contract.md](contract.md). The other track: [implementation-api.md](implementation-api.md).
+Design: [design-engine.md](design-engine.md). Boundary and shared foundation (**F0, do this first**): [design-api-engine-contract.md](design-api-engine-contract.md). The other track: [implementation-api.md](implementation-api.md).
 
 ---
 
