@@ -38,6 +38,11 @@ class SshTransport:
     key: Path | None = None
     known_hosts: Path | None = None
     connect_timeout: float = 10.0
+    #: OpenSSH client config to honour. Defaults to the user's own ~/.ssh/config, so
+    #: a host that works from a shell works here without being re-described. A
+    #: profile that names a key explicitly still wins.
+    ssh_config: Path | None = None
+    use_ssh_config: bool = True
 
     @classmethod
     def from_collection(cls, collection: Collection) -> SshTransport:
@@ -60,7 +65,15 @@ class SshTransport:
         if self.user:
             options["username"] = self.user
         if self.key:
+            # Explicit beats inherited: a profile naming a key means that key.
             options["client_keys"] = [str(self.key)]
+
+        config = self.ssh_config
+        if config is None and self.use_ssh_config:
+            default = Path.home() / ".ssh" / "config"
+            config = default if default.is_file() else None
+        if config is not None:
+            options["config"] = [str(config)]
         # A host key we have never seen should not stop a recording; the profile is
         # already an explicit statement about which boxes these are.
         options["known_hosts"] = str(self.known_hosts) if self.known_hosts else None

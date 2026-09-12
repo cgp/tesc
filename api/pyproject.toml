@@ -35,6 +35,9 @@ packages = ["src/metrix_api"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: needs a real host; skipped unless tests/integration.toml exists",
+]
 pythonpath = ["."]
 asyncio_mode = "auto"
 

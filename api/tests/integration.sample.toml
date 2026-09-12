@@ -1,0 +1,19 @@
+# Copy to integration.toml (gitignored) to enable the live tests.
+#
+# Authentication uses your native SSH setup: ~/.ssh/config is read for Host
+# entries, and default keys are offered, so if `ssh <host>` works from a shell
+# these tests work too. The app proper will take explicit keys per profile; this
+# is deliberately the simpler path.
+
+[ssh]
+host = "192.168.1.125"
+
+# Optional. Omit to let ~/.ssh/config decide.
+# user = "chris"
+# port = 22
+
+# Optional: an exporter on the same host, for the scrape transport.
+# [scrape]
+# host = "192.168.1.125"
+# port = 9100
+# path = "/metrics"

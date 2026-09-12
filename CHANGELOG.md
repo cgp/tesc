@@ -112,3 +112,12 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - Bug found by a test: **`float("NaN")` does not raise**, so exporter NaN values — written when a collector fails — were flowing through as real measurements. Now rejected explicitly along with `±Inf`.
 - Second finding: my exporter fixture held CPU constant between samples, so the "every group metric is produced" test passed vacuously for the SSH transport and failed honestly for scrape. Both fixtures now vary.
 - Verified: `scripts/check.sh` all green — 123 Python tests, 12 Rust.
+
+## 2026-09-12 — A1.5 live host test
+
+- **A1.5 done, and it works against a real machine.** Collection over SSH to a host on the LAN: 4 samples, no gaps, 28 metrics populated, clock skew 0.6s.
+- Auth uses the **native SSH setup** — `~/.ssh/config` is read and default keys are offered, so if `ssh <host>` works from a shell the tests work. A profile naming a key still wins; this is the simpler path, not a replacement.
+- Config lives in `api/tests/integration.toml`, **gitignored** (someone's LAN address is not a repo fact), with `integration.sample.toml` committed. Absent config means the tests skip, so CI stays green without a host.
+- What the live tests cover that fixtures cannot: the remote shell accepts the script, this distribution's `/proc` parses, **every metric group actually yields a value**, CPU modes sum to ~100, no metric is negative, used memory does not exceed total, and skew is small enough for series to align.
+- Real output from the host, for the record: 21.7 GB total memory, 726 processes, 1952 open descriptors, CPU 98.6% idle, network 1.2 KB/s in and 10.7 KB/s out. Nothing surprised the parser.
+- Verified: `scripts/check.sh` all green — 126 passed, 1 skipped (the scrape test; that host has no exporter).

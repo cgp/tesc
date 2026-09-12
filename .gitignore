@@ -9,6 +9,9 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 
+# Local integration targets: a real host on someone's network is not a repo fact
+api/tests/integration.toml
+
 # Runtime data (METRIX_HOME defaults outside the repo, but just in case)
 /metrix-data/
 *.db
