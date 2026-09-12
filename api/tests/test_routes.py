@@ -109,6 +109,78 @@ class TestProfiles:
         assert body["endpoints"][0]["collects_from"] is None
         assert body["observed"] == []
 
+    def test_the_document_round_trips_through_the_editor(self, client) -> None:
+        """What the editor loads has to be what it can save back, or a round trip
+        silently drops whatever the display summary does not carry."""
+        document = client.get("/api/profiles/staging/document").json()
+        assert client.put("/api/profiles/staging", json=document).status_code == 200
+        assert client.get("/api/profiles/staging/document").json() == document
+
+    def test_creating_a_profile(self, client) -> None:
+        document = {
+            "name": "new-env",
+            "addressing": "direct",
+            "observe": {"interval": "1s", "collect": ["cpu"]},
+            "endpoints": [
+                {
+                    "id": "box",
+                    "address": "10.0.9.1:8080",
+                    "host_header": "new.example.com",
+                    "collect": {"transport": "ssh", "user": "deploy"},
+                }
+            ],
+        }
+        created = client.post("/api/profiles", json=document)
+        assert created.status_code == 201
+        assert created.json()["endpoints"][0]["collects_from"] == "deploy@10.0.9.1:22"
+        assert "new-env" in [p["name"] for p in client.get("/api/profiles").json()["profiles"]]
+
+    def test_creating_over_an_existing_profile_is_a_409(self, client) -> None:
+        """Saving a new profile must never quietly replace one already there."""
+        body = client.post("/api/profiles", json={"name": "staging", "endpoints": [
+            {"id": "x", "address": "1.2.3.4:80"}
+        ]})
+        assert body.status_code == 409
+        assert "already exists" in body.json()["detail"]
+        # The original is untouched.
+        assert len(client.get("/api/profiles/staging").json()["endpoints"]) > 1
+
+    def test_an_invalid_document_is_a_422_naming_the_field(self, client) -> None:
+        """The form prints this beside the fields that are still filled in, so it
+        carries the field and the reason and not the path of a file that does not
+        exist."""
+        body = client.post("/api/profiles", json={"name": "Bad Name", "endpoints": []})
+        assert body.status_code == 422
+        detail = body.json()["detail"]
+        assert "name" in detail
+        assert not detail.startswith("<"), f"source prefix leaked into the UI: {detail}"
+
+    def test_a_profile_with_no_endpoints_is_refused(self, client) -> None:
+        body = client.post("/api/profiles", json={"name": "empty", "endpoints": []})
+        assert body.status_code == 422
+        assert "endpoints" in body.json()["detail"]
+
+    def test_replacing_a_profile_that_is_not_there_is_a_404(self, client) -> None:
+        document = {"name": "ghost", "endpoints": [{"id": "x", "address": "1.2.3.4:80"}]}
+        assert client.put("/api/profiles/ghost", json=document).status_code == 404
+
+    def test_a_profile_cannot_be_renamed_by_editing_it(self, client) -> None:
+        """The name is part of a recording's series identity: a rename through the
+        editor would split one environment's history in two with no sign of it."""
+        document = client.get("/api/profiles/staging/document").json()
+        document["name"] = "staging-renamed"
+        body = client.put("/api/profiles/staging", json=document)
+        assert body.status_code == 422
+        assert "does not match" in body.json()["detail"]
+
+    def test_deleting_a_profile(self, client) -> None:
+        assert client.delete("/api/profiles/staging").status_code == 204
+        assert client.get("/api/profiles/staging").status_code == 404
+        assert client.get("/api/profiles").json()["profiles"] == []
+
+    def test_deleting_something_that_is_not_there_is_a_404(self, client) -> None:
+        assert client.delete("/api/profiles/ghost").status_code == 404
+
     def test_listing_says_which_endpoints_are_observed(self, client) -> None:
         body = client.get("/api/profiles").json()
         assert [p["name"] for p in body["profiles"]] == ["staging"]

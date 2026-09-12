@@ -31,7 +31,9 @@ Section numbers (§N) are shared across the three design docs and are not contig
 - **The engine never blocks on a consumer.** Backpressure is dropped and annotated.
 - **Every displayed percentile carries its sample count.** One implementation in `stats/`; the UI cannot bypass it.
 - **Secrets are redacted at capture**, not at display.
-- **Calls are read-only in the UI.** Mix and targets are editable.
+- **Calls are read-only in the UI.** Mix, targets and profiles are editable.
+- **A form saves what the file loader accepts, and nothing else.** Editors submit a
+  whole document to one server-side validator; no second set of rules in JavaScript.
 
 ## Conventions
 

@@ -4,9 +4,19 @@ A profile is a named list of the machines in one environment. Plans reference it
 name, so the same mixture runs against staging, against production, or against one
 suspect container with no edit to the plan.
 
-Profiles live in `$METRIX_HOME/profiles/<name>.json`. The Config page shows the
-resolved `$METRIX_HOME` and every profile it found, including any that will not
-parse.
+Profiles live in `$METRIX_HOME/profiles/<name>.json`. **Profiles** in the menu lists
+every one it found and can create, edit and delete them; **Config** shows the
+resolved `$METRIX_HOME` they are read from.
+
+The editor and the files are the same thing. It submits a whole document to the
+same validator a hand-written file goes through, and writes the file back in the
+form shown below — so a profile can be started in the editor and finished in an
+editor of your own, or the reverse. The one thing it will not do is rename: a
+profile's name is part of a recording's series identity, so renaming one would
+split its history in two. Copy and delete, deliberately, if that is what you want.
+
+A profile that will not parse is listed with its error rather than hidden, but it
+cannot be opened in the editor — there is nothing valid to load. Fix the file.
 
 ## The one thing to get right
 

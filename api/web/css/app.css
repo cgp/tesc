@@ -155,3 +155,29 @@
 /* Standing explanation above a table, not an alert: an alert says something has
    happened, and this is simply true every time the page is opened. */
 .metrix-note { max-width: 90ch; margin: 0; font-size: .875rem; }
+
+/* A line of explanation with the action it explains at the far end. */
+.metrix-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--tblr-page-padding);
+}
+.metrix-toolbar > .btn { flex: none; }
+
+/* Form fields laid out by how much room each one needs, not by a column count:
+   a port and a description do not want the same width. */
+.metrix-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1rem 1.5rem;
+}
+.metrix-field-wide { grid-column: 1 / -1; }
+.metrix-field .form-hint { margin-top: .25rem; margin-bottom: 0; }
+
+/* Readonly is not disabled: the value is still selectable and copyable, it just
+   cannot be changed here. Say so with the background rather than with grey text. */
+.metrix-field input[readonly] {
+  background: var(--tblr-bg-surface-secondary);
+  cursor: default;
+}

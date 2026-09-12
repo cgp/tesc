@@ -216,3 +216,17 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - `examples/profiles/staging-split.json`: nginx, two app boxes, and an ALB that cannot be logged into. A test now parses **every** example in that directory — they are what people copy, and nothing else in the suite read that folder.
 - **One bug, visible only by looking:** the badge printed the transport and `describe()` prefixed it again, so the table read `ssh ssh ec2-user@…`. `describe()` returns the destination only; naming the transport is the badge's job.
 - Verified: `scripts/check.sh` all green — 178 passed, 1 skipped. Three profiles rendered in the browser, including the unobservable ALB.
+
+## 2026-09-12 — A1.10: Profiles is its own page, and profiles are editable.
+
+- **Profiles split off Config.** Config is now what this process is and where it keeps things; Profiles is the environments a run can be pointed at. Both sit under Setup in the menu.
+- **Create, edit and delete, endpoint by endpoint.** `POST /api/profiles`, `PUT /api/profiles/{name}`, `DELETE /api/profiles/{name}`, and `GET /api/profiles/{name}/document` for the on-disk form the editor loads — the display summary drops fields, so editing it would quietly lose them on save.
+- **The editor submits a whole document, not a patch.** One write path, and it is the same `parse_profile` a hand-written file goes through: the form cannot save something the loader would reject, and there is no second set of rules in JavaScript to drift. A rejection comes back as a 422 whose message already names the field and the reason, and is shown in the form with everything typed still in place.
+- **The name is fixed after creation.** It is part of a recording's series identity, so renaming through the editor would split one environment's history in two with nothing on screen to say so. The field is readonly rather than disabled — still selectable, just not editable here.
+- **The draft lives in state, not in the DOM.** Every state change replaces the markup, so adding an endpoint row or switching a transport would otherwise wipe everything typed. The form is read back into the draft before any change that re-renders; verified in a browser by typing, switching a transport, adding a row, and checking nothing was lost.
+- Transport-specific fields only: `ssh` shows user, `scrape` shows path, `none` shows neither. A port box beside *not collected* invites someone to fill it in and wonder why nothing happens.
+- The last endpoint cannot be removed — a profile needs one, and a button that only produces a validation error is worse than no button. Delete asks first, and says recordings made against the profile are kept.
+- **Two things found by driving it:** a `data-action` on a `<select>` was caught by the click listener, whose `preventDefault` would have stopped the dropdown opening — it is a change handler now; and a form with no submit button still submits on Enter, which reloaded the page and lost the draft, so Enter is taken as save.
+- The 422 detail carried the `<submitted>:` source prefix, which is a useful file path when loading from disk and noise beside a form. Stripped, with a test that fails if it comes back.
+- Verified in the browser: created a two-endpoint profile from an empty form, checked the file it wrote by hand, reopened it, broke it and watched the rejection keep the draft, then deleted it — declining the confirmation first.
+- Verified: `scripts/check.sh` all green — 187 passed, 1 skipped.

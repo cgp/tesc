@@ -188,6 +188,19 @@ def save_profile(config: Config, profile: Profile) -> Path:
     return path
 
 
+def delete_profile(config: Config, name: str) -> bool:
+    """Remove a profile. False if it was not there.
+
+    Recordings are not touched: one names the profile it ran against, and deleting
+    the profile does not make the measurements untrue.
+    """
+    path = profile_path(config, name)
+    if not path.is_file():
+        return False
+    path.unlink()
+    return True
+
+
 def to_document(profile: Profile) -> dict[str, Any]:
     """The on-disk form. Round-trips through :func:`parse_profile`."""
     doc: dict[str, Any] = {"name": profile.name}

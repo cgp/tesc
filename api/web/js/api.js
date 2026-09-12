@@ -1,10 +1,21 @@
 // Every fetch call. The only place a URL appears, so changing one is one edit.
 
+function json(method, body) {
+  return {
+    method,
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(body),
+  };
+}
+
 async function request(path, options = {}) {
   const response = await fetch(path, {
     headers: { Accept: "application/json" },
     ...options,
   });
+  // 204 on delete: there is no body to parse, and asking for one would throw.
+  if (response.status === 204) return null;
+
   if (!response.ok) {
     let detail = `${response.status} ${response.statusText}`;
     try {
@@ -22,6 +33,13 @@ export const api = {
   health: () => request("/api/health"),
   profiles: () => request("/api/profiles"),
   profile: (name) => request(`/api/profiles/${encodeURIComponent(name)}`),
+  profileDocument: (name) =>
+    request(`/api/profiles/${encodeURIComponent(name)}/document`),
+  createProfile: (document) => request("/api/profiles", json("POST", document)),
+  replaceProfile: (name, document) =>
+    request(`/api/profiles/${encodeURIComponent(name)}`, json("PUT", document)),
+  deleteProfile: (name) =>
+    request(`/api/profiles/${encodeURIComponent(name)}`, { method: "DELETE" }),
   recordings: (params = {}) => {
     const query = new URLSearchParams(
       Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== "")
@@ -30,12 +48,7 @@ export const api = {
     return request(`/api/recordings${suffix}`);
   },
   recording: (id) => request(`/api/recordings/${encodeURIComponent(id)}`),
-  startRecording: (body) =>
-    request("/api/recordings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(body),
-    }),
+  startRecording: (body) => request("/api/recordings", json("POST", body)),
   stopRecording: (id) =>
     request(`/api/recordings/${encodeURIComponent(id)}/stop`, { method: "POST" }),
   live: () => request("/api/recordings/live"),

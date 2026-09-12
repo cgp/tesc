@@ -6,6 +6,10 @@ const state = {
   route: null,
   profiles: [],
   brokenProfiles: [],
+  //: The profile being written, if any. Editing lives in state rather than in the
+  //: DOM because a render replaces the markup wholesale -- adding an endpoint row
+  //: would otherwise wipe every field typed so far.
+  profileDraft: null,
   recordings: [],
   selectedRecording: null,
   live: null,

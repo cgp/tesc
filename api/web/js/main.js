@@ -9,6 +9,7 @@ import { api } from "./api.js";
 import * as charts from "./charts.js";
 import * as config from "./config.js";
 import { escape } from "./format.js";
+import * as profiles from "./profiles.js";
 import * as recordings from "./recordings.js";
 import { get, set, subscribe } from "./state.js";
 import * as stream from "./stream.js";
@@ -20,8 +21,14 @@ const ROUTES = {
   config: {
     section: "Setup",
     title: "Config",
-    subtitle: "Profiles, and what will be collected from each of them.",
+    subtitle: "What this process is, and where it keeps what it records.",
     view: config,
+  },
+  profiles: {
+    section: "Setup",
+    title: "Profiles",
+    subtitle: "The environments a run can be pointed at, and what to watch on each.",
+    view: profiles,
   },
   stats: {
     section: "Performance",
@@ -50,6 +57,7 @@ function parseHash() {
   const parts = path.split("/").filter(Boolean);
 
   if (parts[0] === "config") return { name: "config" };
+  if (parts[0] === "profiles") return { name: "profiles" };
   if (parts[0] === "performance") {
     return { name: parts[1] === "charts" ? "charts" : "stats" };
   }
@@ -62,9 +70,11 @@ function parseHash() {
 async function load(route) {
   set({ error: null });
   try {
-    if (route.name === "config") {
-      const { profiles, broken } = await api.profiles();
-      set({ profiles, brokenProfiles: broken });
+    if (route.name === "config") return;
+
+    if (route.name === "profiles") {
+      const { profiles: rows, broken } = await api.profiles();
+      set({ profiles: rows, brokenProfiles: broken });
       return;
     }
 
@@ -167,7 +177,9 @@ function renderView(state) {
 
 async function onRouteChange() {
   const route = parseHash();
-  set({ route });
+  // Leaving the page abandons the draft. Carrying it would mean the editor
+  // reappearing later over a profile the person had stopped thinking about.
+  set({ route, ...(route.name === "profiles" ? {} : { profileDraft: null }) });
   await load(route);
 }
 
@@ -205,14 +217,115 @@ async function rejoinLive() {
   }
 }
 
+/* ------------------------------------------------------------ profile editing */
+
+// The draft is the source of truth, not the DOM: every state change replaces the
+// markup, so anything typed has to be read back before a change that re-renders.
+// Every mutating action goes through here first.
+function syncDraft() {
+  const draft = get().profileDraft;
+  const form = document.querySelector("[data-profile-form]");
+  if (!draft || !form) return draft;
+  const synced = { ...draft, doc: profiles.readForm(form, draft.doc) };
+  set({ profileDraft: synced });
+  return synced;
+}
+
+function editDraft(change) {
+  const draft = syncDraft();
+  if (draft) set({ profileDraft: { ...draft, ...change(draft) } });
+}
+
+function newProfile() {
+  set({ profileDraft: { mode: "create", name: null, doc: profiles.blankDocument(), error: null } });
+}
+
+async function editProfile(name) {
+  try {
+    // The document as written on disk, not the display summary: what is edited has
+    // to be what is saved back, or a round trip would quietly drop fields the
+    // summary does not carry.
+    const doc = await api.profileDocument(name);
+    set({ profileDraft: { mode: "edit", name, doc, error: null } });
+  } catch (error) {
+    set({ error: error.message });
+  }
+}
+
+async function saveProfile() {
+  const draft = syncDraft();
+  if (!draft) return;
+  try {
+    if (draft.mode === "create") await api.createProfile(draft.doc);
+    else await api.replaceProfile(draft.name, draft.doc);
+    set({ profileDraft: null });
+    await onRouteChange();
+  } catch (error) {
+    // Back into the form with the message the server gave, which already names the
+    // field and the reason. Nothing typed is lost.
+    set({ profileDraft: { ...get().profileDraft, error: error.message } });
+  }
+}
+
+async function deleteProfile(name) {
+  const message =
+    `Delete the profile "${name}"?
+
+` +
+    "Recordings made against it are kept — deleting the profile does not make the " +
+    "measurements untrue. This cannot be undone.";
+  if (!window.confirm(message)) return;
+  try {
+    await api.deleteProfile(name);
+    set({ profileDraft: null });
+    await onRouteChange();
+  } catch (error) {
+    set({ error: error.message });
+  }
+}
+
+/* ------------------------------------------------------------------ listeners */
+
 // One delegated listener rather than per-render bindings, since the view is replaced
 // wholesale on every state change.
 document.addEventListener("click", (event) => {
   const button = event.target.closest("[data-action]");
   if (!button) return;
   event.preventDefault();
-  if (button.dataset.action === "observe") startObserving(button.dataset.profile);
-  if (button.dataset.action === "stop") stopObserving(button.dataset.recording);
+  const { action, profile, recording, index } = button.dataset;
+
+  if (action === "observe") startObserving(profile);
+  if (action === "stop") stopObserving(recording);
+  if (action === "profile-new") newProfile();
+  if (action === "profile-edit") editProfile(profile);
+  if (action === "profile-delete") deleteProfile(profile);
+  if (action === "profile-cancel") set({ profileDraft: null });
+  if (action === "profile-save") saveProfile();
+  if (action === "endpoint-add") {
+    editDraft((draft) => ({
+      doc: { ...draft.doc, endpoints: [...draft.doc.endpoints, profiles.blankEndpoint()] },
+    }));
+  }
+  if (action === "endpoint-remove") {
+    const at = Number(index);
+    editDraft((draft) => ({
+      doc: { ...draft.doc, endpoints: draft.doc.endpoints.filter((_, i) => i !== at) },
+    }));
+  }
+});
+
+// Separate from clicks: a select whose value decides which other fields exist has to
+// be read on change, and preventing its click would stop the dropdown opening.
+document.addEventListener("change", (event) => {
+  if (event.target.closest('[data-change-action="draft-reload"]')) syncDraft();
+});
+
+// A form with no submit button still submits on Enter, which would reload the page
+// and lose the draft. Take it as "save".
+document.addEventListener("submit", (event) => {
+  if (!event.target.matches("[data-profile-form]")) return;
+  event.preventDefault();
+  saveProfile();
 });
 
 subscribe(render);
