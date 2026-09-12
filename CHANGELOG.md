@@ -189,3 +189,9 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - Recorded in design §2.4 so it does not get "fixed" back to a centred column: horizontal space in a measurement tool belongs to target columns, not to a reading margin.
 - **Bootstrap's grid could not do this without a compensation to undo.** A `.row` carries a negative horizontal margin that its container's padding is meant to absorb; with the padding gone it hung 8px past the viewport and raised a horizontal scrollbar. Replaced with two rules in our own namespace — `.metrix-stack` for the single-column pages, `.metrix-split` (a two-column grid) for the recording detail. A single-column page did not need a row in the first place.
 - Verified at 1920 and 1440: every route has cards at exactly the menu edge and the window edge, and zero horizontal overflow.
+
+## 2026-09-12 — Edge inset back to 2em.
+
+- Zeroing the container gutter overshot: the state between `container-xl` and that change was the one wanted. `--tblr-gutter-x: 2em` on the page containers, which on the 14px base is a 14px inset on each edge. It is one line, and half the gutter is the padding, so it is the only number to touch if the cards should sit tighter or looser.
+- `.metrix-stack` and `.metrix-split` stay. They were introduced to dodge the negative margin a `.row` uses to cancel its container's padding, and that problem is gone with the padding back — but a single-column page still does not need a grid row, and the two-up split still reads better as a grid than as `col-6` twice.
+- Verified at 1920 and 1440: 14px each side on every route, still no horizontal overflow.

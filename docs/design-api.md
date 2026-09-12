@@ -46,7 +46,7 @@ Three sections, per the discussion:
 
 **A single static page.** One `index.html`, Tabler's CSS, and JavaScript — all loaded up front, with the API serving JSON and the event stream and nothing else. No server-side templating, no Jinja, no framework, no build step.
 
-**Fullscreen and fluid.** The page fills the window; there is no centred max-width column and no reading margin at the edges. This is a measurement tool read a table at a time, so horizontal space goes to target columns rather than to whitespace.
+**Fullscreen and fluid.** The page fills the window: no centred max-width column, just a small even inset at the edges. This is a measurement tool read a table at a time, so horizontal space goes to target columns rather than to whitespace. The inset is one variable (`--tblr-gutter-x` on the page containers).
 
 **Nothing on the page is fetched at render time.** Tabler is vendored under `web/vendor/` and the icons are inline SVG rather than a font or a sprite sheet: a tool that watches a private network must draw itself without the public one, and a menu whose icons arrive on a second request arrives late. `scripts/check.sh` fails if a CDN URL reappears.
 
