@@ -18,9 +18,10 @@ Section numbers (§N) are shared across the three design docs and are not contig
 ## Process
 
 1. Work the checklists in `implementation-*.md` in order. Tick `- [ ]` → `- [x]` as items land.
-2. Append to `CHANGELOG.md` at the end of a session: what shipped, what changed, which steps are done.
-3. Design changes go in the design doc first, then the code.
-4. Keep docs roughly the size they are. Replace rather than accumulate.
+2. **`bash scripts/check.sh` must pass before you commit.** CI runs exactly that script — add checks there, never only to the workflow. Scope it while iterating: `check.sh engine` / `api` / `contract`.
+3. Append to `CHANGELOG.md` at the end of a session: what shipped, what changed, which steps are done.
+4. Design changes go in the design doc first, then the code.
+5. Keep docs roughly the size they are. Replace rather than accumulate.
 
 ## Rules that must not erode
 

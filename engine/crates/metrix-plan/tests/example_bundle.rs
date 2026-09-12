@@ -53,7 +53,10 @@ fn session_policy_and_pool_size_survive_the_round_trip() {
 
     let checkout = mix.chains.iter().find(|c| c.name == "checkout").unwrap();
     assert_eq!(checkout.session, SessionPolicy::Fresh);
-    assert!(checkout.steps[1].repeat_until.is_some(), "poll step repeats");
+    assert!(
+        checkout.steps[1].repeat_until.is_some(),
+        "poll step repeats"
+    );
 }
 
 #[test]
@@ -96,7 +99,10 @@ fn calls_parse_with_both_body_forms_and_both_extractor_languages() {
 
     // Every call carries a description: it is what the read-only inspector shows.
     for (name, call) in &calls {
-        assert!(!call.description.is_empty(), "call {name:?} has no description");
+        assert!(
+            !call.description.is_empty(),
+            "call {name:?} has no description"
+        );
     }
 }
 
@@ -118,7 +124,10 @@ fn targets_parse_and_carry_inventory_attributes() {
 
     assert_eq!(targets.list.len(), 2);
     let first = &targets.list[0];
-    assert_eq!(first.host_header.as_deref(), Some("api.staging.example.com"));
+    assert_eq!(
+        first.host_header.as_deref(),
+        Some("api.staging.example.com")
+    );
     assert_eq!(
         first.attributes.get("image_digest").map(String::as_str),
         Some("sha256:9f2c1e"),
@@ -138,7 +147,9 @@ fn documents_round_trip_without_loss() {
             "targets.json" => {
                 serde_json::to_value(serde_json::from_value::<Targets>(original.clone()).unwrap())
             }
-            _ => serde_json::to_value(serde_json::from_value::<CallFile>(original.clone()).unwrap()),
+            _ => {
+                serde_json::to_value(serde_json::from_value::<CallFile>(original.clone()).unwrap())
+            }
         }
         .unwrap();
 

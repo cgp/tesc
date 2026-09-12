@@ -1,0 +1,61 @@
+# CI runs scripts/check.sh and nothing else, so there is no second list of checks to
+# drift out of sync with what a person runs locally. Add a check to that script, not
+# to this file.
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    # Split by scope so a failure says which half broke without reading the log.
+    strategy:
+      fail-fast: false
+      matrix:
+        scope: [engine, api, contract]
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        if: matrix.scope != 'api'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        if: matrix.scope != 'api'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('engine/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Install uv
+        if: matrix.scope == 'api'
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+
+      - name: Sync Python environment
+        if: matrix.scope == 'api'
+        run: uv sync --project api --locked
+
+      - name: scripts/check.sh ${{ matrix.scope }}
+        run: bash scripts/check.sh ${{ matrix.scope }}

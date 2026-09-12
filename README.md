@@ -35,4 +35,7 @@ not started.
 ```bash
 cd api && uv sync && uv run metrix-api     # http://127.0.0.1:8080/api/health
 cd engine && cargo build
+
+bash scripts/check.sh                     # everything CI runs
+bash scripts/check.sh engine              # or one scope: engine | api | contract
 ```

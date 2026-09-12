@@ -55,3 +55,15 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - `api/tests/test_schema_contract.py` is the cross-language half: schemas are valid Draft 2020-12, the example bundle validates, the fixture stream validates line by line, and — because validating proves nothing unless the schema rejects things — a mix missing `chains` and a bare `"30"` duration are both refused.
 - Fixture ordering bug caught by its own test: an annotation was stamped before a request that preceded it. `t_ms` is now asserted monotonic.
 - Verified: `cargo test` 12 passed, clippy clean, `uv run pytest` 12 passed, drift check green.
+
+## 2026-09-12 — F0.4 CI. Shared foundation complete.
+
+- **F0.4 done. F0 is complete**, so both tracks are unblocked and independent from here.
+- `scripts/check.sh` is the single definition of green: fmt, clippy `-D warnings`, cargo test, ruff, pytest, schema drift, plus two guards. CI calls that script and nothing else, so there is no second list to drift. Scoped runs: `check.sh engine | api | contract`.
+- Two rule guards, both negative-tested: **boto3 outside `discovery/`** fails and names the file; **the engine depending on the control plane** fails. These are the rules most likely to erode one convenient import at a time.
+- `.github/workflows/ci.yml` — three matrix jobs by scope, so a failure says which half broke. Rust toolchain only where needed, uv only for the api job. Nothing to push to yet; it is ready when there is.
+- Ran `cargo fmt` across the tree (schemars derives had pushed some lines over) so `--check` can be a gate.
+- Bug caught while wiring: `cargo --manifest-path X fmt` is invalid — `--manifest-path` belongs to the subcommand and `cargo fmt` does not accept it at all. The script cds into `engine/` instead.
+- `scripts/check.sh` is now step 2 of the process in `AGENTS.md`, ahead of committing.
+
+**Next:** A1.1 — `METRIX_HOME` layout, config, SQLite schema and migrations ([implementation-api.md](docs/implementation-api.md)).

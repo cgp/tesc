@@ -119,7 +119,9 @@ pub struct Load {
     pub breakpoint: Option<Breakpoint>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum LoadMode {
     #[default]
@@ -128,7 +130,9 @@ pub enum LoadMode {
     Breakpoint,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum LoadModel {
     /// Fixed arrival rate: requests are issued on schedule regardless of outstanding ones.
@@ -204,7 +208,9 @@ pub struct Chain {
 
 /// Whether the chain needs a fresh session. A property of the behavior being
 /// modelled, not of the service. Binds cookie jar and auth identity together.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionPolicy {
     /// New auth identity and empty cookie jar per iteration: a first-time user.
@@ -243,7 +249,9 @@ pub struct Step {
     pub repeat_until: Option<RepeatUntil>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum OnFailure {
     /// Record the chain as failed at this step. Aborted chains are counted separately
@@ -271,7 +279,9 @@ pub struct Dataset {
     pub mode: DatasetMode,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum DatasetMode {
     #[default]
@@ -318,7 +328,9 @@ fn default_lua_entry() -> String {
     "generate".to_owned()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecProtocol {
     /// A pool of long-lived processes speaking line-delimited JSON.
@@ -329,7 +341,9 @@ pub enum ExecProtocol {
 }
 
 /// Generator-side tuning. Raising `worker_threads` is the first lever for headroom.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(deny_unknown_fields)]
 pub struct EngineTuning {
     /// Default: physical cores minus one.
