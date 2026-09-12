@@ -79,3 +79,14 @@ This is a work log, not a reference — it records *what happened*, not *how thi
   - `sqlite3.executescript` **commits any open transaction before it runs**, so an outer `BEGIN` is discarded. The transaction now lives inside the script, which also makes the schema change and its version row atomic.
   - A failed migration left a half-applied schema until the rollback moved inside the same script.
 - Verified: `scripts/check.sh` all green — 54 Python tests, 12 Rust.
+
+## 2026-09-12 — A1.2 target profiles
+
+- **A1.2 done.** `profiles.py`: parse, validate, save, list, and convert a profile into the engine's targets document.
+- Profiles are **JSON, not YAML** as the runtime layout originally said — stdlib read *and* write, one fewer dependency, same format as plans. Doc updated.
+- `to_targets()` output is tested against `schema/targets.schema.json` itself, so the handoff is checked against the engine's own contract rather than against an assumption about it. `only=[...]` selects a subset for testing one suspect container.
+- Validation refuses what would otherwise waste an afternoon: duplicate endpoint ids, an address without a port, a name that disagrees with its filename, and — the useful one — **`addressing: direct` without a `host_header`**, since a container addressed by raw IP returns a 404 or a default backend and the run looks fine while measuring nothing.
+- Endpoints carry `attributes` (instance type, AZ, image digest) straight through to targets, which is what will explain a sweep outlier later. IPv6 addresses parse with brackets stripped from the host.
+- Found: `line-length = 100` in the ruff config was decorative, because ruff's default rule set does not include E501. Now selecting `E, F, I, UP, B, SIM`; two over-long lines fixed.
+- `examples/profiles/local.json` is the day-one path: a dev server on this machine, no AWS, no discovery.
+- Verified: `scripts/check.sh` all green — 78 Python tests, 12 Rust.

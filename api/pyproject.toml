@@ -38,3 +38,8 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint]
+# Beyond the defaults: E501 so line-length above is enforced rather than decorative,
+# plus import order, modern syntax, and the bug-prone patterns bugbear catches.
+select = ["E", "F", "I", "UP", "B", "SIM"]

@@ -1,0 +1,20 @@
+{
+  "name": "local",
+  "description": "A dev server on this machine. The day-one path: no AWS, no discovery.",
+  "addressing": "load_balancer",
+  "observe": {
+    "interval": "1s",
+    "collect": ["cpu", "memory", "disk", "net", "process"]
+  },
+  "endpoints": [
+    {
+      "id": "localhost",
+      "address": "127.0.0.1:8080",
+      "collect": {
+        "transport": "scrape",
+        "port": 9100,
+        "path": "/metrics"
+      }
+    }
+  ]
+}
