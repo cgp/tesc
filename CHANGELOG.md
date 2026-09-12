@@ -101,3 +101,14 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - Nearly shipped a real bug: while shortening a line I changed the meminfo grep to `Swap:`, which matches neither `SwapTotal` nor `SwapFree`. The fixtures bypass grep, so no test would have caught it — the remote script is now structured so its lines fit without pattern surgery.
 - **Untested against a live host.** The parser, the derivations, and the collector's failure handling are covered; `ssh.py` itself needs a real box.
 - Verified: `scripts/check.sh` all green — 107 Python tests, 12 Rust.
+
+## 2026-09-12 — A1.4 scrape collector
+
+- **A1.4 done.** `prometheus.py` scrapes node_exporter-style metrics into the same shape the SSH transport produces.
+- **Refactor the second transport forced:** the collector had hardcoded `/proc` parsing, so a transport could not differ in format. Transports now yield parsed `RawSample` counters and each owns its own parsing; `raw.py` holds the shared counter shape and the one `derive()`. Counter keys are unit-normalized at parse time (bytes, milliseconds), so `derive()` is about elapsed time rather than sector sizes.
+- **The valuable tests are the agreement tests:** the same facts fed through `/proc` text and through exporter text must produce identical CPU percentages, disk byte rates, and disk-busy. A normalized shape that two transports disagree about is not normalized.
+- `collection_gap` annotations: severity **warn**, not invalid — the recording is still worth having. The message names the target, the duration, the reason, and states the interval is never interpolated.
+- Scrape tolerates transient failures (3 consecutive before giving up), since one failed request is a missing sample rather than a dead stream.
+- Bug found by a test: **`float("NaN")` does not raise**, so exporter NaN values — written when a collector fails — were flowing through as real measurements. Now rejected explicitly along with `±Inf`.
+- Second finding: my exporter fixture held CPU constant between samples, so the "every group metric is produced" test passed vacuously for the SSH transport and failed honestly for scrape. Both fixtures now vary.
+- Verified: `scripts/check.sh` all green — 123 Python tests, 12 Rust.

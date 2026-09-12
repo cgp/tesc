@@ -105,3 +105,43 @@ class Gap:
     from_ms: int
     to_ms: int
     reason: str
+
+#: The code every collection failure is recorded under, so one query finds them all.
+COLLECTION_GAP = "collection_gap"
+
+
+@dataclass(frozen=True, slots=True)
+class Annotation:
+    """A structured note attached to a recording.
+
+    Shares its shape with the engine's annotation record (see
+    schema/events.schema.json), so host-side and load-side notes read as one list.
+    """
+
+    code: str
+    severity: str
+    from_ms: int
+    message: str
+    to_ms: int | None = None
+    target_id: str | None = None
+    phase: str | None = None
+    detail: dict[str, object] = field(default_factory=dict)
+    source: str = "detector"
+
+    @classmethod
+    def from_gap(cls, gap: Gap) -> Annotation:
+        """A gap is warn, not invalid: the recording is still worth having, and the
+        chart draws a hole rather than a line through it."""
+        seconds = max(0, gap.to_ms - gap.from_ms) / 1000.0
+        return cls(
+            code=COLLECTION_GAP,
+            severity="warn",
+            from_ms=gap.from_ms,
+            to_ms=gap.to_ms,
+            target_id=gap.target_id,
+            message=(
+                f"no samples from {gap.target_id} for {seconds:.1f}s: {gap.reason}. "
+                "The interval is drawn as a gap, never interpolated."
+            ),
+            detail={"reason": gap.reason, "duration_s": round(seconds, 3)},
+        )

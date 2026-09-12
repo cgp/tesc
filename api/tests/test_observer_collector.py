@@ -13,6 +13,7 @@ import pytest
 
 from metrix_api.observer import metrics as m
 from metrix_api.observer.collector import Clock, collect, collect_all
+from metrix_api.observer.linux import parse_sample
 from metrix_api.observer.metrics import Gap, Sample
 from metrix_api.profiles import Endpoint
 from tests.test_observer_linux import block
@@ -48,7 +49,7 @@ class FakeTransport:
         for b in self.blocks:
             if self.clock is not None:
                 self.clock.t += self.step_ms
-            yield b
+            yield parse_sample(b)
         if self.then == "raise":
             raise ConnectionResetError("host went away")
         if self.then == "hang":

@@ -9,7 +9,8 @@ from __future__ import annotations
 import pytest
 
 from metrix_api.observer import metrics as m
-from metrix_api.observer.linux import derive, parse_sample, split_blocks
+from metrix_api.observer.linux import parse_sample, split_blocks
+from metrix_api.observer.raw import derive
 
 
 def block(
@@ -94,6 +95,10 @@ class TestParsing:
     def test_partitions_do_not_double_count_their_disk(self, sample) -> None:
         # sda and sda1 both appear; only sda is real.
         assert sample.disk["reads"] == 1000
+
+    def test_sectors_are_converted_to_bytes_at_parse_time(self, sample) -> None:
+        # 512 bytes per sector by /proc convention; derive() stays free of units.
+        assert sample.disk["read_bytes"] == 100 * 512
 
     def test_loopback_is_not_network_traffic(self, sample) -> None:
         assert sample.net["rx_bytes"] == 1000, "lo must be excluded"

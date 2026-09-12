@@ -17,7 +17,8 @@ from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
-from metrix_api.observer.linux import REMOTE_SCRIPT, split_blocks
+from metrix_api.observer.linux import REMOTE_SCRIPT, parse_sample, split_blocks
+from metrix_api.observer.raw import RawSample
 from metrix_api.profiles import Collection
 
 log = logging.getLogger(__name__)
@@ -49,7 +50,7 @@ class SshTransport:
             key=collection.key,
         )
 
-    async def stream(self, interval: timedelta) -> AsyncIterator[str]:
+    async def stream(self, interval: timedelta) -> AsyncIterator[RawSample]:
         import asyncssh  # imported here so the module loads without a live SSH stack
 
         seconds = max(1, int(interval.total_seconds()))
@@ -81,4 +82,4 @@ class SshTransport:
                     tail = buffer.rfind("--end")
                     buffer = buffer[tail + len("--end") :]
                     for block in blocks:
-                        yield block
+                        yield parse_sample(block)

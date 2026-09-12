@@ -9,9 +9,8 @@ nothing has to be installed on the target to get value on day one.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
 
-from metrix_api.observer import metrics as m
+from metrix_api.observer.raw import RawSample
 
 #: Marks the start of a sample block; the number is the remote host's epoch seconds.
 SAMPLE_MARKER = "===metrix"
@@ -53,25 +52,6 @@ done
 _REAL_DISK = re.compile(r"^(sd[a-z]+|nvme\d+n\d+|vd[a-z]+|xvd[a-z]+)$")
 #: Loopback traffic is not network traffic for any question worth asking.
 _SKIP_IFACE = re.compile(r"^(lo|docker\d+|veth|br-)")
-
-_USER_HZ = 100.0
-
-
-@dataclass(slots=True)
-class RawSample:
-    """Counters exactly as the host reported them. Meaningless alone: most are
-    cumulative, and only the difference between two samples says anything."""
-
-    wall_epoch_s: float | None = None
-    cpu: dict[str, float] = field(default_factory=dict)
-    load: tuple[float, float, float] | None = None
-    mem: dict[str, float] = field(default_factory=dict)
-    disk: dict[str, float] = field(default_factory=dict)
-    net: dict[str, float] = field(default_factory=dict)
-    tcp: dict[str, float] = field(default_factory=dict)
-    fd_open: float | None = None
-    proc_count: float | None = None
-
 
 def split_blocks(text: str) -> list[str]:
     """Split a stream into complete sample blocks, discarding a partial tail.
@@ -150,11 +130,12 @@ def _diskstats(sample: RawSample, line: str) -> None:
     fields = line.split()
     if len(fields) < 14 or not _REAL_DISK.match(fields[2]):
         return
+    # Sectors are 512 bytes by convention in /proc/diskstats regardless of the
+    # device's real sector size. Converting here keeps derive() free of units.
     sample.disk["reads"] = sample.disk.get("reads", 0.0) + float(fields[3])
-    sample.disk["read_sectors"] = sample.disk.get("read_sectors", 0.0) + float(fields[5])
+    sample.disk["read_bytes"] = sample.disk.get("read_bytes", 0.0) + float(fields[5]) * 512.0
     sample.disk["writes"] = sample.disk.get("writes", 0.0) + float(fields[7])
-    sample.disk["write_sectors"] = sample.disk.get("write_sectors", 0.0) + float(fields[9])
-    # Milliseconds spent doing I/O: the closest thing to a saturation signal here.
+    sample.disk["write_bytes"] = sample.disk.get("write_bytes", 0.0) + float(fields[9]) * 512.0
     sample.disk["io_ms"] = sample.disk.get("io_ms", 0.0) + float(fields[12])
 
 
@@ -225,106 +206,3 @@ _HANDLERS = {
     "filenr": _filenr,
     "sockstat": _sockstat,
 }
-
-
-def derive(previous: RawSample | None, current: RawSample, elapsed_s: float) -> dict[str, float]:
-    """Turn two raw samples into the normalized metrics.
-
-    The first sample of a recording yields only the gauges: rates need a previous
-    value, and inventing one would put a wrong number at t=0 on every chart.
-    """
-    out: dict[str, float] = {}
-
-    if current.load:
-        out[m.LOAD_1M], out[m.LOAD_5M], out[m.LOAD_15M] = current.load
-    if current.proc_count is not None:
-        out[m.PROC_COUNT] = current.proc_count
-    if current.fd_open is not None:
-        out[m.FD_OPEN] = current.fd_open
-
-    total = current.mem.get("MemTotal")
-    available = current.mem.get("MemAvailable")
-    if total:
-        out[m.MEM_TOTAL] = total
-        if available is not None:
-            out[m.MEM_AVAILABLE] = available
-            out[m.MEM_USED] = total - available
-    if (cached := current.mem.get("Cached")) is not None:
-        out[m.MEM_CACHED] = cached
-    swap_total = current.mem.get("SwapTotal")
-    swap_free = current.mem.get("SwapFree")
-    if swap_total is not None and swap_free is not None:
-        out[m.SWAP_USED] = swap_total - swap_free
-
-    if (established := current.tcp.get("CurrEstab", current.tcp.get("inuse"))) is not None:
-        out[m.CONN_ESTABLISHED] = established
-
-    if previous is None or elapsed_s <= 0:
-        return out
-
-    # CPU is a cumulative tick counter; the percentage is this interval's share.
-    busy_ticks = 0.0
-    total_ticks = 0.0
-    for name, value in current.cpu.items():
-        delta = _delta(previous.cpu.get(name), value)
-        total_ticks += delta
-        if name not in ("idle", "iowait"):
-            busy_ticks += delta
-    if total_ticks > 0:
-        scale = 100.0 / total_ticks
-        for name, metric in (
-            ("user", m.CPU_USER),
-            ("system", m.CPU_SYSTEM),
-            ("iowait", m.CPU_IOWAIT),
-            ("steal", m.CPU_STEAL),
-            ("idle", m.CPU_IDLE),
-        ):
-            if name in current.cpu:
-                out[metric] = _delta(previous.cpu.get(name), current.cpu[name]) * scale
-        out[m.CPU_BUSY] = busy_ticks * scale
-
-    def rate(store: str, key: str) -> float | None:
-        before = getattr(previous, store).get(key)
-        after = getattr(current, store).get(key)
-        if before is None or after is None:
-            return None
-        return _delta(before, after) / elapsed_s
-
-    # Sectors are 512 bytes by convention in /proc/diskstats, regardless of the
-    # device's real sector size.
-    for key, metric, factor in (
-        ("read_sectors", m.DISK_READ_BPS, 512.0),
-        ("write_sectors", m.DISK_WRITE_BPS, 512.0),
-        ("reads", m.DISK_READS, 1.0),
-        ("writes", m.DISK_WRITES, 1.0),
-    ):
-        if (value := rate("disk", key)) is not None:
-            out[metric] = value * factor
-    if (io_ms := rate("disk", "io_ms")) is not None:
-        out[m.DISK_IO_BUSY] = min(io_ms / 10.0, 100.0)
-
-    for key, metric in (
-        ("rx_bytes", m.NET_RX_BPS),
-        ("tx_bytes", m.NET_TX_BPS),
-        ("rx_drops", m.NET_RX_DROPS),
-        ("tx_drops", m.NET_TX_DROPS),
-    ):
-        if (value := rate("net", key)) is not None:
-            out[metric] = value
-
-    for key, metric in (
-        ("RetransSegs", m.NET_RETRANSMITS),
-        ("ListenOverflows", m.CONN_LISTEN_OVERFLOWS),
-    ):
-        if (value := rate("tcp", key)) is not None:
-            out[metric] = value
-
-    return out
-
-
-def _delta(before: float | None, after: float) -> float:
-    """Counter difference, treating a decrease as a reboot or wrap rather than as a
-    negative rate."""
-    if before is None or after < before:
-        return 0.0
-    return after - before

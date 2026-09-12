@@ -16,8 +16,8 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Protocol
 
-from metrix_api.observer import linux
 from metrix_api.observer.metrics import Gap, Sample
+from metrix_api.observer.raw import RawSample, derive
 from metrix_api.profiles import Endpoint
 
 log = logging.getLogger(__name__)
@@ -29,13 +29,14 @@ BACKOFF = (1.0, 2.0, 5.0, 10.0)
 
 
 class Transport(Protocol):
-    """Yields raw sample blocks until cancelled or broken.
+    """Yields parsed counters until cancelled or broken.
 
-    Implementations own their connection. Raising is how a transport reports that it
-    is done; the collector turns that into a gap and retries.
+    Each transport owns its connection *and* its parsing, so a new source is a new
+    transport rather than a branch inside the collector. Raising is how a transport
+    reports that it is done; the collector turns that into a gap and retries.
     """
 
-    async def stream(self, interval: timedelta) -> AsyncIterator[str]: ...
+    async def stream(self, interval: timedelta) -> AsyncIterator[RawSample]: ...
 
 
 SampleSink = Callable[[Sample], Awaitable[None] | None]
@@ -83,16 +84,15 @@ async def collect(
     Runs forever by design: a transport that dies is a gap and a reconnect, not the
     end of the recording. The caller decides when observation is over.
     """
-    previous: linux.RawSample | None = None
+    previous: RawSample | None = None
     previous_ms: int | None = None
     attempt = 0
 
     while stop is None or not stop.is_set():
         gap_from = clock.now_ms()
         try:
-            async for block in transport.stream(interval):
+            async for raw in transport.stream(interval):
                 now_ms = clock.now_ms()
-                raw = linux.parse_sample(block)
 
                 elapsed_s = (now_ms - previous_ms) / 1000.0 if previous_ms is not None else 0.0
                 # A long pause means the counters span more than one interval, and a
@@ -104,7 +104,7 @@ async def collect(
                 sample = Sample(
                     target_id=endpoint.id,
                     t_ms=now_ms,
-                    metrics=linux.derive(previous, raw, elapsed_s),
+                    metrics=derive(previous, raw, elapsed_s),
                     wall_epoch_s=raw.wall_epoch_s,
                 )
                 await _emit(on_sample, sample.filtered(groups))
