@@ -7,6 +7,9 @@ license.workspace = true
 description = "HDR histograms, counters, snapshots, NDJSON output."
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
 
 [lints]
 workspace = true

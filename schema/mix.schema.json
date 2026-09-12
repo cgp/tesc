@@ -1,0 +1,1393 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Mix",
+  "description": "The load mixture and its shape.",
+  "type": "object",
+  "properties": {
+    "auth": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Auth"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "calls": {
+      "description": "Call files to load, relative to the bundle directory.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "capture": {
+      "$ref": "#/$defs/Capture",
+      "default": {
+        "body_max_kb": 64,
+        "error_samples": 10,
+        "redact": [
+          "Authorization",
+          "Set-Cookie"
+        ]
+      }
+    },
+    "chains": {
+      "description": "The mixture proper. Percentages must total 100 — checked by validation, not here.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Chain"
+      }
+    },
+    "datasets": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Dataset"
+      }
+    },
+    "defaults": {
+      "$ref": "#/$defs/Defaults",
+      "default": {}
+    },
+    "engine": {
+      "$ref": "#/$defs/EngineTuning",
+      "default": {}
+    },
+    "generators": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Generator"
+      }
+    },
+    "load": {
+      "$ref": "#/$defs/Load"
+    },
+    "name": {
+      "type": "string"
+    },
+    "observe": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Observe"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "phases": {
+      "$ref": "#/$defs/Phases",
+      "default": {
+        "baseline": "30s",
+        "settle": "1m"
+      }
+    },
+    "slo": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Slo"
+      }
+    },
+    "version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "name",
+    "load",
+    "chains"
+  ],
+  "$defs": {
+    "Assertion": {
+      "description": "A declarative, enumerable expectation. No expression language: every variant is a\nshape an LLM can emit from a schema, and every failure names the specific field.",
+      "anyOf": [
+        {
+          "description": "`{ \"status\": 200 }`",
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "description": "`{ \"status_in\": [201, 202] }`",
+          "type": "object",
+          "properties": {
+            "status_in": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0
+              }
+            }
+          },
+          "required": [
+            "status_in"
+          ]
+        },
+        {
+          "description": "`{ \"max_latency_ms\": 300 }`",
+          "type": "object",
+          "properties": {
+            "max_latency_ms": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "max_latency_ms"
+          ]
+        },
+        {
+          "description": "`{ \"content_type\": \"application/xml\" }` — asked for XML, got an HTML error page.",
+          "type": "object",
+          "properties": {
+            "content_type": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "content_type"
+          ]
+        },
+        {
+          "description": "A condition on something selected out of the response, e.g.\n`{ \"json\": \"$.items\", \"min_length\": 1 }` or `{ \"xpath\": \"/order/id\", \"exists\": true }`.",
+          "type": "object",
+          "properties": {
+            "equals": true,
+            "exists": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "matches": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "max_length": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint",
+              "minimum": 0
+            },
+            "min_length": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint",
+              "minimum": 0
+            }
+          },
+          "oneOf": [
+            {
+              "description": "JSONPath, e.g. `$.items[0].id`",
+              "type": "object",
+              "properties": {
+                "json": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "json"
+              ]
+            },
+            {
+              "description": "XPath, e.g. `/order/id/text()`",
+              "type": "object",
+              "properties": {
+                "xpath": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "xpath"
+              ]
+            },
+            {
+              "description": "A response header name",
+              "type": "object",
+              "properties": {
+                "header": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "header"
+              ]
+            },
+            {
+              "description": "A regular expression with one capture group",
+              "type": "object",
+              "properties": {
+                "regex": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "regex"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "Auth": {
+      "description": "Secrets are written as `{{ env.NAME }}` or `{{ secret.NAME }}` and never stored\nliterally — plans are machine-generated and end up in repositories.",
+      "type": "object",
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/Identity",
+          "default": "shared"
+        },
+        "inject": {
+          "description": "How the credential is attached to each request.",
+          "$ref": "#/$defs/Inject"
+        },
+        "refresh": {
+          "$ref": "#/$defs/Refresh",
+          "default": {
+            "margin_s": 30,
+            "on_401": "refresh_once",
+            "strategy": "expires_in_margin"
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "none"
+            }
+          },
+          "required": [
+            "mode"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "basic"
+            },
+            "password": {
+              "type": "string"
+            },
+            "username": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "username",
+            "password"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "bearer"
+            },
+            "token": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "token"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "client_id": {
+              "type": "string"
+            },
+            "client_secret": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "const": "oauth_client_credentials"
+            },
+            "scope": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "token_url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "token_url",
+            "client_id",
+            "client_secret"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "client_id": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "const": "oauth_password"
+            },
+            "password": {
+              "type": "string"
+            },
+            "scope": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "token_url": {
+              "type": "string"
+            },
+            "username": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "token_url",
+            "client_id",
+            "username",
+            "password"
+          ]
+        },
+        {
+          "description": "Bespoke auth: a full request plus extractors, reusing the chaining machinery.",
+          "type": "object",
+          "properties": {
+            "extract": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/Selector"
+              }
+            },
+            "mode": {
+              "type": "string",
+              "const": "login_request"
+            },
+            "request": {
+              "$ref": "#/$defs/Call"
+            }
+          },
+          "required": [
+            "mode",
+            "request",
+            "extract"
+          ]
+        }
+      ],
+      "required": [
+        "inject"
+      ]
+    },
+    "Body": {
+      "description": "A request body: either written inline, or produced by a named generator.",
+      "anyOf": [
+        {
+          "description": "Inline text, with `{{ }}` templating applied.",
+          "type": "string"
+        },
+        {
+          "description": "Built by a generator declared in the mix.",
+          "type": "object",
+          "properties": {
+            "args": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "generator": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "generator"
+          ]
+        }
+      ]
+    },
+    "Breakpoint": {
+      "description": "Breakpoint search parameters.",
+      "type": "object",
+      "properties": {
+        "max_rate": {
+          "description": "Always required: the search must have a ceiling.",
+          "type": "number",
+          "format": "double"
+        },
+        "refine": {
+          "type": "boolean",
+          "default": false
+        },
+        "start_rate": {
+          "type": "number",
+          "format": "double"
+        },
+        "step_duration": {
+          "$ref": "#/$defs/Duration"
+        },
+        "step_factor": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "step_rate": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "step_recovery": {
+          "description": "Idle between steps so queues drain; without it a step inherits the previous\nstep's backlog and the search finds a false early cliff.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stop_on": {
+          "$ref": "#/$defs/StopOn",
+          "default": {}
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "start_rate",
+        "step_duration",
+        "max_rate"
+      ]
+    },
+    "Call": {
+      "description": "A single request definition.",
+      "type": "object",
+      "properties": {
+        "assert": {
+          "description": "What the response must look like. An empty list is legal and means the call is\njudged only by transport success, which is rarely what anyone wants.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Assertion"
+          }
+        },
+        "body": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Body"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "description": "One line of prose, for the read-only call inspector in the UI. The only field\nin the format that exists purely for a human reading it. Empty is allowed so a\nscratch bundle still runs; generated plans fill it from the OpenAPI summary.",
+          "type": "string"
+        },
+        "extract": {
+          "description": "Values pulled out of the response into the chain's variable scope.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Selector"
+          }
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "method": {
+          "$ref": "#/$defs/Method"
+        },
+        "path": {
+          "description": "Path template, e.g. `/api/products/{{ pid }}`.",
+          "type": "string"
+        },
+        "query": {
+          "description": "Query parameters, kept separate from `path` so a generator can set them\nwithout string-splicing a URL.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "timeout_ms": {
+          "description": "Overrides the mix-level default for this call only.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "path"
+      ]
+    },
+    "Capture": {
+      "description": "What to keep from failed calls.",
+      "type": "object",
+      "properties": {
+        "body_max_kb": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "error_samples": {
+          "description": "First N errored calls retained in full, **per error class** — otherwise one\nflood of connection-refused evicts the single 500 that explains the problem.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "redact": {
+          "description": "Header and field names to redact before anything is written down.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "error_samples",
+        "body_max_kb"
+      ]
+    },
+    "Chain": {
+      "description": "A named sequence of calls, and its share of the traffic.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "percent": {
+          "description": "Share of the total rate. Percentages across all chains must total 100.\nBuys chain *iterations*, not requests: 20% of 150/s over a two-step chain\nis 30 iterations/s and 60 req/s.",
+          "type": "number",
+          "format": "double"
+        },
+        "pool_size": {
+          "description": "Required by, and only meaningful for, `session: \"pool\"`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "session": {
+          "$ref": "#/$defs/SessionPolicy",
+          "default": "reuse"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Step"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "percent",
+        "steps"
+      ]
+    },
+    "Dataset": {
+      "type": "object",
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/DatasetMode",
+          "default": "round_robin"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "file"
+      ]
+    },
+    "DatasetMode": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "round_robin",
+            "random"
+          ]
+        },
+        {
+          "description": "Matters for POSTs that must not collide.",
+          "type": "string",
+          "const": "unique_per_iteration"
+        }
+      ]
+    },
+    "Defaults": {
+      "description": "Applied to every call unless the call overrides them.",
+      "type": "object",
+      "properties": {
+        "follow_redirects": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "timeout_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "Duration": {
+      "description": "A duration such as \"30s\", \"10m\" or \"1h30m\". Units are required.",
+      "type": "string",
+      "examples": [
+        "30s",
+        "10m",
+        "1h30m"
+      ],
+      "pattern": "^(\\d+[smh])+$"
+    },
+    "EngineTuning": {
+      "description": "Generator-side tuning. Raising `worker_threads` is the first lever for headroom.",
+      "type": "object",
+      "properties": {
+        "connections_per_host": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "pin_cores": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "worker_threads": {
+          "description": "Default: physical cores minus one.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecProtocol": {
+      "oneOf": [
+        {
+          "description": "A pool of long-lived processes speaking line-delimited JSON.",
+          "type": "string",
+          "const": "ndjson"
+        },
+        {
+          "description": "Fork per call. Honest about its cost, rate-capped, flagged in the UI.",
+          "type": "string",
+          "const": "oneshot"
+        }
+      ]
+    },
+    "Generator": {
+      "description": "How a request gets built when a template is not enough.",
+      "oneOf": [
+        {
+          "description": "The default tier: embedded, in-process, one VM per worker thread.",
+          "type": "object",
+          "properties": {
+            "entry": {
+              "type": "string",
+              "default": "generate"
+            },
+            "file": {
+              "type": "string"
+            },
+            "prefetch": {
+              "description": "Build a request buffer during warmup so the measured window pays nothing.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "lua"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "file"
+          ]
+        },
+        {
+          "description": "Compiled in-tree and registered by name: large XML, signing, compression.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "prefetch": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "plugin"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "name"
+          ]
+        },
+        {
+          "description": "The escape hatch: a script that already exists.",
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "pool": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "prefetch": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "protocol": {
+              "$ref": "#/$defs/ExecProtocol",
+              "default": "ndjson"
+            },
+            "timeout_ms": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "exec"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "command"
+          ]
+        }
+      ]
+    },
+    "Identity": {
+      "description": "Who the load is authenticated as.",
+      "anyOf": [
+        {
+          "description": "One token for all virtual users. Cheapest, but hides per-user rate limiting\nand per-user cache locality entirely.",
+          "type": "string",
+          "const": "shared"
+        },
+        {
+          "description": "Each virtual user holds its own token.",
+          "type": "string",
+          "const": "per_vu"
+        },
+        {
+          "description": "A token per row of a dataset: realistic multi-tenant load.",
+          "type": "string"
+        }
+      ]
+    },
+    "Inject": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "description": "e.g. `\"Bearer {{ token }}\"`",
+          "type": "string"
+        },
+        "header": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "header",
+        "format"
+      ]
+    },
+    "Load": {
+      "description": "How much load, in what shape.",
+      "type": "object",
+      "properties": {
+        "breakpoint": {
+          "description": "Mode `breakpoint`: ramp until something gives.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Breakpoint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "duration": {
+          "$ref": "#/$defs/Duration"
+        },
+        "max_concurrency": {
+          "description": "Safety cap on in-flight requests. Hitting it annotates the run.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "mode": {
+          "$ref": "#/$defs/LoadMode",
+          "default": "fixed"
+        },
+        "model": {
+          "$ref": "#/$defs/LoadModel",
+          "default": "open"
+        },
+        "rate": {
+          "description": "Total chain iterations per second, split across chains by percent.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "stages": {
+          "description": "Mode `stages`: a hand-specified ramp.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Stage"
+          }
+        },
+        "warmup": {
+          "description": "Measured separately and excluded from the summary.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "duration"
+      ]
+    },
+    "LoadMode": {
+      "type": "string",
+      "enum": [
+        "fixed",
+        "stages",
+        "breakpoint"
+      ]
+    },
+    "LoadModel": {
+      "oneOf": [
+        {
+          "description": "Fixed arrival rate: requests are issued on schedule regardless of outstanding ones.",
+          "type": "string",
+          "const": "open"
+        },
+        {
+          "description": "Fixed concurrency: a slow response delays the next request.",
+          "type": "string",
+          "const": "closed"
+        }
+      ]
+    },
+    "Method": {
+      "description": "HTTP methods the engine will issue. HTTP/1.1 and HTTP/2 only (see the contract document).",
+      "type": "string",
+      "enum": [
+        "GET",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE",
+        "HEAD",
+        "OPTIONS"
+      ]
+    },
+    "Observe": {
+      "description": "Host-side collection during the run. The observer is API-side; this only says\nwhat to ask it for.",
+      "type": "object",
+      "properties": {
+        "collect": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "interval_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "interval_ms"
+      ]
+    },
+    "On401": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "fail",
+            "ignore"
+          ]
+        },
+        {
+          "description": "Refresh once, single-flight, and retry. Without single-flight, 200 virtual\nusers hitting a 401 together send 200 refreshes and the spike reads as the\ntarget degrading.",
+          "type": "string",
+          "const": "refresh_once"
+        }
+      ]
+    },
+    "OnFailure": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "continue",
+            "retry"
+          ]
+        },
+        {
+          "description": "Record the chain as failed at this step. Aborted chains are counted separately\nfrom failed requests.",
+          "type": "string",
+          "const": "abort"
+        }
+      ]
+    },
+    "Phases": {
+      "description": "The observe-only windows either side of the traffic.",
+      "type": "object",
+      "properties": {
+        "baseline": {
+          "description": "Observe only, no traffic: initial conditions.",
+          "$ref": "#/$defs/Duration"
+        },
+        "settle": {
+          "description": "Observe only, after traffic stops: recovery.",
+          "$ref": "#/$defs/Duration"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "baseline",
+        "settle"
+      ]
+    },
+    "Refresh": {
+      "type": "object",
+      "properties": {
+        "margin_s": {
+          "description": "Refresh this far before expiry.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 30,
+          "minimum": 0
+        },
+        "on_401": {
+          "$ref": "#/$defs/On401",
+          "default": "refresh_once"
+        },
+        "strategy": {
+          "$ref": "#/$defs/RefreshStrategy",
+          "default": "expires_in_margin"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RefreshStrategy": {
+      "type": "string",
+      "enum": [
+        "expires_in_margin",
+        "never"
+      ]
+    },
+    "RepeatUntil": {
+      "description": "Where a response value is read from. The response content type picks the default\nparser; naming an extractor type here overrides it.",
+      "type": "object",
+      "properties": {
+        "equals": true,
+        "interval_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "max_attempts": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "oneOf": [
+        {
+          "description": "JSONPath, e.g. `$.items[0].id`",
+          "type": "object",
+          "properties": {
+            "json": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "json"
+          ]
+        },
+        {
+          "description": "XPath, e.g. `/order/id/text()`",
+          "type": "object",
+          "properties": {
+            "xpath": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "xpath"
+          ]
+        },
+        {
+          "description": "A response header name",
+          "type": "object",
+          "properties": {
+            "header": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "header"
+          ]
+        },
+        {
+          "description": "A regular expression with one capture group",
+          "type": "object",
+          "properties": {
+            "regex": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "regex"
+          ]
+        }
+      ],
+      "required": [
+        "equals",
+        "max_attempts",
+        "interval_ms"
+      ]
+    },
+    "Selector": {
+      "description": "Where a response value is read from. The response content type picks the default\nparser; naming an extractor type here overrides it.",
+      "oneOf": [
+        {
+          "description": "JSONPath, e.g. `$.items[0].id`",
+          "type": "object",
+          "properties": {
+            "json": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "json"
+          ]
+        },
+        {
+          "description": "XPath, e.g. `/order/id/text()`",
+          "type": "object",
+          "properties": {
+            "xpath": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "xpath"
+          ]
+        },
+        {
+          "description": "A response header name",
+          "type": "object",
+          "properties": {
+            "header": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "header"
+          ]
+        },
+        {
+          "description": "A regular expression with one capture group",
+          "type": "object",
+          "properties": {
+            "regex": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "regex"
+          ]
+        }
+      ]
+    },
+    "SessionPolicy": {
+      "description": "Whether the chain needs a fresh session. A property of the behavior being\nmodelled, not of the service. Binds cookie jar and auth identity together.",
+      "oneOf": [
+        {
+          "description": "New auth identity and empty cookie jar per iteration: a first-time user.",
+          "type": "string",
+          "const": "fresh"
+        },
+        {
+          "description": "One session for the life of the virtual user: a returning user.",
+          "type": "string",
+          "const": "reuse"
+        },
+        {
+          "description": "A fixed set of sessions cycled across iterations: a realistic population.",
+          "type": "string",
+          "const": "pool"
+        }
+      ]
+    },
+    "Slo": {
+      "description": "A threshold the run is judged against. Evaluated at the end; sets the exit code.",
+      "type": "object",
+      "properties": {
+        "chain": {
+          "description": "Scoped to one chain, or run-wide when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "metric": {
+          "type": "string"
+        },
+        "min": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "metric"
+      ]
+    },
+    "Stage": {
+      "type": "object",
+      "properties": {
+        "duration": {
+          "$ref": "#/$defs/Duration"
+        },
+        "rate": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "duration",
+        "rate"
+      ]
+    },
+    "Step": {
+      "description": "One call within a chain, with a stable id independent of which call it invokes.",
+      "type": "object",
+      "properties": {
+        "call": {
+          "description": "Name of a call defined in one of the loaded call files.",
+          "type": "string"
+        },
+        "delay_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "id": {
+          "description": "Stable key for chart series, error reports, and SLOs.",
+          "type": "string"
+        },
+        "on_failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OnFailure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "overrides": {
+          "description": "Shallow overrides of the call's fields. Discouraged: two genuinely different\nrequests should be two calls.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Call"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "repeat_until": {
+          "description": "The async-job pattern: POST returns 202, poll until done. Polling time is\nrecorded separately so it does not contaminate request latency.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RepeatUntil"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "call"
+      ]
+    },
+    "StopOn": {
+      "type": "object",
+      "properties": {
+        "error_rate": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p99_latency_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "p99_multiple_of_baseline": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "rate_shortfall_pct": {
+          "description": "Achieved below target by this much means saturation.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

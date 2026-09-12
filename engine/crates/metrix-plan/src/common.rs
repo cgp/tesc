@@ -137,8 +137,25 @@ impl<'de> Deserialize<'de> for Dur {
     }
 }
 
+/// A duration is a string in the schema, with the spelling documented in the pattern.
+/// Written by hand because `Dur`'s serde implementation is hand-written.
+impl schemars::JsonSchema for Dur {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Duration".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "pattern": r"^(\d+[smh])+$",
+            "description": "A duration such as \"30s\", \"10m\" or \"1h30m\". Units are required.",
+            "examples": ["30s", "10m", "1h30m"],
+        })
+    }
+}
+
 /// HTTP methods the engine will issue. HTTP/1.1 and HTTP/2 only (see the contract document).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum Method {
     Get,
@@ -167,7 +184,7 @@ impl fmt::Display for Method {
 
 /// Where a response value is read from. The response content type picks the default
 /// parser; naming an extractor type here overrides it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Selector {
     /// JSONPath, e.g. `$.items[0].id`

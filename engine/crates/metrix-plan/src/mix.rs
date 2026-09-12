@@ -11,7 +11,7 @@ use crate::call::Call;
 use crate::common::{Dur, Selector};
 
 /// The load mixture and its shape.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Mix {
     pub version: u32,
@@ -55,7 +55,7 @@ pub struct Mix {
 }
 
 /// Applied to every call unless the call overrides them.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Defaults {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -67,7 +67,7 @@ pub struct Defaults {
 }
 
 /// The observe-only windows either side of the traffic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Phases {
     /// Observe only, no traffic: initial conditions.
@@ -87,7 +87,7 @@ impl Default for Phases {
 }
 
 /// How much load, in what shape.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Load {
     #[serde(default)]
@@ -119,7 +119,7 @@ pub struct Load {
     pub breakpoint: Option<Breakpoint>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LoadMode {
     #[default]
@@ -128,7 +128,7 @@ pub enum LoadMode {
     Breakpoint,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LoadModel {
     /// Fixed arrival rate: requests are issued on schedule regardless of outstanding ones.
@@ -138,7 +138,7 @@ pub enum LoadModel {
     Closed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Stage {
     pub duration: Dur,
@@ -146,7 +146,7 @@ pub struct Stage {
 }
 
 /// Breakpoint search parameters.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Breakpoint {
     pub start_rate: f64,
@@ -167,7 +167,7 @@ pub struct Breakpoint {
     pub stop_on: StopOn,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StopOn {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -182,7 +182,7 @@ pub struct StopOn {
 }
 
 /// A named sequence of calls, and its share of the traffic.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Chain {
     pub name: String,
@@ -204,7 +204,7 @@ pub struct Chain {
 
 /// Whether the chain needs a fresh session. A property of the behavior being
 /// modelled, not of the service. Binds cookie jar and auth identity together.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionPolicy {
     /// New auth identity and empty cookie jar per iteration: a first-time user.
@@ -217,7 +217,7 @@ pub enum SessionPolicy {
 }
 
 /// One call within a chain, with a stable id independent of which call it invokes.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Step {
     /// Stable key for chart series, error reports, and SLOs.
@@ -243,7 +243,7 @@ pub struct Step {
     pub repeat_until: Option<RepeatUntil>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OnFailure {
     /// Record the chain as failed at this step. Aborted chains are counted separately
@@ -254,7 +254,7 @@ pub enum OnFailure {
     Retry,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RepeatUntil {
     #[serde(flatten)]
     pub selector: Selector,
@@ -263,7 +263,7 @@ pub struct RepeatUntil {
     pub interval_ms: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Dataset {
     pub file: PathBuf,
@@ -271,7 +271,7 @@ pub struct Dataset {
     pub mode: DatasetMode,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DatasetMode {
     #[default]
@@ -282,7 +282,7 @@ pub enum DatasetMode {
 }
 
 /// How a request gets built when a template is not enough.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Generator {
     /// The default tier: embedded, in-process, one VM per worker thread.
@@ -318,7 +318,7 @@ fn default_lua_entry() -> String {
     "generate".to_owned()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecProtocol {
     /// A pool of long-lived processes speaking line-delimited JSON.
@@ -329,7 +329,7 @@ pub enum ExecProtocol {
 }
 
 /// Generator-side tuning. Raising `worker_threads` is the first lever for headroom.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EngineTuning {
     /// Default: physical cores minus one.
@@ -342,7 +342,7 @@ pub struct EngineTuning {
 }
 
 /// What to keep from failed calls.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Capture {
     /// First N errored calls retained in full, **per error class** — otherwise one
@@ -366,7 +366,7 @@ impl Default for Capture {
 
 /// Host-side collection during the run. The observer is API-side; this only says
 /// what to ask it for.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Observe {
     pub interval_ms: u64,
@@ -375,7 +375,7 @@ pub struct Observe {
 }
 
 /// A threshold the run is judged against. Evaluated at the end; sets the exit code.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Slo {
     pub metric: String,

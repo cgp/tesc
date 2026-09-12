@@ -13,7 +13,7 @@ use crate::common::Selector;
 
 // No `deny_unknown_fields` here: it is incompatible with `flatten`, which would
 // report the flattened mode keys as unknown.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Auth {
     #[serde(flatten)]
     pub mode: AuthMode,
@@ -30,7 +30,7 @@ pub struct Auth {
 
 /// Secrets are written as `{{ env.NAME }}` or `{{ secret.NAME }}` and never stored
 /// literally — plans are machine-generated and end up in repositories.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AuthMode {
     None,
@@ -63,7 +63,7 @@ pub enum AuthMode {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Inject {
     pub header: String,
@@ -71,7 +71,7 @@ pub struct Inject {
     pub format: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Refresh {
     #[serde(default)]
@@ -97,7 +97,7 @@ const fn default_margin_s() -> u64 {
     30
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RefreshStrategy {
     #[default]
@@ -105,7 +105,7 @@ pub enum RefreshStrategy {
     Never,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum On401 {
     /// Refresh once, single-flight, and retry. Without single-flight, 200 virtual
@@ -118,7 +118,7 @@ pub enum On401 {
 }
 
 /// Who the load is authenticated as.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Identity {
     /// One token for all virtual users. Cheapest, but hides per-user rate limiting

@@ -15,7 +15,8 @@ Design: [design-engine.md](design-engine.md). Boundary and shared foundation (**
 │   ├── Cargo.toml                   # workspace root
 │   ├── Cargo.lock
 │   ├── crates/
-│   │   ├── metrix-engine/           # the binary: runtime, scheduler, HTTP, target loop
+│   │   ├── metrix-engine/           # the binary: runtime, scheduler, HTTP, target loop,
+│   │   │                            #   and --emit-schemas (F0.3)
 │   │   ├── metrix-plan/             # call / mix / targets types, validation, schema gen
 │   │   ├── metrix-metrics/          # HDR histograms, counters, snapshots, NDJSON out
 │   │   ├── metrix-gen/              # generators: template, dataset, lua, plugin, exec

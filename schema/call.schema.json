@@ -1,0 +1,322 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Map_of_Call",
+  "type": "object",
+  "additionalProperties": {
+    "$ref": "#/$defs/Call"
+  },
+  "$defs": {
+    "Assertion": {
+      "description": "A declarative, enumerable expectation. No expression language: every variant is a\nshape an LLM can emit from a schema, and every failure names the specific field.",
+      "anyOf": [
+        {
+          "description": "`{ \"status\": 200 }`",
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "description": "`{ \"status_in\": [201, 202] }`",
+          "type": "object",
+          "properties": {
+            "status_in": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0
+              }
+            }
+          },
+          "required": [
+            "status_in"
+          ]
+        },
+        {
+          "description": "`{ \"max_latency_ms\": 300 }`",
+          "type": "object",
+          "properties": {
+            "max_latency_ms": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "max_latency_ms"
+          ]
+        },
+        {
+          "description": "`{ \"content_type\": \"application/xml\" }` — asked for XML, got an HTML error page.",
+          "type": "object",
+          "properties": {
+            "content_type": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "content_type"
+          ]
+        },
+        {
+          "description": "A condition on something selected out of the response, e.g.\n`{ \"json\": \"$.items\", \"min_length\": 1 }` or `{ \"xpath\": \"/order/id\", \"exists\": true }`.",
+          "type": "object",
+          "properties": {
+            "equals": true,
+            "exists": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "matches": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "max_length": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint",
+              "minimum": 0
+            },
+            "min_length": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint",
+              "minimum": 0
+            }
+          },
+          "oneOf": [
+            {
+              "description": "JSONPath, e.g. `$.items[0].id`",
+              "type": "object",
+              "properties": {
+                "json": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "json"
+              ]
+            },
+            {
+              "description": "XPath, e.g. `/order/id/text()`",
+              "type": "object",
+              "properties": {
+                "xpath": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "xpath"
+              ]
+            },
+            {
+              "description": "A response header name",
+              "type": "object",
+              "properties": {
+                "header": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "header"
+              ]
+            },
+            {
+              "description": "A regular expression with one capture group",
+              "type": "object",
+              "properties": {
+                "regex": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "regex"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "Body": {
+      "description": "A request body: either written inline, or produced by a named generator.",
+      "anyOf": [
+        {
+          "description": "Inline text, with `{{ }}` templating applied.",
+          "type": "string"
+        },
+        {
+          "description": "Built by a generator declared in the mix.",
+          "type": "object",
+          "properties": {
+            "args": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "generator": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "generator"
+          ]
+        }
+      ]
+    },
+    "Call": {
+      "description": "A single request definition.",
+      "type": "object",
+      "properties": {
+        "assert": {
+          "description": "What the response must look like. An empty list is legal and means the call is\njudged only by transport success, which is rarely what anyone wants.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Assertion"
+          }
+        },
+        "body": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Body"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "description": "One line of prose, for the read-only call inspector in the UI. The only field\nin the format that exists purely for a human reading it. Empty is allowed so a\nscratch bundle still runs; generated plans fill it from the OpenAPI summary.",
+          "type": "string"
+        },
+        "extract": {
+          "description": "Values pulled out of the response into the chain's variable scope.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Selector"
+          }
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "method": {
+          "$ref": "#/$defs/Method"
+        },
+        "path": {
+          "description": "Path template, e.g. `/api/products/{{ pid }}`.",
+          "type": "string"
+        },
+        "query": {
+          "description": "Query parameters, kept separate from `path` so a generator can set them\nwithout string-splicing a URL.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "timeout_ms": {
+          "description": "Overrides the mix-level default for this call only.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "path"
+      ]
+    },
+    "Method": {
+      "description": "HTTP methods the engine will issue. HTTP/1.1 and HTTP/2 only (see the contract document).",
+      "type": "string",
+      "enum": [
+        "GET",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE",
+        "HEAD",
+        "OPTIONS"
+      ]
+    },
+    "Selector": {
+      "description": "Where a response value is read from. The response content type picks the default\nparser; naming an extractor type here overrides it.",
+      "oneOf": [
+        {
+          "description": "JSONPath, e.g. `$.items[0].id`",
+          "type": "object",
+          "properties": {
+            "json": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "json"
+          ]
+        },
+        {
+          "description": "XPath, e.g. `/order/id/text()`",
+          "type": "object",
+          "properties": {
+            "xpath": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "xpath"
+          ]
+        },
+        {
+          "description": "A response header name",
+          "type": "object",
+          "properties": {
+            "header": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "header"
+          ]
+        },
+        {
+          "description": "A regular expression with one capture group",
+          "type": "object",
+          "properties": {
+            "regex": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "regex"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,887 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Record",
+  "description": "One line of NDJSON.",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "run_started"
+        }
+      },
+      "$ref": "#/$defs/RunStarted",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "phase_changed"
+        }
+      },
+      "$ref": "#/$defs/PhaseChanged",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "target_started"
+        }
+      },
+      "$ref": "#/$defs/TargetStarted",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "target_finished"
+        }
+      },
+      "$ref": "#/$defs/TargetFinished",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "summary"
+        }
+      },
+      "$ref": "#/$defs/Summary",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "request"
+        }
+      },
+      "$ref": "#/$defs/RequestEvent",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "annotation"
+        }
+      },
+      "$ref": "#/$defs/Annotation",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "run_finished"
+        }
+      },
+      "$ref": "#/$defs/RunFinished",
+      "required": [
+        "type"
+      ]
+    }
+  ],
+  "$defs": {
+    "Annotation": {
+      "description": "A structured note attached to the run. Detectors emit these continuously.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "Stable machine-readable code, e.g. `concurrency_cap_reached`.",
+          "type": "string"
+        },
+        "detail": true,
+        "from_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "message": {
+          "description": "Written for a person reading the chart later.",
+          "type": "string"
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Phase"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "t_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "target_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "t_ms",
+        "code",
+        "severity",
+        "from_ms",
+        "message"
+      ]
+    },
+    "ChainStats": {
+      "type": "object",
+      "properties": {
+        "duration": {
+          "description": "End-to-end chain duration, which is not the sum of step medians.",
+          "$ref": "#/$defs/Histogram"
+        },
+        "iterations_aborted": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "iterations_completed": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "iterations_started": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "steps": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/StepStats"
+          }
+        }
+      },
+      "required": [
+        "iterations_started",
+        "iterations_completed",
+        "iterations_aborted",
+        "duration",
+        "steps"
+      ]
+    },
+    "ErrorClass": {
+      "description": "Failure causes, kept distinct because they mean different things. Generation and\nextraction failures are ours, not the target's, and are never counted against it.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "dns_failure",
+            "connection_refused",
+            "connect_timeout",
+            "read_timeout",
+            "tls_failure",
+            "connection_reset",
+            "unexpected_eof",
+            "http_status",
+            "content_type_mismatch",
+            "schema_validation",
+            "assertion",
+            "other"
+          ]
+        },
+        {
+          "description": "A field a later step needed was missing: the chain broke here.",
+          "type": "string",
+          "const": "extraction"
+        },
+        {
+          "description": "The generator failed to build the request. Ours, not theirs.",
+          "type": "string",
+          "const": "generation"
+        }
+      ]
+    },
+    "GeneratorHealth": {
+      "description": "Self-metrics. Without these a run cannot be trusted, so they ride in every summary.",
+      "type": "object",
+      "properties": {
+        "cpu_pct": {
+          "type": "number",
+          "format": "double"
+        },
+        "events_dropped": {
+          "description": "Event records dropped to output backpressure. Non-zero raises an annotation.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "headroom_ratio": {
+          "description": "Demanded rate over the calibrated ceiling, when a machine profile is known.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "open_fds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "rss_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "scheduler_lag_ms": {
+          "description": "Tokio scheduler lag.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "cpu_pct",
+        "rss_bytes",
+        "open_fds",
+        "scheduler_lag_ms",
+        "events_dropped"
+      ]
+    },
+    "Histogram": {
+      "description": "A serialized HDR histogram plus the few figures worth reading without decoding it.\n\nHistograms are carried rather than percentiles because histograms merge and\npercentiles do not: merging five 30s runs is what gets past the sample-count floor.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "hdr": {
+          "description": "Encoded per [`HISTOGRAM_ENCODING`]. Absent when `count` is zero.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_us": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "mean_us": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "min_us": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "count"
+      ]
+    },
+    "Phase": {
+      "description": "The phased timeline. Statistics are always read against the phase that produced them.",
+      "oneOf": [
+        {
+          "description": "Observe only, no traffic: initial conditions.",
+          "type": "string",
+          "const": "baseline"
+        },
+        {
+          "description": "Traffic on, excluded from the summary.",
+          "type": "string",
+          "const": "warmup"
+        },
+        {
+          "description": "The window the headline numbers come from.",
+          "type": "string",
+          "const": "measure"
+        },
+        {
+          "description": "Traffic off, waiting for in-flight requests to complete.",
+          "type": "string",
+          "const": "drain"
+        },
+        {
+          "description": "Observe only: recovery.",
+          "type": "string",
+          "const": "settle"
+        }
+      ]
+    },
+    "PhaseChanged": {
+      "type": "object",
+      "properties": {
+        "phase": {
+          "$ref": "#/$defs/Phase"
+        },
+        "t_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "target_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "t_ms",
+        "target_id",
+        "phase"
+      ]
+    },
+    "RequestError": {
+      "type": "object",
+      "properties": {
+        "assertion_index": {
+          "description": "Index of the failed assertion within the call, when `class` is `assertion`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "class": {
+          "$ref": "#/$defs/ErrorClass"
+        },
+        "message": {
+          "type": "string"
+        },
+        "sample_path": {
+          "description": "Set when the full request and response were retained as an error sample.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "class",
+        "message"
+      ]
+    },
+    "RequestEvent": {
+      "description": "One request. Sampled when the stream cannot keep up; `sampled` says so.",
+      "type": "object",
+      "properties": {
+        "bytes_received": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "bytes_sent": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "call": {
+          "type": "string"
+        },
+        "chain": {
+          "type": "string"
+        },
+        "connect_us": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "connection_reused": {
+          "type": "boolean"
+        },
+        "dns_us": {
+          "description": "Phase breakdown. TTFB against total separates \"the server is thinking\" from\n\"the response is big or the link is slow\".",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "error": {
+          "description": "Absent when the request succeeded and every assertion passed.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequestError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "iteration": {
+          "description": "Which iteration of the chain this belonged to.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "phase": {
+          "$ref": "#/$defs/Phase"
+        },
+        "sampled": {
+          "description": "True when this record is one of a sample rather than a complete stream.",
+          "type": "boolean",
+          "default": false
+        },
+        "status": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "step": {
+          "type": "string"
+        },
+        "t_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "target_id": {
+          "type": "string"
+        },
+        "tls_us": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "total_us": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "ttfb_us": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "t_ms",
+        "target_id",
+        "phase",
+        "chain",
+        "iteration",
+        "step",
+        "call",
+        "total_us",
+        "bytes_sent",
+        "bytes_received",
+        "connection_reused"
+      ]
+    },
+    "RunFinished": {
+      "type": "object",
+      "properties": {
+        "exit_code": {
+          "description": "Mirrors the process exit code: 0 pass, non-zero an SLO breach or abort.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "slo": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SloVerdict"
+          }
+        },
+        "stopped_because": {
+          "description": "Why the run ended, when it was not simply the configured duration.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "t_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "t_ms",
+        "exit_code",
+        "slo"
+      ]
+    },
+    "RunStarted": {
+      "description": "First record of every stream. Everything needed to identify and reproduce the run.",
+      "type": "object",
+      "properties": {
+        "engine_version": {
+          "type": "string"
+        },
+        "events_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "histogram_encoding": {
+          "type": "string"
+        },
+        "machine_profile": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "plan_hash": {
+          "description": "Hash of the plan bundle as it ran.",
+          "type": "string"
+        },
+        "plan_name": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "seed": {
+          "description": "Seeds every per-VU RNG, so a run can be replayed with identical traffic.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "started_at": {
+          "description": "Wall clock, RFC 3339. For display only — alignment uses `t_ms`.",
+          "type": "string"
+        },
+        "t_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "targets": {
+          "description": "Target ids in the order they will run.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "events_version",
+        "run_id",
+        "t_ms",
+        "started_at",
+        "engine_version",
+        "plan_hash",
+        "plan_name",
+        "seed",
+        "targets",
+        "histogram_encoding"
+      ]
+    },
+    "Severity": {
+      "description": "`Invalid` is not cosmetic: such a run cannot become a baseline without an override.",
+      "type": "string",
+      "enum": [
+        "info",
+        "warn",
+        "invalid"
+      ]
+    },
+    "SloVerdict": {
+      "type": "object",
+      "properties": {
+        "chain": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metric": {
+          "type": "string"
+        },
+        "observed": {
+          "type": "number",
+          "format": "double"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "supported": {
+          "description": "False when the sample count could not support the claim, in which case the\nverdict is advisory rather than a failure.",
+          "type": "boolean"
+        },
+        "threshold": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "metric",
+        "passed",
+        "observed",
+        "threshold",
+        "supported"
+      ]
+    },
+    "StepStats": {
+      "type": "object",
+      "properties": {
+        "assertion_failures": {
+          "description": "Assertion failures keyed by the assertion's index within the call.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "attempted": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "completed": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "errors": {
+          "description": "Transport error counts keyed by [`ErrorClass`].",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "failed": {
+          "description": "Transport and assertion failures. An expected-failure call that got the status\nit asserted is **not** counted here.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "statuses": {
+          "description": "Exact status codes seen, keyed by code as a string.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "total": {
+          "$ref": "#/$defs/Histogram"
+        },
+        "ttfb": {
+          "$ref": "#/$defs/Histogram"
+        }
+      },
+      "required": [
+        "attempted",
+        "completed",
+        "failed",
+        "total",
+        "ttfb"
+      ]
+    },
+    "Summary": {
+      "description": "A periodic aggregate snapshot: the live view's entire input.",
+      "type": "object",
+      "properties": {
+        "achieved_rate": {
+          "description": "Achieved rate. The gap against `target_rate` is the headline number.",
+          "type": "number",
+          "format": "double"
+        },
+        "bytes_received": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "bytes_sent": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "chains": {
+          "description": "Per chain, then per step within it.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ChainStats"
+          }
+        },
+        "connections_opened": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "connections_reused": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "drift_ms": {
+          "description": "How far behind its own send schedule the generator is running. The guard\nagainst reporting the generator's limits as the target's.",
+          "type": "number",
+          "format": "double"
+        },
+        "generator": {
+          "$ref": "#/$defs/GeneratorHealth"
+        },
+        "in_flight": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "phase": {
+          "$ref": "#/$defs/Phase"
+        },
+        "queue_depth": {
+          "description": "Requests scheduled but not yet sent.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "t_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "target_id": {
+          "type": "string"
+        },
+        "target_rate": {
+          "description": "Offered rate for the window, in chain iterations per second.",
+          "type": "number",
+          "format": "double"
+        },
+        "window_ms": {
+          "description": "Length of the window these counts cover.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "t_ms",
+        "target_id",
+        "phase",
+        "window_ms",
+        "target_rate",
+        "achieved_rate",
+        "in_flight",
+        "queue_depth",
+        "drift_ms",
+        "bytes_sent",
+        "bytes_received",
+        "connections_opened",
+        "connections_reused",
+        "chains",
+        "generator"
+      ]
+    },
+    "TargetFinished": {
+      "type": "object",
+      "properties": {
+        "completed": {
+          "type": "boolean"
+        },
+        "t_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "target_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "t_ms",
+        "target_id",
+        "completed"
+      ]
+    },
+    "TargetStarted": {
+      "type": "object",
+      "properties": {
+        "index": {
+          "description": "Position in the sweep, from 1.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "t_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "target_id": {
+          "type": "string"
+        },
+        "total": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "t_ms",
+        "target_id",
+        "index",
+        "total"
+      ]
+    }
+  }
+}

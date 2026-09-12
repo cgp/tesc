@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::Dur;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Targets {
     #[serde(default)]
@@ -21,7 +21,7 @@ pub struct Targets {
     pub list: Vec<Target>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TargetOrder {
     #[default]
@@ -31,7 +31,7 @@ pub enum TargetOrder {
     Shuffle,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Target {
     /// Stable identity for charts and comparison — a task id, instance id, or hostname.
@@ -56,7 +56,7 @@ pub struct Target {
     pub attributes: std::collections::BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Tls {
     #[serde(default)]

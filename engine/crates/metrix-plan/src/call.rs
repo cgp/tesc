@@ -14,7 +14,7 @@ use crate::common::{Method, Selector};
 pub type CallFile = BTreeMap<String, Call>;
 
 /// A single request definition.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Call {
     /// One line of prose, for the read-only call inspector in the UI. The only field
@@ -54,7 +54,7 @@ pub struct Call {
 }
 
 /// A request body: either written inline, or produced by a named generator.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum Body {
     /// Inline text, with `{{ }}` templating applied.
@@ -69,7 +69,7 @@ pub enum Body {
 
 /// A declarative, enumerable expectation. No expression language: every variant is a
 /// shape an LLM can emit from a schema, and every failure names the specific field.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum Assertion {
     /// `{ "status": 200 }`
@@ -93,7 +93,7 @@ pub enum Assertion {
 /// What must be true of a selected value.
 // Flattened into `Assertion::Selected` alongside a selector, so it cannot deny
 // unknown fields.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Condition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exists: Option<bool>,
