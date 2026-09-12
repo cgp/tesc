@@ -36,8 +36,8 @@ Non-goals: gRPC and WebSocket targets, distributed multi-node generation, long-r
   │  Python API (FastAPI, uv)    │   SQLite: plans, profiles, runs, series
   │  discovery │ observer │ store │   files:  summaries, events, error samples
   └────┬──────────────────┬─────┘
-       │ run spec              │ SSH / scrape, 1s samples
-       │ (plan + targets)      │
+       │ plan bundle           │ SSH / scrape, 1s samples
+       │ (calls + mix + targets)│
        ▼                       │
   ┌──────────────────┐  HTTP  │
   │  metrix-engine     │───────┼────▶ target hosts / containers
@@ -46,7 +46,7 @@ Non-goals: gRPC and WebSocket targets, distributed multi-node generation, long-r
        NDJSON back to the API — or to a file, if run by hand
 ```
 
-The engine is detachable: it takes a run spec and produces a stream. The API is a convenient way to produce that spec and consume that stream, not a prerequisite for either. Long term, the same binary and plan bundle are copied to a dedicated load box and driven over SSH; nothing in the architecture treats that as a special case.
+The engine is detachable: it takes a plan bundle and produces a stream. The API is a convenient way to produce that spec and consume that stream, not a prerequisite for either. Long term, the same binary and plan bundle are copied to a dedicated load box and driven over SSH; nothing in the architecture treats that as a special case.
 
 The observer is an independent subsystem. A recording can be started with no plan attached at all — that is the monitoring-only mode described in §10.
 
@@ -54,11 +54,11 @@ Target discovery (§3) sits in the Python API and feeds both the engine and the 
 
 ### 2.1 Rust engine (`metrix-engine`)
 
-A standalone binary that takes **one self-contained run spec** — the plan plus the list of targets to run it against — and emits newline-delimited JSON on stdout. It knows nothing about the API, the database, the UI, or AWS. Run it by hand, in CI, from a shell script, or on a machine that has never heard of the rest of this tool.
+A standalone binary that takes **one self-contained plan bundle** — calls, mix, and targets in a directory (§4.4) — and emits newline-delimited JSON on stdout. It knows nothing about the API, the database, the UI, or AWS. Run it by hand, in CI, from a shell script, or on a machine that has never heard of the rest of this tool.
 
-**The engine owns sequential multi-target execution** (§3.5), not the API. That follows from the portability requirement: if running one plan against eight containers needed an orchestrator, the binary alone would not be enough to do the job on a remote box. One invocation, one run spec, N targets in sequence, one output stream.
+**The engine owns sequential multi-target execution** (§3.5), not the API. That follows from the portability requirement: if running one plan against eight containers needed an orchestrator, the binary alone would not be enough to do the job on a remote box. One invocation, one bundle, N targets in sequence, one output stream.
 
-**Portability is a design constraint, not a later feature.** Statically linked where the platform allows, no config files outside the run spec, no runtime dependency on the API. The intended long-term deployment is `scp` the binary and the plan bundle to a load box, run it over SSH, collect the stream — and nothing in the engine's design may assume otherwise. That is also what makes it easy to test: the whole load path is exercisable from a shell with two files.
+**Portability is a design constraint, not a later feature.** Statically linked where the platform allows, no config outside the bundle, no runtime dependency on the API. The intended long-term deployment is `scp` the binary and the bundle to a load box, run it over SSH, collect the stream — and nothing in the engine's design may assume otherwise. That is also what makes it easy to test: the whole load path is exercisable from a shell with a binary and a directory, and a single call can be fired on its own (§4.1).
 
 - Tokio multi-threaded runtime, `hyper` + `rustls` directly rather than `reqwest`, because we need per-phase timing hooks (DNS / connect / TLS / TTFB) and explicit control of the connection pool.
 - **Two output streams:**
@@ -75,7 +75,7 @@ Owns everything except the hot path: **target profiles and ECS discovery (§3)**
 
 Deliberately kept off the request path. The engine is the only thing that touches the target under load.
 
-**The API is the only Python entry point.** There are no `metrix run` / `observe` / `sweep` CLI wrappers: load tests are launched from the front end (or by invoking the engine directly), and observation is driven through the API. A Python wrapper around the engine would undercut the portability rule above by making the useful path depend on the control plane.
+**The API is the only Python entry point, and the primary authoring surface.** Plans are normally built and edited in the UI, not in a text editor; the API exports a runnable bundle (§4.4) for anyone who wants to run or tweak one by hand. There are no `metrix run` / `observe` / `sweep` CLI wrappers: load tests are launched from the front end or by invoking the engine directly, and observation is driven through the API. A Python wrapper around the engine would undercut the portability rule above by making the useful path depend on the control plane.
 
 **Tooling: uv.** `pyproject.toml` plus a committed `uv.lock`, `uv sync` to set up, `uv run` to launch — no manually managed virtualenv, no `requirements.txt`, no `pip` in any instruction or script. Resolution and install are fast enough that a clean environment is not a thing anyone avoids doing, which matters for a tool whose results depend on knowing exactly what was running.
 
@@ -214,11 +214,11 @@ Bypassing the load balancer to hit one container is the main reason discovery ex
 
 ### 3.5 Sequential sweep: one plan, many targets
 
-The expected testing pattern: the same plan run against each host or container in turn. **This is not a separate command or a separate mode** — a run spec carries a plan and a target list, and a list of more than one target is a sweep. One target is simply the degenerate case.
+The expected testing pattern: the same plan run against each host or container in turn. **This is not a separate command or a separate mode** — a bundle carries its targets document, and a list of more than one target is a sweep. One target is simply the degenerate case.
 
 ```jsonc
-// the targets block of a run spec, as produced by the API from a profile
-"targets": {
+// targets.json — produced by the API from a profile, or written directly
+{
   "order": "shuffle",           // as_resolved | shuffle
   "gap": "30s",                 // idle between targets
   "list": [
@@ -228,7 +228,7 @@ The expected testing pattern: the same plan run against each host or container i
 }
 ```
 
-The API resolves a profile (§3.1) into that list; by hand, it is written out or produced once and reused. Either way the engine receives concrete addresses and no cloud context.
+The API resolves a profile (§3.1) into that file; by hand, it is written out or exported once and reused. Either way the engine receives concrete addresses and no cloud context. Because targets are a separate document (§4.3), the same mixture runs against a different set of boxes by swapping one file — `--targets other.json`.
 
 **One at a time, never concurrently, across every target in the list.** Sibling containers share a database, a cache, and often a host — run them together and they measure each other. No subset sampling and no parallelism: a sweep is a sequential pass over the full list, and its cost is simply the number of targets times the per-run duration.
 
@@ -245,119 +245,107 @@ A sweep deliberately varies the target, so its runs do **not** form a single ser
 
 ## 4. The plan format
 
-One document per test. JSON (YAML accepted and converted), with a published JSON Schema so an LLM can be handed the schema alongside the codebase.
+**Three documents, kept deliberately separate**, because they are authored by different parties, change at different rates, and are reused differently:
+
+| Document | Contains | Changes when |
+|---|---|---|
+| **Calls** — `calls/*.json` | Individual request definitions: method, path, headers, body, assertions, extraction | The service's API changes |
+| **Mix** — `mix.json` | Which calls run, in what sequences, at what weights and rates; load shape and phases | The question being asked changes |
+| **Targets** — `targets.json` | The boxes to run against (§3) | The environment changes |
+
+The value of the split is that each can move without disturbing the others. A new endpoint adds a call and touches no mixture. Changing "20% writes" to "40% writes" edits one number in one file and leaves every request definition untouched. Pointing the same test at a different set of containers replaces one file. A monolithic plan makes each of those a diff across everything.
+
+It also matches how they are produced: calls are mechanical (derivable from OpenAPI or a codebase, §8), the mix is judgment, and targets come from discovery.
+
+**These are normally not written by hand.** The UI is the authoring surface — edit the mixture, adjust weights, see implied per-endpoint RPS before running. The API exports a complete, runnable bundle for anyone who wants to run or tweak one directly (§4.4), and hand-authoring is fully supported, but it is the exception rather than the assumed workflow.
+
+JSON throughout (YAML accepted and converted), with published JSON Schemas so an LLM can be handed the schema alongside the codebase.
+
+### 4.1 Calls — the individual test call
+
+One file per call, or several grouped in one file. A call knows how to make one request and how to judge the response. It knows nothing about how often it runs or what runs before it.
 
 ```jsonc
+// calls/products.json
+{
+  "list-products": {
+    "method": "GET",
+    "path": "/api/products?page={{ rand(1,50) }}",
+    "assert": [
+      { "status": 200 },
+      { "json": "$.items", "min_length": 1 },
+      { "max_latency_ms": 300 }
+    ],
+    "extract": { "pid": { "json": "$.items[0].id" } }
+  },
+
+  "get-product": {
+    "method": "GET",
+    "path": "/api/products/{{ pid }}",
+    "assert": [ { "status": 200 } ]
+  },
+
+  "create-order": {
+    "method": "POST",
+    "path": "/api/orders",
+    "headers": { "Content-Type": "application/xml" },
+    "body": { "generator": "order-xml", "args": { "user": "{{ users.email }}" } },
+    "assert": [ { "status_in": [201, 202] }, { "xpath": "/order/id", "exists": true } ],
+    "extract": { "order_id": { "xpath": "/order/id/text()" } }
+  }
+}
+```
+
+Because a call is standalone, it is also the unit you can fire once to check it works — `metrix-engine --call create-order` sends exactly one request and prints the response with assertion results. That is the fastest possible loop for "is this request even right?", and it exists precisely because calls are not tangled into the mixture.
+
+### 4.2 Mix — the load testing mixture
+
+References calls by name, arranges them into scenarios, and sets the shape of the load.
+
+```jsonc
+// mix.json
 {
   "version": 1,
   "name": "checkout-mixed",
-  "target": { "base_url": "https://staging.example.com", "profile": "staging" },
+  "calls": ["calls/products.json"],
 
-  "defaults": {
-    "headers": { "Accept": "application/json" },
-    "timeout_ms": 5000,
-    "follow_redirects": false
-  },
+  "defaults": { "headers": { "Accept": "application/json" }, "timeout_ms": 5000 },
+  "auth": { "… §6 …": true },
 
-  "auth": { "$ref": "see §6" },
-
-  "engine": {                     // generator-side tuning; see §13.2
-    "worker_threads": 8,          // default: physical cores - 1
-    "connections_per_host": 256,
-    "pin_cores": false
-  },
-
-  "capture": {
-    "error_samples": 10,          // first N errored calls retained, per error class
-    "body_max_kb": 64,
-    "redact": ["Authorization", "Set-Cookie"]
-  },
-
-  "observe": {                    // optional here; a recording can run with no plan at all
-    "profile": "staging",
-    "interval_ms": 1000,
-    "collect": ["cpu", "memory", "disk", "net", "process", "jvm"]
-  },
-
-  "phases": {
-    "baseline": "30s",            // observe only, no traffic — initial conditions
-    "settle": "60s"               // observe only, after traffic stops — recovery
-  },
+  "phases": { "baseline": "30s", "settle": "60s" },
 
   "load": {
-    "mode": "fixed",              // "fixed" | "stages" | "breakpoint"  (see §11)
-    "duration": "60s",            // minimum enforced: duration x rate >= 2250 (§12.1)
-    "warmup": "10s",              // measured separately, excluded from the summary
+    "mode": "fixed",              // "fixed" | "stages" | "breakpoint"  (§11)
+    "duration": "60s",            // enforced minimum: duration x rate >= 2250 (§12.1)
+    "warmup": "10s",
     "model": "open",              // "open" = fixed arrival rate | "closed" = fixed concurrency
-    "rate": 500,                  // global RPS ceiling
-    "max_concurrency": 200,       // safety cap on in-flight; hitting it annotates the run (§13.1)
-    "stages": [                   // mode "stages": hand-specified ramp
-      { "duration": "30s", "rate": 100 },
-      { "duration": "30s", "rate": 500 },
-      { "duration": "30s", "rate": 1000 }
-    ]
+    "rate": 500,
+    "max_concurrency": 200        // hitting it annotates the run (§13.1)
   },
 
   "datasets": {
-    "users": { "file": "data/users.csv", "mode": "round_robin" }  // round_robin | random | unique_per_iteration
+    "users": { "file": "data/users.csv", "mode": "round_robin" }
+  },
+
+  "generators": {
+    "order-xml": { "type": "lua", "file": "gen/order.lua", "entry": "generate" }
   },
 
   "scenarios": [
-    {
-      "name": "browse",
-      "weight": 80,
-      "steps": [
-        {
-          "id": "list",
-          "request": { "method": "GET", "path": "/api/products?page={{ rand(1,50) }}" },
-          "assert": [
-            { "status": 200 },
-            { "json": "$.items", "min_length": 1 },
-            { "max_latency_ms": 300 }
-          ],
-          "extract": { "pid": { "json": "$.items[0].id" } }
-        },
-        {
-          "id": "detail",
-          "request": { "method": "GET", "path": "/api/products/{{ pid }}" },
-          "assert": [ { "status": 200 } ]
-        }
-      ]
-    },
-    {
-      "name": "submit-order",
-      "weight": 20,
-      "rate": 25,                 // per-scenario iteration rate; takes precedence over weight
-      "steps": [
-        {
-          "id": "create",
-          "request": {
-            "method": "POST",
-            "path": "/api/orders",
-            "headers": { "Content-Type": "application/xml" },
-            "body": { "generator": "order-xml", "args": { "user": "{{ users.email }}" } }
-          },
-          "assert": [ { "status_in": [201, 202] }, { "xpath": "/order/id", "exists": true } ],
-          "extract": { "order_id": { "xpath": "/order/id/text()" } }
-        },
-        {
-          "id": "poll",
-          "request": { "method": "GET", "path": "/api/orders/{{ order_id }}" },
-          "repeat_until": { "json": "$.status", "equals": "complete", "max_attempts": 5, "interval_ms": 200 }
-        }
-      ]
-    }
+    { "name": "browse", "weight": 80,
+      "steps": [ { "id": "list", "call": "list-products" },
+                 { "id": "detail", "call": "get-product" } ] },
+
+    { "name": "submit-order", "weight": 20, "rate": 25,
+      "steps": [ { "id": "create", "call": "create-order" },
+                 { "id": "poll", "call": "get-order",
+                   "repeat_until": { "json": "$.status", "equals": "complete",
+                                     "max_attempts": 5, "interval_ms": 200 } } ] }
   ],
 
-  "generators": {
-    "order-xml": {
-      "type": "exec",
-      "command": ["python", "gen/order.py"],
-      "protocol": "ndjson",       // long-lived sidecar pool, not fork-per-request
-      "pool": 4,
-      "timeout_ms": 50
-    }
-  },
+  "engine": { "worker_threads": 8, "connections_per_host": 256 },
+  "capture": { "error_samples": 10, "body_max_kb": 64, "redact": ["Authorization"] },
+  "observe": { "interval_ms": 1000, "collect": ["cpu", "memory", "disk", "net", "process"] },
 
   "slo": [
     { "metric": "p99_latency_ms", "scenario": "browse", "max": 400 },
@@ -366,13 +354,34 @@ One document per test. JSON (YAML accepted and converted), with a published JSON
 }
 ```
 
-### Design notes on the format
+A step may override a call's fields inline for the one case where the same endpoint is used differently in two scenarios. Overrides are shallow and discouraged — two genuinely different requests should be two calls.
 
-- **Weights and explicit rates coexist.** `weight` distributes whatever is left after explicit per-scenario `rate` allocations. This is the "easy to modify mixture" requirement: bump one number, everything else redistributes, and the UI shows the resulting per-endpoint RPS *before* you run.
-- **`id` on every step**, so chart series, error reports, and SLOs have a stable key. The comparison view degrades gracefully when ids change — new and removed series are called out rather than silently misaligned.
-- **Assertions are declarative and enumerable.** No expression language. An LLM can emit them straight from a schema, and a failure produces a specific message (`$.items expected min_length 1, got 0`) rather than a stack trace.
-- **Templating is deliberately tiny** — `{{ var }}`, `{{ dataset.field }}`, and a fixed function set (`rand`, `uuid`, `now`, `seq`, `pick`). Anything more complex is the exec generator's job. A small inline language is what keeps plans statically checkable.
-- **Validation is a first-class endpoint.** `POST /api/plans/validate` returns structured errors with JSON Pointer paths. The intended loop is: LLM emits plan → validate → LLM repairs from the error list → run. Error text is written for that consumer, not for a human reading a log.
+### 4.3 Targets — the boxes
+
+Produced by discovery from a profile (§3.1) or written directly; the format and the sweep semantics are in §3.5. The mix never names a host, and the targets file never mentions load, which is what lets one mixture run against staging, against production, or against one suspect container with no edit to either file.
+
+### 4.4 The bundle
+
+The three documents plus their supporting files form a directory that is the unit of execution and of transfer:
+
+```
+checkout-mixed/
+├── mix.json
+├── targets.json          # swappable: --targets other.json
+├── calls/products.json
+├── gen/order.lua         # ← Lua sandbox root is the bundle directory
+└── data/users.csv
+```
+
+`metrix-engine --plan checkout-mixed/` runs it. Exporting from the API produces exactly this directory, so what the UI ran and what a person runs by hand are the same artifact.
+
+### 4.5 Design notes
+
+- **Weights and explicit rates coexist.** `weight` distributes whatever is left after explicit per-scenario `rate` allocations. Bump one number, everything else redistributes, and the UI shows the resulting per-endpoint RPS *before* you run.
+- **`id` on every step**, so chart series, error reports, and SLOs have a stable key independent of which call the step invokes.
+- **Assertions are declarative and enumerable.** No expression language. An LLM emits them straight from a schema, and a failure produces a specific message (`$.items expected min_length 1, got 0`) rather than a stack trace.
+- **Templating is deliberately tiny** — `{{ var }}`, `{{ dataset.field }}`, and a fixed function set (`rand`, `uuid`, `now`, `seq`, `pick`). Anything more is the generator's job (§7), and a small inline language is what keeps plans statically checkable.
+- **Validation is per document and cross-document.** `POST /api/plans/validate` checks each file against its schema *and* checks that every `call` reference resolves, returning JSON Pointer paths. An unresolved call name is the characteristic error of this design, so it gets a specific message naming the step and the missing call.
 
 ---
 
@@ -535,9 +544,9 @@ Content negotiation per request, XPath and JSONPath extractors, optional schema 
 
 ### 8.1 What the tool does and does not do
 
-**The tool does the mechanical part.** Given a service description it emits structure: one scenario per operation, parameters filled from schema types and examples, assertions derived from declared response codes and schemas, sensible defaults for everything in `load`. No LLM inside the tool — this step is deterministic, so the same input gives the same skeleton, and a diff between two generated plans means the service changed.
+**The tool does the mechanical part — which is exactly the calls document** (§4.1). Given a service description it emits one call per operation, parameters filled from schema types and examples, assertions derived from declared response codes and schemas, plus a starter mix with flat weights. No LLM inside the tool — this step is deterministic, so the same input gives the same skeleton, and a diff between two generated plans means the service changed.
 
-**The LLM does the judgment part.** Realistic mixture weights, which operations chain into which, what a meaningful assertion is beyond "returned 200", which endpoints matter. The generated skeleton is the LLM's starting point rather than its output, which is a much easier task than authoring from nothing and produces far less drift between runs.
+**The LLM does the judgment part — which is the mix** (§4.2). Realistic weights, which calls chain into which, what a meaningful assertion is beyond "returned 200", which endpoints matter. The document split falls out of this division naturally: the deterministic half and the judgment half are separate files, so regenerating calls after an API change does not touch a tuned mixture. The generated skeleton is the LLM's starting point rather than its output, which is a much easier task than authoring from nothing and produces far less drift between runs.
 
 ### 8.2 Sources
 
@@ -1044,7 +1053,8 @@ Three items from the initial doc are kept deliberately: **hostname-to-instance t
 | Cross-run comparison | **Run series** (§17.2–16.6) grouped by setup identity, with measured noise floors. |
 | Series segmentation | **None.** The identity tuple defines the series; a setup change is simply a different series (§17.2). |
 | Python tooling | **uv** — `pyproject.toml` + committed `uv.lock`, `uv sync` / `uv run`. No pip, no hand-managed venv (§2.2). |
-| Engine independence | **The engine takes one self-contained run spec and owns sequential multi-target execution** (§2.1, §3.5). No Python wrapper commands; portable to a remote load box by copying a binary and a bundle. |
+| Plan structure | **Three separate documents** — calls, mix, targets (§4) — composed into a bundle. Authored in the UI by default; exportable and hand-editable. |
+| Engine independence | **The engine takes one self-contained plan bundle and owns sequential multi-target execution** (§2.1, §3.5). No Python wrapper commands; portable to a load box by copying a binary and a directory. |
 | Front end | **One static page** — `index.html`, Tabler CSS, ES modules, all loaded up front. No Jinja, no framework, no build step (§2.4). |
 | Live view transport | **SSE, not WebSocket** (§2.5). One-way stream, 1s cadence, `Last-Event-ID` replay; control actions are ordinary POSTs. |
 | UI layout | **Desktop only** (§2.4). Stats table and charts are separate pages (§14, §15). |

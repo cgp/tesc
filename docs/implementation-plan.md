@@ -8,7 +8,7 @@ Section references written as §N point into design-outline.md unless they name 
 
 ## 1. Repository structure
 
-A single repo with two build systems side by side. The Rust engine and the Python API are separate deployables that share exactly one contract — the run spec — and nothing else. The engine must remain shippable on its own (§2.2), so the dependency only ever points one way: the API knows about the engine, never the reverse.
+A single repo with two build systems side by side. The Rust engine and the Python API are separate deployables that share exactly one contract — the plan format (§4 of the design: calls, mix, targets) — and nothing else. The engine must remain shippable on its own (§2.2), so the dependency only ever points one way: the API knows about the engine, never the reverse.
 
 ```
 metrix/
@@ -19,7 +19,9 @@ metrix/
 │   └── implementation-plan.md
 │
 ├── schema/                          # THE shared contract (§1.1)
-│   ├── runspec.schema.json          # plan + targets; generated from Rust types
+│   ├── call.schema.json             # the three plan documents (§4 of the design),
+│   ├── mix.schema.json              #   all generated from Rust types
+│   ├── targets.schema.json
 │   ├── profile.schema.json
 │   └── events.schema.json           # NDJSON record shapes engine → API
 │
@@ -28,7 +30,7 @@ metrix/
 │   ├── Cargo.lock
 │   ├── crates/
 │   │   ├── metrix-engine/           # the binary: runtime, scheduler, HTTP, target loop
-│   │   ├── metrix-spec/             # run-spec types, serde, validation, schema gen
+│   │   ├── metrix-plan/             # call / mix / targets types, validation, schema gen
 │   │   ├── metrix-metrics/          # HDR histograms, counters, snapshots, NDJSON out
 │   │   ├── metrix-gen/              # generators: template, dataset, lua, plugin, exec
 │   │   └── metrix-mock/             # test target with controllable latency/errors (§5.1)
@@ -55,8 +57,10 @@ metrix/
 │
 ├── examples/
 │   └── plans/
-│       └── checkout-mixed/          # a complete worked example
-│           ├── plan.json
+│       └── checkout-mixed/          # a complete worked bundle
+│           ├── mix.json
+│           ├── targets.json
+│           ├── calls/products.json
 │           ├── gen/order.lua
 │           └── data/users.csv
 │
@@ -70,17 +74,17 @@ metrix/
 
 ### 1.1 The one shared contract
 
-The **run spec** — plan plus target list — is the only thing both languages must agree on, so it gets a single source of truth: **Rust types are authoritative**, and `schema/runspec.schema.json` is generated from them via `schemars` and committed.
+The **plan format** — the three documents of §4 of the design — is the only thing both languages must agree on, so it gets a single source of truth: **Rust types are authoritative**, and the schemas are generated from them via `schemars` and committed.
 
 - Engine: deserializes with `serde`, so the types *are* the validation.
-- API: validates submitted plans against the committed JSON Schema, serves it at `GET /api/schema/plan` for LLM authors (§4 of the design), and assembles the targets block from a resolved profile.
+- API: validates each document against its schema **and resolves `call` references across them**, serves the schemas at `GET /api/schema/{call,mix,targets}` for LLM authors, and writes `targets.json` from a resolved profile.
 - CI regenerates and fails on any diff, so the file cannot drift from the types.
 
 This matters more than usual here: a plan that the API accepts and the engine then rejects would surface as a failed run rather than a validation error, which is exactly the loop the machine-authoring workflow depends on not having.
 
 ### 1.2 Why the engine is a workspace, not one crate
 
-`metrix-spec` and `metrix-metrics` are separable and independently testable — histogram merging and percentile math deserve their own test suite without a runtime attached, and the schema generator needs the spec types without pulling in `hyper`. `metrix-mock` being a crate rather than a test fixture means it can run as a standalone binary during development.
+`metrix-plan` and `metrix-metrics` are separable and independently testable — histogram merging and percentile math deserve their own test suite without a runtime attached, and the schema generator needs the plan types without pulling in `hyper`. `metrix-mock` being a crate rather than a test fixture means it can run as a standalone binary during development.
 
 ---
 
@@ -96,10 +100,12 @@ $METRIX_HOME/
 │   ├── staging.yaml
 │   └── prod-readonly.yaml
 │
-├── plans/                       # one directory per plan
+├── plans/                       # one bundle directory per plan (§4.4 of the design)
 │   └── checkout-mixed/
-│       ├── plan.json
-│       ├── gen/order.lua        # ← this directory is the Lua sandbox root
+│       ├── mix.json             # the mixture and load shape
+│       ├── targets.json         # the boxes — swappable
+│       ├── calls/products.json  # individual request definitions
+│       ├── gen/order.lua        # ← bundle directory is the Lua sandbox root
 │       └── data/users.csv
 │
 ├── secrets/                     # optional local secret store for {{ secret.* }}
@@ -108,7 +114,7 @@ $METRIX_HOME/
 │
 └── runs/
     └── 2026-09-12T14-03-11Z_a3f9/
-        ├── plan.snapshot.json          # exactly what ran
+        ├── plan.snapshot/              # the whole bundle, exactly as it ran
         ├── inventory.snapshot.json     # exactly what it ran against
         ├── summary.ndjson              # engine summary stream, 250ms
         ├── observer.ndjson             # host samples, 1s
@@ -134,20 +140,22 @@ uv sync                    # once
 uv run metrix-api          # serves the static page + API on :8080
 ```
 
-**The engine** — one command, one self-contained run spec, no Python involved:
+**The engine** — one command, one self-contained bundle, no Python involved:
 
 ```bash
-metrix-engine --spec runspec.json --summary - --events events.ndjson
+metrix-engine --plan checkout-mixed/ --summary - --events events.ndjson
+metrix-engine --plan checkout-mixed/ --targets prod-canary.json   # same mix, other boxes
+metrix-engine --plan checkout-mixed/ --call create-order          # fire one request, print it
 metrix-engine --calibrate --out machine-profile.json
 ```
 
-The run spec carries the plan *and* the target list, so a sweep across eight containers is that same single invocation — there is no separate sweep command, and no orchestrator above the engine. A spec is written by hand for local work, or exported from the API (`GET /api/runs/{id}/spec`) once a profile has resolved the targets.
+The bundle carries its own targets document, so a sweep across eight containers is that same single invocation — no separate sweep command, no orchestrator above the engine. Bundles are normally exported from the API (`GET /api/plans/{name}/bundle`) rather than written by hand, but nothing about them requires the API to have existed.
 
 **Remote execution** is the same command somewhere else:
 
 ```bash
 scp engine/dist/metrix-engine loadbox:~/ && scp -r plans/checkout-mixed loadbox:~/
-ssh loadbox 'metrix-engine --spec checkout-mixed/runspec.json --summary -' > summary.ndjson
+ssh loadbox 'metrix-engine --plan checkout-mixed/ --summary -' > summary.ndjson
 ```
 
 Nothing about that path is special-cased. It is the plain shape of the tool, which is why it will still work when it is wired up properly later (M6.7).
@@ -163,7 +171,7 @@ Ordered so that the riskiest assumptions get tested earliest and each milestone 
 | Step | Deliverable |
 |---|---|
 | 0.1 | Repo skeleton, Rust workspace, `uv init` for the API, committed lockfiles |
-| 0.2 | `metrix-spec` types for a minimal run spec (targets, load, one scenario, one step) |
+| 0.2 | `metrix-plan` types: call, mix, targets — minimal but separate from the start |
 | 0.3 | `schemars` schema generation + `scripts/check-schema.sh` |
 | 0.4 | `metrix-mock`: HTTP target with configurable latency distribution, error injection, and slow-start behavior |
 | 0.5 | CI: `cargo test`, `cargo clippy -D warnings`, `uv run pytest`, schema drift check |
@@ -178,15 +186,15 @@ A thin vertical slice through every layer, before any layer is complete.
 
 | Step | Deliverable |
 |---|---|
-| 1.1 | Engine: open-model fixed-rate scheduler, HTTP/1.1 + HTTP/2 via `hyper`/`rustls`, one request type, **run spec in / NDJSON out with no API present** |
+| 1.1 | Engine: open-model fixed-rate scheduler, HTTP/1.1 + HTTP/2 via `hyper`/`rustls`, one call, **bundle in / NDJSON out with no API present** |
 | 1.2 | `metrix-metrics`: per-worker HDR histograms + counters, merged on a 250ms tick |
 | 1.3 | NDJSON summary output; `--events` per-request stream |
 | 1.4 | Engine self-metrics: send-schedule drift, in-flight, queue depth (§13.2) |
-| 1.5 | API: run-spec assembly, engine supervision, NDJSON ingest, SQLite + run directory |
+| 1.5 | API: bundle assembly + export, engine supervision, NDJSON ingest, SQLite + run directory |
 | 1.6 | Static front end: `index.html`, Tabler, left nav, ES module skeleton (`api` / `stream` / `state` / `table`) |
 | 1.7 | SSE stream at 1s with `Last-Event-ID` replay; **Stats table page live** (§14) |
 
-**Done when:** `metrix-engine --spec ...` runs 30s at 75 RPS against the mock **from a bare shell with the API stopped**, and separately, the same run launched from the browser updates the stats table once per second without lag or column jitter, with reconnect leaving no gap.
+**Done when:** `metrix-engine --plan ...` runs 30s at 75 RPS against the mock **from a bare shell with the API stopped**, and separately, the same run launched from the browser updates the stats table once per second without lag or column jitter, with reconnect leaving no gap.
 
 *Why this shape:* the pipeline is where integration risk lives — subprocess supervision, backpressure, stream reconnect. Proving it end-to-end at week two is worth far more than a feature-complete engine with nothing to display it.
 
@@ -209,7 +217,7 @@ Nothing after this point is meaningful if this milestone is wrong.
 
 | Step | Deliverable |
 |---|---|
-| 3.1 | Scenarios, weights, per-scenario rates; the implied-RPS display on Config (§4) |
+| 3.1 | Calls as a separate document, `call` references from mix steps, cross-document validation; scenarios, weights, per-scenario rates, implied-RPS display (§4) |
 | 3.2 | Chaining: sequential steps, variable scope, JSONPath + XPath extraction (§5) |
 | 3.3 | Assertions, `on_failure` policy, `repeat_until`, chain-abort accounting |
 | 3.4 | Datasets: CSV/JSONL, round_robin / random / unique_per_iteration |
@@ -218,7 +226,7 @@ Nothing after this point is meaningful if this milestone is wrong.
 | 3.7 | Lua corpus loading: read-only, plan-directory-rooted, in-memory, size-ceilinged |
 | 3.8 | `auth` block (§6): all modes, single-flight refresh, auth traffic excluded from load metrics |
 | 3.9 | Error-sample capture: first N per error class, redaction (§9.3) |
-| 3.10 | `POST /api/plans/validate` with JSON Pointer error paths |
+| 3.10 | `POST /api/plans/validate` with JSON Pointer error paths, incl. unresolved `call` names; single-call execution (`--call`) |
 
 **Done when:** the `examples/plans/checkout-mixed` plan runs end to end — XML and JSON, a chain with extraction, a Lua generator producing path and body, OAuth with refresh — and a deliberately broken plan returns errors an LLM can repair from.
 
@@ -263,7 +271,7 @@ Nothing after this point is meaningful if this milestone is wrong.
 | 6.2 | Stop conditions incl. generator-vs-target discrimination and `generator_limited` abort (§11.3) |
 | 6.3 | Refinement pass; breakpoint report with knee / cliff / max-sustained / limiting resource |
 | 6.4 | Sweep comparison view (§17.6) over the multi-target runs from 4.9 |
-| 6.5 | `POST /api/plans/generate` from OpenAPI / WSDL / HAR / access log (§8) |
+| 6.5 | `POST /api/plans/generate` — calls deterministically from OpenAPI/WSDL, starter mix with flat weights (§8) |
 | 6.6 | SLO evaluation, engine exit codes, machine-readable verdict for CI (§16) |
 | 6.7 | **Remote execution**: static build, `engine/dist` bundle, ship-and-run over SSH, stream collection back to the API |
 
@@ -275,7 +283,7 @@ Nothing after this point is meaningful if this milestone is wrong.
 
 These are easy to erode step by step, so they are worth restating as build-time rules:
 
-1. **The engine never depends on the API.** No Python on the load path, no config outside the run spec, no network call to the control plane. Every engine feature must be exercisable as `metrix-engine --spec file.json` on a machine with nothing else installed.
+1. **The engine never depends on the API.** No Python on the load path, no config outside the bundle, no network call to the control plane. Every engine feature must be exercisable as `metrix-engine --plan dir/` on a machine with nothing else installed.
 2. **boto3 appears only under `api/src/metrix_api/discovery/`.** No AWS SDK in the engine, ever.
 3. **The engine never blocks on a consumer.** Any stream backpressure is dropped and annotated, never allowed to perturb the send loop.
 4. **No allocation or locking on the hot path.** Per-worker aggregation, merged on the snapshot tick.
@@ -311,7 +319,7 @@ Discovery is tested against committed JSON fixtures of real `describe_*` respons
 |---|---|
 | Measuring the generator instead of the target | Self-metrics land in M1.4, before any feature that would tempt a conclusion |
 | Percentile math wrong but plausible | M0.4 mock before M2, so statistics are asserted against known truth |
-| Schema drift between engine and API | Generated schema + CI check from M0.3 |
+| Schema drift between engine and API | Generated schemas + CI check from M0.3 |
 | Exec generators becoming the default | Lua built first (M3.6) |
 | SSE backpressure perturbing a run | Engine never blocks (rule 2); verified in M1 acceptance |
 | Discovery complexity leaking into the engine | Rules 1–2, with a CI job that runs the full M1 acceptance with the API stopped |
@@ -321,7 +329,7 @@ Discovery is tested against committed JSON fixtures of real `describe_*` respons
 
 ## 7. First week
 
-1. M0.1–0.3 — skeleton, run-spec types, schema generation.
+1. M0.1–0.3 — skeleton, plan types (call/mix/targets), schema generation.
 2. M0.4 — the mock target, with a dial-able latency distribution.
 3. M1.1–1.3 — fixed-rate scheduler and NDJSON output.
 4. Run 30s at 75 RPS against the mock and compare the reported p50/p95/p99 against the injected distribution by hand.
