@@ -36,7 +36,7 @@ The front end is a single static page — no templating, no build step. `boto3` 
 
 ## 2. Runtime layout
 
-Where the app keeps things when it runs. Root is `$METRIX_HOME`, defaulting to `~/.metrix` (override in config or environment).
+Where the app keeps things when it runs. The root is resolved once at startup, in this order: an explicit argument, `$METRIX_HOME`, a **`.metrix/` that already exists in the working directory**, then `~/.metrix`. The working-directory rule never creates the directory -- making one is how a checkout opts into keeping its own recordings, and without that rule the tool would scatter a database wherever it was started. The resolved root and which rule chose it are both shown on the Config page.
 
 ```
 $METRIX_HOME/

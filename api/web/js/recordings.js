@@ -2,7 +2,7 @@
 // different sections populated, so one list shows both.
 
 import { duration, escape, timestamp } from "./format.js";
-import { empty, icon } from "./ui.js";
+import { empty, field, icon } from "./ui.js";
 
 export function render(state) {
   if (state.selectedRecording) return detail(state.selectedRecording);
@@ -61,13 +61,6 @@ export function render(state) {
 function statusBadge(status) {
   const tone = { finished: "green", running: "blue", aborted: "orange", failed: "red" }[status];
   return `<span class="badge bg-${tone ?? "secondary"}-lt">${escape(status)}</span>`;
-}
-
-function field(title, content) {
-  return `<div class="datagrid-item">
-    <div class="datagrid-title">${escape(title)}</div>
-    <div class="datagrid-content">${content}</div>
-  </div>`;
 }
 
 function detail(recording) {

@@ -147,3 +147,7 @@
 .severity-info { color: var(--tblr-secondary); }
 
 .gap-note { font-family: var(--metrix-mono); font-size: .8125rem; }
+
+/* A filesystem path has no break opportunities a browser recognises, so without
+   this a long Windows root either overflows its cell or stretches the grid. */
+.metrix-path { overflow-wrap: anywhere; }

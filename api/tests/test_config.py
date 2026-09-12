@@ -9,7 +9,9 @@ import pytest
 
 from metrix_api.config import (
     ENV_HOME,
+    LOCAL_HOME_NAME,
     ConfigError,
+    describe_home_source,
     format_duration,
     load_config,
     parse_duration,
@@ -18,21 +20,77 @@ from metrix_api.config import (
 
 
 class TestHomeResolution:
+    """Four rules in a fixed order. Every test pins the working directory: two of
+    the rules read state outside the process, so a test that does not would pass or
+    fail depending on where pytest was started."""
+
     def test_explicit_argument_wins(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
         monkeypatch.setenv(ENV_HOME, str(tmp_path / "from-env"))
-        assert resolve_home(tmp_path / "explicit") == tmp_path / "explicit"
+        (tmp_path / LOCAL_HOME_NAME).mkdir()
+        resolved = resolve_home(tmp_path / "explicit")
+        assert resolved.path == tmp_path / "explicit"
+        assert resolved.source == "argument"
 
     def test_environment_is_next(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
         monkeypatch.setenv(ENV_HOME, str(tmp_path / "from-env"))
-        assert resolve_home() == tmp_path / "from-env"
+        (tmp_path / LOCAL_HOME_NAME).mkdir()
+        resolved = resolve_home()
+        assert resolved.path == tmp_path / "from-env"
+        assert resolved.source == "environment"
 
-    def test_default_when_nothing_is_set(self, monkeypatch) -> None:
+    def test_an_existing_local_dot_metrix_is_used(self, tmp_path: Path, monkeypatch) -> None:
+        """A checkout opts in by creating the directory."""
+        monkeypatch.chdir(tmp_path)
         monkeypatch.delenv(ENV_HOME, raising=False)
-        assert resolve_home() == Path.home() / ".metrix"
+        (tmp_path / LOCAL_HOME_NAME).mkdir()
+        resolved = resolve_home()
+        assert resolved.path == tmp_path / LOCAL_HOME_NAME
+        assert resolved.source == "project"
 
-    def test_an_empty_environment_variable_is_not_a_home(self, monkeypatch) -> None:
+    def test_a_local_dot_metrix_is_never_created_by_being_in_a_directory(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Without this the tool would scatter a database wherever it was started."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv(ENV_HOME, raising=False)
+        resolved = resolve_home()
+        assert resolved.path == Path.home() / ".metrix"
+        assert resolved.source == "default"
+        assert not (tmp_path / LOCAL_HOME_NAME).exists()
+
+    def test_a_local_dot_metrix_that_is_a_file_is_not_a_home(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv(ENV_HOME, raising=False)
+        (tmp_path / LOCAL_HOME_NAME).write_text("not a directory")
+        assert resolve_home().source == "default"
+
+    def test_default_when_nothing_is_set(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv(ENV_HOME, raising=False)
+        assert resolve_home().path == Path.home() / ".metrix"
+
+    def test_an_empty_environment_variable_is_not_a_home(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         monkeypatch.setenv(ENV_HOME, "")
-        assert resolve_home() == Path.home() / ".metrix"
+        assert resolve_home().path == Path.home() / ".metrix"
+
+    def test_every_source_has_an_explanation_the_page_can_show(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The Config page prints this string; an unmapped source would KeyError."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv(ENV_HOME, raising=False)
+        for source in ("argument", "environment", "project", "default"):
+            assert describe_home_source(source)
+
+        monkeypatch.setenv(ENV_HOME, str(tmp_path / "env"))
+        assert ENV_HOME in resolve_home().explanation
 
 
 class TestLayout:

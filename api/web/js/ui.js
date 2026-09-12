@@ -8,6 +8,8 @@
 // `title` and `body` are markup, not text -- several of these carry a link. They
 // are written here, never taken from the API, so there is nothing to escape.
 
+import { escape as escapeText } from "./format.js";
+
 const PATHS = {
   "alert-triangle": [
     "M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.87l-8.106 -13.536a1.914 1.914 0 0 0 -3.274 0z",
@@ -39,6 +41,14 @@ export function icon(name, className = "icon") {
   return `<svg class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor"
     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
     >${paths.map((d) => `<path d="${d}"/>`).join("")}</svg>`;
+}
+
+/** One labelled value in a `datagrid`. `content` is markup; `title` is text. */
+export function field(title, content) {
+  return `<div class="datagrid-item">
+    <div class="datagrid-title">${escapeText(title)}</div>
+    <div class="datagrid-content">${content}</div>
+  </div>`;
 }
 
 export function empty({ icon: name, title, body, action = "" }) {

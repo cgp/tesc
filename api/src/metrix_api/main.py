@@ -71,7 +71,15 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:
-        return {"status": "ok", "version": __version__, "home": str(settings.home)}
+        # `home` and why it was chosen: the front end shows both, because the first
+        # question about a missing recording is which directory it was written to.
+        return {
+            "status": "ok",
+            "version": __version__,
+            "home": str(settings.home),
+            "home_source": settings.home_explanation,
+            "database": str(settings.database),
+        }
 
     app.include_router(profiles.router)
     # Live routes first: /recordings/live must not be read as a recording id.

@@ -2,7 +2,7 @@
 // Editing the mix and targets lands in A4; this inspects.
 
 import { escape } from "./format.js";
-import { empty, icon } from "./ui.js";
+import { empty, field, icon } from "./ui.js";
 
 export function render(state) {
   if (state.error) return `<div class="alert alert-danger">${escape(state.error)}</div>`;
@@ -36,10 +36,36 @@ export function render(state) {
     );
   }
 
-  return `${broken}<div class="metrix-stack">${state.profiles
-    .map(profileCard)
-    .join("")}</div>`;
+  return `<div class="metrix-stack">
+    ${storageCard(state.health)}
+    ${broken}
+    ${state.profiles.map(profileCard).join("")}
+  </div>`;
 }
+
+// Where this process is reading and writing. Shown rather than buried in a tooltip:
+// the root is resolved from four different places (§2 of the implementation plan),
+// two of which depend on state outside the process, so "which directory is this?"
+// is a question the page should answer without anyone having to guess.
+function storageCard(health) {
+  const rows = health
+    ? `${field("METRIX_HOME", `<code class="metrix-path">${escape(health.home)}</code>`)}
+       ${field("Resolved from", escape(health.home_source))}
+       ${field("Database", `<code class="metrix-path">${escape(health.database)}</code>`)}`
+    : field("METRIX_HOME", `<span class="text-secondary">API unreachable</span>`);
+
+  return `<div class="card">
+    <div class="card-header">
+      <div>
+        <h3 class="card-title">Storage</h3>
+        <div class="card-subtitle">Everything this process keeps on disk lives
+          under one root</div>
+      </div>
+    </div>
+    <div class="card-body"><div class="datagrid">${rows}</div></div>
+  </div>`;
+}
+
 
 function profileCard(profile) {
   const rows = profile.endpoints

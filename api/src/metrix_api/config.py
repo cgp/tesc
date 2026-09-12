@@ -29,6 +29,12 @@ ENV_HOME = "METRIX_HOME"
 DEFAULT_HOME = Path.home() / ".metrix"
 CONFIG_NAME = "config.toml"
 
+#: A `.metrix` directory beside the working directory takes precedence over the
+#: per-user default -- but only if it already exists. Creating one is how a checkout
+#: opts into keeping its own recordings; without that rule the tool would scatter a
+#: database into whatever directory it happened to be started from.
+LOCAL_HOME_NAME = ".metrix"
+
 #: Same spelling the plan format uses, so a duration means one thing across the tool.
 #: Mirrors the ``Dur`` pattern in schema/mix.schema.json.
 _DURATION = re.compile(r"^(?:\d+[smh])+$")
@@ -102,12 +108,18 @@ class PhaseConfig:
 @dataclass(frozen=True, slots=True)
 class Config:
     home: Path
+    #: Which rule in `resolve_home` picked `home`. Reported, never acted on.
+    home_source: str = "default"
     server: ServerConfig = field(default_factory=ServerConfig)
     aws: AwsConfig = field(default_factory=AwsConfig)
     observe: ObserveConfig = field(default_factory=ObserveConfig)
     phases: PhaseConfig = field(default_factory=PhaseConfig)
 
     # Paths are derived, never configured separately: one root, no surprises.
+    @property
+    def home_explanation(self) -> str:
+        return describe_home_source(self.home_source)
+
     @property
     def config_file(self) -> Path:
         return self.home / CONFIG_NAME
@@ -142,20 +154,55 @@ class Config:
         return self
 
 
-def resolve_home(explicit: Path | str | None = None) -> Path:
-    """Explicit argument, then ``$METRIX_HOME``, then ``~/.metrix``."""
+def describe_home_source(source: str) -> str:
+    """A sentence a person can act on, for the Config page and for error messages."""
+    return {
+        "argument": "passed in directly",
+        "environment": f"${ENV_HOME}",
+        "project": f"{LOCAL_HOME_NAME}/ in the working directory",
+        "default": f"the default, {DEFAULT_HOME}",
+    }[source]
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedHome:
+    """Where the root is, and why it is there.
+
+    The reason travels with the path because "which directory is this writing to"
+    is the first question asked when a recording is not where someone expected, and
+    two of the four answers depend on state outside the process.
+    """
+
+    path: Path
+    source: str
+
+    @property
+    def explanation(self) -> str:
+        return describe_home_source(self.source)
+
+
+def resolve_home(explicit: Path | str | None = None) -> ResolvedHome:
+    """Explicit argument, then ``$METRIX_HOME``, then ``./.metrix``, then ``~/.metrix``.
+
+    The working-directory rule only fires for a ``.metrix`` that already exists, so
+    running from a checkout uses the per-user root unless that checkout has asked
+    for its own by creating the directory.
+    """
     if explicit is not None:
-        return Path(explicit).expanduser()
+        return ResolvedHome(Path(explicit).expanduser(), "argument")
     from_env = os.environ.get(ENV_HOME)
     if from_env:
-        return Path(from_env).expanduser()
-    return DEFAULT_HOME
+        return ResolvedHome(Path(from_env).expanduser(), "environment")
+    local = Path.cwd() / LOCAL_HOME_NAME
+    if local.is_dir():
+        return ResolvedHome(local, "project")
+    return ResolvedHome(DEFAULT_HOME, "default")
 
 
 def load_config(home: Path | str | None = None) -> Config:
     """Build the configuration. A missing config.toml means defaults, not an error."""
-    root = resolve_home(home)
-    config = Config(home=root)
+    resolved = resolve_home(home)
+    config = Config(home=resolved.path, home_source=resolved.source)
 
     path = config.config_file
     if not path.is_file():

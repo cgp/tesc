@@ -195,3 +195,14 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - Zeroing the container gutter overshot: the state between `container-xl` and that change was the one wanted. `--tblr-gutter-x: 2em` on the page containers, which on the 14px base is a 14px inset on each edge. It is one line, and half the gutter is the padding, so it is the only number to touch if the cards should sit tighter or looser.
 - `.metrix-stack` and `.metrix-split` stay. They were introduced to dodge the negative margin a `.row` uses to cancel its container's padding, and that problem is gone with the padding back — but a single-column page still does not need a grid row, and the two-up split still reads better as a grid than as `col-6` twice.
 - Verified at 1920 and 1440: 14px each side on every route, still no horizontal overflow.
+
+## 2026-09-12 — The resolved root is on the page, and a checkout can keep its own.
+
+- **The Config page opens with a Storage card**: the resolved `METRIX_HOME`, the database path under it, and *which rule chose it*. The root came from one of several places and two of them depend on state outside the process, so "which directory is this writing to" is a question the page should answer rather than leave to a tooltip.
+- **`resolve_home` gained a project-local rule.** Order is now: explicit argument → `$METRIX_HOME` → **a `.metrix/` that already exists in the working directory** → `~/.metrix`.
+- **It never creates that directory.** `mkdir .metrix` is how a checkout opts into keeping its own recordings; making the rule fire on absence would scatter a database into whatever directory the tool happened to be started from, and two runs from two directories would silently use two databases. `.metrix/` is gitignored.
+- The default was always `~/.metrix`, an absolute path — starting in the repo never wrote into it. The new rule is opt-in, so that stays true until someone asks otherwise.
+- `ResolvedHome` carries the reason alongside the path, and `describe_home_source` turns it into a sentence the page prints verbatim. `/api/health` reports `home`, `home_source`, and `database`.
+- Tests pin the working directory in every resolution case — two of the rules read state outside the process, so a test that did not would pass or fail depending on where pytest was started. Added: the local directory is used when present, is never created, and is ignored when it is a file rather than a directory.
+- `field()` moved to `ui.js`; two views had copies.
+- Verified: `scripts/check.sh` all green — 175 passed, 1 skipped. Both resolution paths exercised by hand, and every route still renders with no horizontal overflow.

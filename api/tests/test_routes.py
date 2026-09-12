@@ -71,6 +71,13 @@ class TestHealth:
         body = client.get("/api/health").json()
         assert body["status"] == "ok"
         assert body["home"] == str(home.home)
+        assert body["database"] == str(home.database)
+
+    def test_says_where_the_home_came_from(self, client) -> None:
+        """The Config page prints this verbatim, so it has to be a sentence rather
+        than an internal key."""
+        body = client.get("/api/health").json()
+        assert body["home_source"] == "passed in directly"
 
 
 class TestProfiles:

@@ -12,8 +12,13 @@ __pycache__/
 # Local integration targets: a real host on someone's network is not a repo fact
 api/tests/integration.toml
 
-# Runtime data (METRIX_HOME defaults outside the repo, but just in case)
+# Runtime data. METRIX_HOME defaults to ~/.metrix, outside the repo -- but a
+# .metrix/ here opts this checkout into keeping its own recordings, and those
+# are local facts, not repo facts.
+/.metrix/
 /metrix-data/
 *.db
 *.ndjson
 *.ndjson.zst
+
+cgp*
