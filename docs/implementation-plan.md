@@ -143,9 +143,9 @@ uv run metrix-api          # serves the static page + API on :8080
 **The engine** — one command, one self-contained bundle, no Python involved:
 
 ```bash
-metrix-engine --plan checkout-mixed/ --summary - --events events.ndjson
-metrix-engine --plan checkout-mixed/ --targets prod-canary.json   # same mix, other boxes
-metrix-engine --plan checkout-mixed/ --call create-order          # fire one request, print it
+metrix-engine --plan checkout-mixed/ --summary - --events events.ndjson # standard run sequence
+metrix-engine --plan checkout-mixed/ --targets prod-canary.json   # run again, same mix, against other boxes
+metrix-engine --plan checkout-mixed/ --chain checkout              # run one chain, print it
 metrix-engine --calibrate --out machine-profile.json
 ```
 
@@ -217,20 +217,22 @@ Nothing after this point is meaningful if this milestone is wrong.
 
 | Step | Deliverable |
 |---|---|
-| 3.1 | Calls as a separate document, `call` references from mix steps, cross-document validation; scenarios, weights, per-scenario rates, implied-RPS display (§4) |
-| 3.2 | Chaining: sequential steps, variable scope, JSONPath + XPath extraction (§5) |
-| 3.3 | Assertions, `on_failure` policy, `repeat_until`, chain-abort accounting |
-| 3.4 | Datasets: CSV/JSONL, round_robin / random / unique_per_iteration |
-| 3.5 | Inline templating (`{{ }}`, `rand`, `uuid`, `now`, `seq`, `pick`) |
-| 3.6 | Generation tiers: **Lua via `mlua` first** (§7.2), then Rust plugin trait, then exec sidecar |
-| 3.7 | Lua corpus loading: read-only, plan-directory-rooted, in-memory, size-ceilinged |
-| 3.8 | `auth` block (§6): all modes, single-flight refresh, auth traffic excluded from load metrics |
-| 3.9 | Error-sample capture: first N per error class, redaction (§9.3) |
-| 3.10 | `POST /api/plans/validate` with JSON Pointer error paths, incl. unresolved `call` names; single-call execution (`--call`) |
+| 3.1 | Calls as a separate document, `call` references from mix steps, cross-document validation |
+| 3.2 | Chains with percentages of a total rate; sum-to-100 validation; implied per-chain RPS and req/s display (§4.5) |
+| 3.3 | Chaining: sequential steps, variable scope, JSONPath + XPath extraction (§5) |
+| 3.4 | Assertions, `on_failure` policy, `repeat_until`, chain-abort accounting |
+| 3.5 | Datasets: CSV/JSONL, round_robin / random / unique_per_iteration |
+| 3.6 | Inline templating (`{{ }}`, `rand`, `uuid`, `now`, `seq`, `pick`) |
+| 3.7 | Generation tiers: **Lua via `mlua` first** (§7.2), then Rust plugin trait, then exec sidecar |
+| 3.8 | Lua corpus loading: read-only, plan-directory-rooted, in-memory, size-ceilinged |
+| 3.9 | `auth` block (§6): all modes, single-flight refresh, auth traffic excluded from load metrics |
+| 3.10 | Session policy per chain: `fresh` / `reuse` / `pool`, cookie jar bound to auth identity (§4.2) |
+| 3.11 | Error-sample capture: first N per error class, redaction (§9.3) |
+| 3.12 | `POST /api/plans/validate`: JSON Pointer paths, unresolved `call` names, percentages not summing to 100; single-chain execution (`--chain`) |
 
-**Done when:** the `examples/plans/checkout-mixed` plan runs end to end — XML and JSON, a chain with extraction, a Lua generator producing path and body, OAuth with refresh — and a deliberately broken plan returns errors an LLM can repair from.
+**Done when:** the `examples/plans/checkout-mixed` bundle runs end to end — six chains at declared percentages, XML and JSON, extraction between steps, a Lua generator producing path and body, OAuth with refresh, and a deliberately-failing chain whose 401s count as passes — and a broken plan returns errors an LLM can repair from, including a mixture that does not total 100.
 
-*Sequencing note:* Lua before the exec sidecar, deliberately. It is the default tier, and building the escape hatch first tends to make the escape hatch the default.
+*Sequencing notes:* calls before chains before the mixture (3.1 → 3.3 → 3.2 order of dependency), so each layer is testable alone. Lua before the exec sidecar, deliberately — it is the default tier, and building the escape hatch first tends to make the escape hatch the default.
 
 ### M4 — Targets and observation
 

@@ -97,7 +97,7 @@ Three sections, per the discussion:
 | Section | Purpose |
 |---|---|
 | **Config** | Target/environment profiles, **hostname discovery and the resolved inventory (§3)**, and what to collect from them; plan library with editor (form + raw JSON view), **plan generation from OpenAPI/WSDL/HAR (§8)**, inline validation, auth blocks, mixture weights showing live "this implies N RPS on /foo"; phase durations (§10), engine threading, and SLO thresholds. |
-| **Performance › Stats** | **The numbers, as a table** (§14). Per scenario and per step: start, finish, median, standard deviation, counts, errors. Updates once per second during a run. No charts on this page. |
+| **Performance › Stats** | **The numbers, as a table** (§14). Per chain and per step: start, finish, median, standard deviation, counts, errors. Updates once per second during a run. No charts on this page. |
 | **Performance › Charts** | The same run drawn (§15) — load and observation on one shared time axis, current-vs-target RPS, host stats, error feed, generator-health strip, phase indicator, stop/abort. No tables on this page. |
 | **Recordings** | Archive of everything captured, load runs and observation-only recordings alike. Grouped into **series** by setup identity (§17.2) with trend charts and regression flags; filter by plan/target/tag/mode, mark a recording as **baseline**, overlay N runs, inspect retained error samples, export (JSON / CSV / static HTML report). |
 
@@ -250,14 +250,14 @@ A sweep deliberately varies the target, so its runs do **not** form a single ser
 | Document | Contains | Changes when |
 |---|---|---|
 | **Calls** — `calls/*.json` | Individual request definitions: method, path, headers, body, assertions, extraction | The service's API changes |
-| **Mix** — `mix.json` | Which calls run, in what sequences, at what weights and rates; load shape and phases | The question being asked changes |
+| **Mix** — `mix.json` | Named **chains** of calls, and what percentage of traffic each gets; total rate, load shape, phases | The question being asked changes |
 | **Targets** — `targets.json` | The boxes to run against (§3) | The environment changes |
 
 The value of the split is that each can move without disturbing the others. A new endpoint adds a call and touches no mixture. Changing "20% writes" to "40% writes" edits one number in one file and leaves every request definition untouched. Pointing the same test at a different set of containers replaces one file. A monolithic plan makes each of those a diff across everything.
 
 It also matches how they are produced: calls are mechanical (derivable from OpenAPI or a codebase, §8), the mix is judgment, and targets come from discovery.
 
-**These are normally not written by hand.** The UI is the authoring surface — edit the mixture, adjust weights, see implied per-endpoint RPS before running. The API exports a complete, runnable bundle for anyone who wants to run or tweak one directly (§4.4), and hand-authoring is fully supported, but it is the exception rather than the assumed workflow.
+**These are normally not written by hand.** The UI is the authoring surface — edit the mixture, adjust percentages, see implied per-chain RPS before running. The API exports a complete, runnable bundle for anyone who wants to run or tweak one directly (§4.4), and hand-authoring is fully supported, but it is the exception rather than the assumed workflow.
 
 JSON throughout (YAML accepted and converted), with published JSON Schemas so an LLM can be handed the schema alongside the codebase.
 
@@ -296,11 +296,13 @@ One file per call, or several grouped in one file. A call knows how to make one 
 }
 ```
 
-Because a call is standalone, it is also the unit you can fire once to check it works — `metrix-engine --call create-order` sends exactly one request and prints the response with assertion results. That is the fastest possible loop for "is this request even right?", and it exists precisely because calls are not tangled into the mixture.
+Because a call is standalone, it is also directly runnable for a quick check. The unit you name is the same unit the mixture names — a chain: `metrix-engine --chain checkout` runs one iteration of that chain, in order, and prints each response with its assertion results. A single-call chain is simply the degenerate case.
+
+Naming chains rather than calls is what makes this work: a call like `get-product` depends on `{{ pid }}` extracted by an earlier call, so firing it in isolation would have nothing to bind. Running the chain supplies its own prerequisites by construction, and one command means one concept, whether it appears in `--chain` or in the mixture.
 
 ### 4.2 Mix — the load testing mixture
 
-References calls by name, arranges them into scenarios, and sets the shape of the load.
+References calls by name, arranges them into chains, and sets the shape of the load.
 
 ```jsonc
 // mix.json
@@ -319,7 +321,7 @@ References calls by name, arranges them into scenarios, and sets the shape of th
     "duration": "60s",            // enforced minimum: duration x rate >= 2250 (§12.1)
     "warmup": "10s",
     "model": "open",              // "open" = fixed arrival rate | "closed" = fixed concurrency
-    "rate": 500,
+    "rate": 150,                  // total chain iterations per second, split by percent
     "max_concurrency": 200        // hitting it annotates the run (§13.1)
   },
 
@@ -331,14 +333,27 @@ References calls by name, arranges them into scenarios, and sets the shape of th
     "order-xml": { "type": "lua", "file": "gen/order.lua", "entry": "generate" }
   },
 
-  "scenarios": [
-    { "name": "browse", "weight": 80,
-      "steps": [ { "id": "list", "call": "list-products" },
-                 { "id": "detail", "call": "get-product" } ] },
+  // the mixture: named chains, percentages must total 100
+  "chains": [
+    { "name": "login-fail", "percent": 30, "session": "fresh",
+      "steps": [ { "id": "post", "call": "login-bad-password" } ] },
 
-    { "name": "submit-order", "weight": 20, "rate": 25,
+    { "name": "login",     "percent": 10, "session": "fresh",
+      "steps": [ { "id": "post", "call": "login" } ] },
+
+    { "name": "logout",    "percent": 5,  "session": "reuse",
+      "steps": [ { "id": "post", "call": "logout" } ] },
+
+    { "name": "search",    "percent": 20, "session": "reuse",
+      "steps": [ { "id": "query", "call": "search-products" } ] },
+
+    { "name": "cart-add-remove", "percent": 20, "session": "pool", "pool_size": 50,
+      "steps": [ { "id": "add",    "call": "cart-add" },
+                 { "id": "remove", "call": "cart-remove" } ] },
+
+    { "name": "checkout",  "percent": 15, "session": "fresh",
       "steps": [ { "id": "create", "call": "create-order" },
-                 { "id": "poll", "call": "get-order",
+                 { "id": "poll",   "call": "get-order",
                    "repeat_until": { "json": "$.status", "equals": "complete",
                                      "max_attempts": 5, "interval_ms": 200 } } ] }
   ],
@@ -348,13 +363,23 @@ References calls by name, arranges them into scenarios, and sets the shape of th
   "observe": { "interval_ms": 1000, "collect": ["cpu", "memory", "disk", "net", "process"] },
 
   "slo": [
-    { "metric": "p99_latency_ms", "scenario": "browse", "max": 400 },
+    { "metric": "p99_latency_ms", "chain": "browse", "max": 400 },
     { "metric": "error_rate", "max": 0.001 }
   ]
 }
 ```
 
-A step may override a call's fields inline for the one case where the same endpoint is used differently in two scenarios. Overrides are shallow and discouraged — two genuinely different requests should be two calls.
+A step may override a call's fields inline for the one case where the same endpoint is used differently in two chains. Overrides are shallow and discouraged — two genuinely different requests should be two calls.
+
+**Session policy is declared per chain**, because whether a chain needs a fresh session is a property of the behavior being modelled, not of the service:
+
+| `session` | Behavior | Models |
+|---|---|---|
+| `fresh` | New session per iteration: new auth identity, empty cookie jar | A first-time or logged-out user. Exercises the login path and cold per-user caches on every iteration. |
+| `reuse` | One session held for the life of the virtual user | A returning user working through a warm session |
+| `pool` (+ `pool_size`) | A fixed set of sessions cycled across iterations | A realistic population — neither all-new nor all-one |
+
+A session here means the cookie jar plus the auth identity binding (§6.2); the two move together, since a fresh session that reused a token would not be fresh in any way the service can tell. The distinction matters more than it looks: `fresh` on every chain overstates login load and destroys cache locality, while `reuse` everywhere hides both, and the difference between those two mistakes is easily a factor of two in apparent capacity.
 
 ### 4.3 Targets — the boxes
 
@@ -377,8 +402,10 @@ checkout-mixed/
 
 ### 4.5 Design notes
 
-- **Weights and explicit rates coexist.** `weight` distributes whatever is left after explicit per-scenario `rate` allocations. Bump one number, everything else redistributes, and the UI shows the resulting per-endpoint RPS *before* you run.
+- **The mixture is percentages of one total rate, and they must sum to 100.** A mix is a rate and a set of named chains with a share each — `150 rps`, `checkout 15%` — because that is how the mixture is actually reasoned about. Anything else is a validation error naming the shortfall or excess, rather than a silent renormalization that makes the numbers you read differ from the numbers you wrote. The editor accepts a target RPS per chain as an alternative input and converts it to a percentage, and always shows both.
+- **Chains are the unit of the mixture**, so a percentage buys *iterations of that chain*, not requests. `cart-add-remove` at 20% of 150 rps is 30 iterations/s and 60 req/s. The Config screen shows both figures, since this is the easiest number in the file to misread.
 - **`id` on every step**, so chart series, error reports, and SLOs have a stable key independent of which call the step invokes.
+- **Expected failures are not errors.** A chain like `login-fail` asserts a 401; when it gets one, that is a pass. Assertions define the expected outcome, so a deliberately failing chain contributes to latency and throughput statistics without inflating the error rate — and starts raising errors only when it stops failing the way it should.
 - **Assertions are declarative and enumerable.** No expression language. An LLM emits them straight from a schema, and a failure produces a specific message (`$.items expected min_length 1, got 0`) rather than a stack trace.
 - **Templating is deliberately tiny** — `{{ var }}`, `{{ dataset.field }}`, and a fixed function set (`rand`, `uuid`, `now`, `seq`, `pick`). Anything more is the generator's job (§7), and a small inline language is what keeps plans statically checkable.
 - **Validation is per document and cross-document.** `POST /api/plans/validate` checks each file against its schema *and* checks that every `call` reference resolves, returning JSON Pointer paths. An unresolved call name is the characteristic error of this design, so it gets a specific message naming the step and the missing call.
@@ -387,7 +414,7 @@ checkout-mixed/
 
 ## 5. Chaining
 
-Each scenario is a sequential chain executed by one virtual user with its own variable scope.
+Each chain is a sequential chain executed by one virtual user with its own variable scope.
 
 - **Extraction:** JSONPath for JSON, XPath for XML, plus header and regex extractors. Response `Content-Type` picks the default parser; an explicit extractor type overrides it.
 - **Failure policy:** per-step `on_failure` of `abort` (default — record the chain as failed at this step), `continue`, or `retry: n`. Aborted chains are counted separately from failed requests, so one upstream 500 doesn't inflate the error rate three times over.
@@ -395,7 +422,7 @@ Each scenario is a sequential chain executed by one virtual user with its own va
 - **Think time:** optional `delay_ms` between steps, fixed or distribution-based. Off by default — in short windows you usually want the chain tight.
 - **Chain latency is reported end-to-end as well as per step.** Per-step numbers find the slow endpoint; end-to-end is what a user actually feels.
 
-**Rate accounting with chains:** a scenario `rate` means *iterations started per second*, not requests per second. A 3-step chain at 25/s is 75 req/s. The Config screen shows both numbers, because this is the single easiest thing to misread in a generated plan.
+**Rate accounting with chains:** a chain `rate` means *iterations started per second*, not requests per second. A 3-step chain at 25/s is 75 req/s. The Config screen shows both numbers, because this is the single easiest thing to misread in a generated plan.
 
 **Rate vs concurrency:** you cannot independently pin both. In the `open` model `rate` is the control and `max_concurrency` is a safety cap; in `closed` it is the reverse. The UI states which one is binding during the run, and flags when in-flight sits pinned at the cap — that means the cap, not the target, set the result.
 
@@ -562,7 +589,7 @@ HAR and access-log sources are the valuable ones, because they answer the questi
 
 ### 8.3 Draft semantics
 
-**No chain inference.** Guessing chains from repeated id values across a capture is unreliable in exactly the cases that matter, and a wrong chain is worse than none — it yields a plan that runs cleanly while testing a flow the service does not have. Generation emits single-step scenarios only; chaining is the LLM's job (it has the codebase, a far better source than a traffic capture) or the author's.
+**No chain inference.** Guessing chains from repeated id values across a capture is unreliable in exactly the cases that matter, and a wrong chain is worse than none — it yields a plan that runs cleanly while testing a flow the service does not have. Generation emits single-step chains only; chaining is the LLM's job (it has the codebase, a far better source than a traffic capture) or the author's.
 
 Generated plans come back marked `"draft": true` with `todo` annotations on fields needing human or LLM attention — guessed weights, placeholder values, unchained operations that probably belong in a sequence. The UI surfaces these as a checklist on the Config screen, and `draft: true` plans are flagged when run, so a provisional mixture is never mistaken for a reviewed one.
 
@@ -586,18 +613,18 @@ codebase / OpenAPI / HAR
 Organized by the question each answers. Time series are bucketed at 250ms internally and rolled up for display.
 
 ### 9.1 Throughput & volume
-- Requests attempted / completed / failed — overall, per scenario, per step
+- Requests attempted / completed / failed — overall, per chain, per step
 - **Achieved RPS vs target RPS** over time (the gap is the headline number)
-- Scenario iterations started / completed / aborted
+- Chain iterations started / completed / aborted
 - Bytes sent and received; payload throughput MB/s — separate from request rate, since large XML bodies saturate links long before they saturate CPU
 - Request and response body size distribution
 
-### 9.2 Latency — per step, per scenario, aggregate
+### 9.2 Latency — per step, per chain, aggregate
 - min / mean / p50 / p75 / p90 / p95 / p99 / max, plus stddev. p99.9 is computed and stored but displayed only when the sample count supports it (§12.1) — at the 30s/75 RPS floor it does not.
 - Full HDR histogram retained per run, so percentiles can be recomputed over any time slice after the fact and runs can be merged correctly — you cannot average percentiles
 - Rolling percentiles over time (p50 / p95 / p99 bands)
 - **Phase breakdown:** DNS resolve, TCP connect, TLS handshake, request write, **time-to-first-byte**, body transfer, total. TTFB vs total separates "the server is thinking" from "the response is big or the link is slow."
-- **End-to-end chain duration** per scenario
+- **End-to-end duration** per chain
 - **Corrected latency** (coordinated-omission adjusted, §10) reported alongside raw, never instead of it
 - Latency bucketed by response size — surfaces the "only slow for large accounts" case
 
@@ -891,7 +918,7 @@ The table is live during a run, updating once per second (§2.5), and is the sam
 
 ### 14.1 Rows
 
-One row per step, grouped under its scenario, with a run-total row at the top. Scenario rows aggregate their steps; chains additionally get an end-to-end row, since chain duration is not the sum of step medians. Sortable on any column, and the grouping collapses so a 40-step plan stays readable.
+One row per step, grouped under its chain, with a run-total row at the top. Chain rows aggregate their steps; chains additionally get an end-to-end row, since chain duration is not the sum of step medians. Sortable on any column, and the grouping collapses so a 40-step plan stays readable.
 
 ### 14.2 Columns
 
@@ -899,7 +926,7 @@ Default visible:
 
 | Column | Notes |
 |---|---|
-| Name | Scenario / step id, indented by grouping |
+| Name | Chain / step id, indented by grouping |
 | **Start** | Timestamp of the row's first completed request, relative to run start. Not the run's start — a chain's third step begins whenever its chain reaches it, and a step that never started at all is diagnostic. |
 | **Finish** | Timestamp of the row's last completed request, relative to run start |
 | Count | Completed requests |
@@ -932,7 +959,7 @@ The charts page carries no tables; exact figures live in §14. Principles: every
 
 | Chart | Answers |
 |---|---|
-| Target vs achieved RPS over time, stacked by scenario | Did we apply the load we asked for? |
+| Target vs achieved RPS over time, stacked by chain | Did we apply the load we asked for? |
 | Latency percentile bands over time (p50/p95/p99, log y) | When did it degrade? |
 | Latency histogram + CDF for the run | What shape — long tail or bimodal? |
 | Error rate + status-code stacked area | What broke, and when? |
@@ -1054,6 +1081,8 @@ Three items from the initial doc are kept deliberately: **hostname-to-instance t
 | Series segmentation | **None.** The identity tuple defines the series; a setup change is simply a different series (§17.2). |
 | Python tooling | **uv** — `pyproject.toml` + committed `uv.lock`, `uv sync` / `uv run`. No pip, no hand-managed venv (§2.2). |
 | Plan structure | **Three separate documents** — calls, mix, targets (§4) — composed into a bundle. Authored in the UI by default; exportable and hand-editable. |
+| Mixture unit | **Named chains with percentages of one total rate, summing to 100** (§4.5). A percentage buys chain *iterations*, not requests. `--chain <name>` takes the same name the mix uses. |
+| Sessions | **Declared per chain**: `fresh` / `reuse` / `pool` (§4.2), binding cookie jar and auth identity together. |
 | Engine independence | **The engine takes one self-contained plan bundle and owns sequential multi-target execution** (§2.1, §3.5). No Python wrapper commands; portable to a load box by copying a binary and a directory. |
 | Front end | **One static page** — `index.html`, Tabler CSS, ES modules, all loaded up front. No Jinja, no framework, no build step (§2.4). |
 | Live view transport | **SSE, not WebSocket** (§2.5). One-way stream, 1s cadence, `Last-Event-ID` replay; control actions are ordinary POSTs. |
