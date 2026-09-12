@@ -31,6 +31,8 @@ Owns target-side collection, and has no dependency on the load engine. Given a r
 - Target discovery is per-profile and re-resolved at each phase boundary, so a host appearing or disappearing mid-run is recorded as an event rather than a gap in a series.
 - A collection failure degrades rather than aborts: the affected series is marked unavailable for that interval and the run continues, with the gap drawn explicitly on the chart rather than interpolated.
 
+An endpoint carries two addresses for two purposes: `address` is the load target, `collect` is a separate connection host statistics are read from. Neither is derived from the other, nothing is inferred from what listens on the load target, and what is collected is whole-machine rather than per-process. Written up for users in [profiles.md](profiles.md).
+
 ### 2.4 UI (Tabler, vertical left nav)
 
 Three sections, per the discussion:

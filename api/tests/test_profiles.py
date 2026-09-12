@@ -21,7 +21,8 @@ from metrix_api.profiles import (
 )
 
 REPO = Path(__file__).resolve().parents[2]
-EXAMPLE = REPO / "examples" / "profiles" / "local.json"
+EXAMPLES = REPO / "examples" / "profiles"
+EXAMPLE = EXAMPLES / "local.json"
 TARGETS_SCHEMA = REPO / "schema" / "targets.schema.json"
 
 STAGING = {
@@ -66,7 +67,19 @@ class TestParsing:
         assert parse_profile(once) == profile()
         assert to_document(parse_profile(once)) == once
 
-    def test_the_shipped_example_parses(self) -> None:
+    def test_every_shipped_example_parses(self) -> None:
+        """These are what people copy. A broken example is worse than none, and
+        nothing else in the suite reads this directory."""
+        found = sorted(EXAMPLES.glob("*.json"))
+        assert found, "the examples people copy from have gone missing"
+        for path in found:
+            parsed = parse_profile(
+                json.loads(path.read_text(encoding="utf-8")), name=path.stem
+            )
+            assert parsed.name == path.stem
+            assert parsed.endpoints, f"{path.name}: an example with no endpoints"
+
+    def test_the_local_example_scrapes(self) -> None:
         parsed = parse_profile(json.loads(EXAMPLE.read_text(encoding="utf-8")), name="local")
         assert parsed.name == "local"
         assert parsed.endpoints[0].collect.transport == "scrape"

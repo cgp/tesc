@@ -206,3 +206,13 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - Tests pin the working directory in every resolution case — two of the rules read state outside the process, so a test that did not would pass or fail depending on where pytest was started. Added: the local directory is used when present, is never created, and is ignored when it is a file rather than a directory.
 - `field()` moved to `ui.js`; two views had copies.
 - Verified: `scripts/check.sh` all green — 175 passed, 1 skipped. Both resolution paths exercised by hand, and every route still renders with no horizontal overflow.
+
+## 2026-09-12 — What an endpoint's two addresses mean, said out loud.
+
+- The example profile reads `"address": "127.0.0.1:8080"` next to a collector on 9100, and nothing on screen said which was which. It was fair to read it as "visit 8080, find the process listening, watch it". **It is not.** `address` is the load target; `collect` is a separate connection statistics are read from. Neither is derived from the other, and the load target is never probed.
+- **The Config page now shows the collection address**, not just the transport name: `scrape http://127.0.0.1:9100/metrics`, `ssh ec2-user@10.0.3.41:22`, or *not collected*. Columns renamed `Address` → **Load target** and `Collection` → **Observed via**, with a standing note above them saying what each is and that statistics are whole-machine rather than per-process.
+- The string is built from the transport object itself (`SshTransport.describe`, `ScrapeTransport.describe`) rather than re-formatted for display, so the page cannot show an address the collector does not use — including the defaults it fills in, port 22 and 9100.
+- **`docs/profiles.md`**: how to write a profile, aimed at users rather than at us. The two addresses, the three transports, what `/proc` actually yields, and the reverse-proxy case — one box means one set of numbers covering nginx and the app with no way to split them, so put them on separate machines if you need to tell them apart. Worked examples for each.
+- `examples/profiles/staging-split.json`: nginx, two app boxes, and an ALB that cannot be logged into. A test now parses **every** example in that directory — they are what people copy, and nothing else in the suite read that folder.
+- **One bug, visible only by looking:** the badge printed the transport and `describe()` prefixed it again, so the table read `ssh ssh ec2-user@…`. `describe()` returns the destination only; naming the transport is the badge's job.
+- Verified: `scripts/check.sh` all green — 178 passed, 1 skipped. Three profiles rendered in the browser, including the unobservable ALB.

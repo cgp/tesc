@@ -81,6 +81,34 @@ class TestHealth:
 
 
 class TestProfiles:
+    def test_listing_says_where_stats_are_collected_from(self, client) -> None:
+        """`address` is the load target and says nothing about collection. The page
+        prints this string, and it comes from the transport rather than being
+        re-formatted for display, so it cannot drift from what is really used."""
+        endpoint = client.get("/api/profiles").json()["profiles"][0]["endpoints"][0]
+        assert endpoint["address"] == "10.0.3.41:8080"
+        assert endpoint["collects_from"] == "ec2-user@10.0.3.41:22"
+        # The transport is named once, in its own field; the page renders the badge.
+        assert endpoint["transport"] == "ssh"
+
+    def test_an_unobserved_endpoint_collects_from_nowhere(self, client, home) -> None:
+        from metrix_api.profiles import parse_profile, save_profile
+
+        save_profile(
+            home,
+            parse_profile(
+                {
+                    "name": "edge",
+                    "endpoints": [
+                        {"id": "lb", "address": "10.0.1.9:443", "collect": {"transport": "none"}}
+                    ],
+                }
+            ),
+        )
+        body = client.get("/api/profiles/edge").json()
+        assert body["endpoints"][0]["collects_from"] is None
+        assert body["observed"] == []
+
     def test_listing_says_which_endpoints_are_observed(self, client) -> None:
         body = client.get("/api/profiles").json()
         assert [p["name"] for p in body["profiles"]] == ["staging"]

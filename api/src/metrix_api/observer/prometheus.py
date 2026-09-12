@@ -142,6 +142,10 @@ class ScrapeTransport:
         host = f"[{collection.host}]" if ":" in collection.host else collection.host
         return cls(url=f"http://{host}:{port}{path}", timeout=timeout)
 
+    def describe(self) -> str:
+        """Where this will fetch from, for the Config page. See SshTransport."""
+        return self.url
+
     async def stream(self, interval: timedelta) -> AsyncIterator[RawSample]:
         import anyio
         import httpx

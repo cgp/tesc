@@ -1,0 +1,48 @@
+{
+  "name": "staging-split",
+  "description": "nginx in front of two app boxes. Every machine observed separately, because host statistics are whole-machine and a shared box cannot be split.",
+  "addressing": "direct",
+  "observe": {
+    "interval": "1s",
+    "collect": ["cpu", "memory", "net"]
+  },
+  "endpoints": [
+    {
+      "id": "nginx",
+      "address": "10.0.1.10:443",
+      "host_header": "staging.example.com",
+      "tls": { "enabled": true },
+      "collect": {
+        "transport": "ssh",
+        "user": "ec2-user"
+      }
+    },
+    {
+      "id": "app-1",
+      "address": "10.0.3.41:8080",
+      "host_header": "staging.example.com",
+      "collect": {
+        "transport": "ssh",
+        "user": "ec2-user"
+      }
+    },
+    {
+      "id": "app-2",
+      "address": "10.0.3.42:8080",
+      "host_header": "staging.example.com",
+      "collect": {
+        "transport": "ssh",
+        "user": "ec2-user"
+      }
+    },
+    {
+      "id": "alb",
+      "address": "10.0.1.9:443",
+      "host_header": "staging.example.com",
+      "tls": { "enabled": true },
+      "collect": {
+        "transport": "none"
+      }
+    }
+  ]
+}

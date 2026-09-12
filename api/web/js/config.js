@@ -39,9 +39,21 @@ export function render(state) {
   return `<div class="metrix-stack">
     ${storageCard(state.health)}
     ${broken}
+    ${LEGEND}
     ${state.profiles.map(profileCard).join("")}
   </div>`;
 }
+
+// The one thing about a profile that is not guessable, stated where the columns it
+// describes are read. An endpoint carries two addresses for two different purposes,
+// and reading either as the other is the mistake this prevents.
+const LEGEND = `<p class="metrix-note text-secondary">
+  <strong>Load target</strong> is the socket requests are sent to.
+  <strong>Observed via</strong> is a separate connection for host statistics — an SSH
+  login, or an exporter to scrape. Nothing is inferred from the load target: the tool
+  does not probe that port or attach to whatever process is listening on it, and the
+  statistics it collects are for the whole machine, not for one process.
+</p>`;
 
 // Where this process is reading and writing. Shown rather than buried in a tooltip:
 // the root is resolved from four different places (§2 of the implementation plan),
@@ -71,8 +83,11 @@ function profileCard(profile) {
   const rows = profile.endpoints
     .map((endpoint) => {
       const observed = profile.observed.includes(endpoint.id);
+      // The address the collector will actually use, not a restatement of the
+      // profile: it is built from the transport itself (routes/profiles.py).
       const collection = observed
-        ? `<span class="badge bg-green-lt">${escape(endpoint.transport)}</span>`
+        ? `<span class="badge bg-green-lt">${escape(endpoint.transport)}</span>
+           <code class="metrix-path ms-1">${escape(endpoint.collects_from ?? "—")}</code>`
         : `<span class="text-secondary">not collected</span>`;
       return `<tr>
         <td class="name">${escape(endpoint.id)}</td>
@@ -109,10 +124,10 @@ function profileCard(profile) {
     <div class="table-responsive">
       <table class="table card-table table-vcenter metrix-table">
         <thead><tr>
-          <th style="width:22%">Endpoint</th>
-          <th style="width:26%">Address</th>
-          <th style="width:28%">Host header</th>
-          <th style="width:24%">Collection</th>
+          <th style="width:14%">Endpoint</th>
+          <th style="width:17%">Load target</th>
+          <th style="width:19%">Host header</th>
+          <th style="width:50%">Observed via</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>

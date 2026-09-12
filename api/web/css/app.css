@@ -151,3 +151,7 @@
 /* A filesystem path has no break opportunities a browser recognises, so without
    this a long Windows root either overflows its cell or stretches the grid. */
 .metrix-path { overflow-wrap: anywhere; }
+
+/* Standing explanation above a table, not an alert: an alert says something has
+   happened, and this is simply true every time the page is opened. */
+.metrix-note { max-width: 90ch; margin: 0; font-size: .875rem; }

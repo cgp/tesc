@@ -55,6 +55,15 @@ class SshTransport:
             key=collection.key,
         )
 
+    def describe(self) -> str:
+        """Where this will connect, for the Config page.
+
+        The destination only. Which transport it is, the page says separately, and
+        two labels for one fact read as a bug.
+        """
+        user = f"{self.user}@" if self.user else ""
+        return f"{user}{self.host}:{self.port}"
+
     async def stream(self, interval: timedelta) -> AsyncIterator[RawSample]:
         import asyncssh  # imported here so the module loads without a live SSH stack
 
