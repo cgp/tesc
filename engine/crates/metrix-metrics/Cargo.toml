@@ -1,0 +1,12 @@
+[package]
+name = "metrix-metrics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "HDR histograms, counters, snapshots, NDJSON output."
+
+[dependencies]
+
+[lints]
+workspace = true

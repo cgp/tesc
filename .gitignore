@@ -1,0 +1,16 @@
+# Rust
+/engine/target/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Runtime data (METRIX_HOME defaults outside the repo, but just in case)
+/metrix-data/
+*.db
+*.ndjson
+*.ndjson.zst

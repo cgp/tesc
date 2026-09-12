@@ -1,0 +1,12 @@
+[package]
+name = "metrix-mock"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Test target with controllable latency, errors, and ceilings."
+
+[dependencies]
+
+[lints]
+workspace = true

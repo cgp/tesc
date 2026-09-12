@@ -1,0 +1,18 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "MetrixReadOnlyDiscovery",
+      "Effect": "Allow",
+      "Action": [
+        "route53:List*",
+        "elasticloadbalancing:Describe*",
+        "ecs:List*",
+        "ecs:Describe*",
+        "ec2:Describe*",
+        "autoscaling:Describe*"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
