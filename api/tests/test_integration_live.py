@@ -180,3 +180,53 @@ class TestScrape:
         assert not gaps, f"scrape reported gaps: {[g.reason for g in gaps]}"
         assert samples[0].metrics[m.MEM_TOTAL] > 0
         assert 0.0 <= samples[-1].metrics[m.CPU_BUSY] <= 100.0
+
+
+@pytest.mark.asyncio
+class TestRecording:
+    async def test_a_live_recording_persists_and_reopens(self, tmp_path) -> None:
+        """The whole A1 loop against a real machine: collect, store, come back to it."""
+        from datetime import timedelta as _td
+
+        from metrix_api.profiles import parse_profile
+        from metrix_api.recording import observe_for
+        from metrix_api.store import open_store
+        from metrix_api.store import recordings as store
+
+        section = ssh_config()
+        profile = parse_profile(
+            {
+                "name": "live",
+                "observe": {"interval": "1s", "collect": ["cpu", "memory"]},
+                "endpoints": [
+                    {
+                        "id": "live-host",
+                        "address": f"{section['host']}:22",
+                        "collect": {
+                            "transport": "ssh",
+                            **({"user": section["user"]} if section.get("user") else {}),
+                            **({"port": int(section["port"])} if section.get("port") else {}),
+                        },
+                    }
+                ],
+            }
+        )
+
+        with open_store(tmp_path / "metrix.db") as conn:
+            row = await observe_for(conn, profile, _td(seconds=4))
+
+            assert row.status == store.FINISHED
+            assert row.duration_ms >= 3000
+
+            cpu = store.series(conn, row.id, "live-host", m.CPU_BUSY)
+            assert len(cpu) >= 2, f"expected several samples, got {len(cpu)}"
+            assert all(0.0 <= value <= 100.0 for _, value in cpu)
+
+            memory = store.series(conn, row.id, "live-host", m.MEM_TOTAL)
+            assert memory and memory[0][1] > 0
+
+            # Groups were honoured: disk was not requested.
+            stored = {metric for _, _, metric, _ in store.samples(conn, row.id)}
+            assert m.DISK_READ_BPS not in stored
+
+            assert not store.gaps(conn, row.id), "a healthy host should produce no gaps"

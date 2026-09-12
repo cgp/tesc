@@ -121,3 +121,14 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - What the live tests cover that fixtures cannot: the remote shell accepts the script, this distribution's `/proc` parses, **every metric group actually yields a value**, CPU modes sum to ~100, no metric is negative, used memory does not exceed total, and skew is small enough for series to align.
 - Real output from the host, for the record: 21.7 GB total memory, 726 processes, 1952 open descriptors, CPU 98.6% idle, network 1.2 KB/s in and 10.7 KB/s out. Nothing surprised the parser.
 - Verified: `scripts/check.sh` all green — 126 passed, 1 skipped (the scrape test; that host has no exporter).
+
+## 2026-09-12 — A1.6 observation recordings
+
+- **A1.6 done.** `recording.py` (start/stop, lifecycle) and `store/recordings.py` (all reads and writes). A recording against the live host now persists and reopens with its samples, gaps, and annotations.
+- **Writes land as they arrive**, not buffered to the end: a recording interrupted by a crash is still worth having up to where it stopped — the same reasoning as drawing gaps rather than hiding them.
+- **Gaps and their annotations are written as one unit.** They answer different questions ("was this collected?" versus "what should the reader know?"), but a gap without its annotation is invisible in the UI, so one function writes both rather than two callers who might disagree.
+- Observation-only collapses baseline and settle into a single window, recorded as `measure` — the phase the numbers are read from. The distinction only earns its keep once load exists.
+- `series_key` is **readable rather than hashed** (`observation|staging|load_balancer|1s|api=0.0.0`): when a trend unexpectedly starts a new line, the reason should be visible without decoding anything. Interval is part of it — a metric sampled every 5s is not comparable with one sampled every second.
+- A profile with no collectable endpoint is **refused before a row is opened**, since an empty recording is indistinguishable from a failed one.
+- The live test now covers the whole A1 loop end to end: 4s against the real host, samples stored, groups honoured (disk absent when unrequested), no gaps, reopened from SQLite.
+- Verified: `scripts/check.sh` all green — 140 passed, 1 skipped.

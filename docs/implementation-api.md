@@ -98,7 +98,7 @@ Nothing here requires the engine. Through A3 the product is a host-observation t
 - [x] **A1.3** — Observer: SSH collection, 1s samples, normalized metric shape (§2.3)
 - [x] **A1.4** — HTTP scrape collector; graceful degradation, `collection_gap` annotation
 - [x] **A1.5** — Live integration test against a real host (gitignored config, native SSH config)
-- [ ] **A1.6** — Observation-only recordings: start/stop, phases, persistence (§10.2)
+- [x] **A1.6** — Observation-only recordings: start/stop, phases, persistence (§10.2)
 - [ ] **A1.7** — Static front end: `index.html`, Tabler, left nav, ES module skeleton
 - [ ] **A1.8** — SSE stream at 1s with `Last-Event-ID` replay; live host stats on the Stats page
 
