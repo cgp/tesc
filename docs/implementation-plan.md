@@ -2,11 +2,13 @@
 
 Companion to [design-outline.md](design-outline.md). That document says what to build and why; this one says in what order, with what structure, and how to tell when each part is done.
 
+Section references written as §N point into design-outline.md unless they name a section of this document.
+
 ---
 
 ## 1. Repository structure
 
-A single repo with two build systems side by side. The Rust engine and the Python API are separate deployables that share exactly one contract — the plan schema — and nothing else.
+A single repo with two build systems side by side. The Rust engine and the Python API are separate deployables that share exactly one contract — the run spec — and nothing else. The engine must remain shippable on its own (§2.2), so the dependency only ever points one way: the API knows about the engine, never the reverse.
 
 ```
 metrix/
@@ -17,36 +19,38 @@ metrix/
 │   └── implementation-plan.md
 │
 ├── schema/                          # THE shared contract (§1.1)
-│   ├── plan.schema.json             # generated from Rust types, committed
+│   ├── runspec.schema.json          # plan + targets; generated from Rust types
 │   ├── profile.schema.json
 │   └── events.schema.json           # NDJSON record shapes engine → API
 │
-├── engine/                          # Rust workspace
+├── engine/                          # Rust workspace — ships alone (§2.2)
 │   ├── Cargo.toml                   # workspace root
 │   ├── Cargo.lock
-│   └── crates/
-│       ├── metrix-engine/           # the binary: runtime, scheduler, HTTP
-│       ├── metrix-plan/             # plan types, serde, validation, schema gen
-│       ├── metrix-metrics/          # HDR histograms, counters, snapshots, NDJSON out
-│       ├── metrix-gen/              # generators: template, dataset, lua, plugin, exec
-│       └── metrix-mock/             # test target with controllable latency/errors (§5.1)
+│   ├── crates/
+│   │   ├── metrix-engine/           # the binary: runtime, scheduler, HTTP, target loop
+│   │   ├── metrix-spec/             # run-spec types, serde, validation, schema gen
+│   │   ├── metrix-metrics/          # HDR histograms, counters, snapshots, NDJSON out
+│   │   ├── metrix-gen/              # generators: template, dataset, lua, plugin, exec
+│   │   └── metrix-mock/             # test target with controllable latency/errors (§5.1)
+│   └── dist/                        # release artifacts: static binary + plan bundle
 │
 ├── api/                             # Python, managed with uv
 │   ├── pyproject.toml
 │   ├── uv.lock                      # committed
 │   ├── src/metrix_api/
-│   │   ├── main.py                  # FastAPI app factory
-│   │   ├── cli.py                   # metrix run | observe | sweep | calibrate
+│   │   ├── main.py                  # FastAPI app factory (the only entry point)
 │   │   ├── config.py                # METRIX_HOME resolution, settings
-│   │   ├── routes/                  # plans, runs, profiles, recordings, stream, db
-│   │   ├── runner/                  # engine subprocess supervision, NDJSON ingest
+│   │   ├── routes/                  # plans, runs, profiles, recordings, stream
+│   │   ├── runner/                  # run-spec assembly, engine supervision, NDJSON ingest
 │   │   ├── discovery/               # ecs.py, inventory.py  (boto3 lives ONLY here)
 │   │   ├── observer/                # collector.py, ssh.py, scrape.py
 │   │   ├── stats/                   # histogram merge, percentiles, CI, noise floor
-│   │   ├── store/                   # SQLite schema, migrations, queries
-│   │   └── ui/
-│   │       ├── templates/           # Jinja + Tabler
-│   │       └── static/              # uPlot, CSS, minimal JS
+│   │   └── store/                   # SQLite schema, migrations, queries
+│   ├── web/                         # the static front end — no templating
+│   │   ├── index.html
+│   │   ├── css/                     # Tabler + a little of our own
+│   │   └── js/                      # api, stream, state, table, charts,
+│   │                                #   config, recordings  (ES modules)
 │   └── tests/
 │
 ├── examples/
@@ -66,17 +70,17 @@ metrix/
 
 ### 1.1 The one shared contract
 
-The plan schema is the only thing both languages must agree on, so it gets a single source of truth: **Rust types are authoritative**, and `schema/plan.schema.json` is generated from them via `schemars` and committed.
+The **run spec** — plan plus target list — is the only thing both languages must agree on, so it gets a single source of truth: **Rust types are authoritative**, and `schema/runspec.schema.json` is generated from them via `schemars` and committed.
 
 - Engine: deserializes with `serde`, so the types *are* the validation.
-- API: validates submitted plans against the committed JSON Schema, and serves it at `GET /api/schema/plan` for LLM authors (§4 of the design).
+- API: validates submitted plans against the committed JSON Schema, serves it at `GET /api/schema/plan` for LLM authors (§4 of the design), and assembles the targets block from a resolved profile.
 - CI regenerates and fails on any diff, so the file cannot drift from the types.
 
 This matters more than usual here: a plan that the API accepts and the engine then rejects would surface as a failed run rather than a validation error, which is exactly the loop the machine-authoring workflow depends on not having.
 
 ### 1.2 Why the engine is a workspace, not one crate
 
-`metrix-plan` and `metrix-metrics` are separable and independently testable — histogram merging and percentile math deserve their own test suite without a runtime attached, and the schema generator needs the plan types without pulling in `hyper`. `metrix-mock` being a crate rather than a test fixture means it can run as a standalone binary during development.
+`metrix-spec` and `metrix-metrics` are separable and independently testable — histogram merging and percentile math deserve their own test suite without a runtime attached, and the schema generator needs the spec types without pulling in `hyper`. `metrix-mock` being a crate rather than a test fixture means it can run as a standalone binary during development.
 
 ---
 
@@ -119,23 +123,34 @@ $METRIX_HOME/
 
 **Files hold the bulk streams**: per-request events and retained error-sample bodies. These are the only large things, and keeping them as files on disk makes the purge button (§17.1) a directory delete rather than a transaction that has to vacuum a database.
 
-A plan directory is self-contained — plan, generators, datasets together — which is what makes the Lua sandbox root meaningful and what makes a plan copyable between environments.
+A plan directory is self-contained — plan, generators, datasets together — which is what makes the Lua sandbox root meaningful, what makes a plan copyable between environments, and what makes it shippable to a load box as a single tarball alongside the binary.
 
 ### 2.2 How it runs
 
+**The control plane** — one command, and everything else happens in the browser: starting load tests, starting observation-only recordings, browsing recordings.
+
 ```bash
-uv sync                                   # once
-uv run metrix-api                         # serves UI + API on :8080
-
-uv run metrix run   --plan checkout-mixed --profile staging
-uv run metrix observe --profile staging --duration 10m
-uv run metrix sweep --plan checkout-mixed --profile staging --over tasks
-uv run metrix calibrate
-
-engine/target/release/metrix-engine --plan plan.json --summary - --events events.ndjson
+uv sync                    # once
+uv run metrix-api          # serves the static page + API on :8080
 ```
 
-The Python CLI is a thin wrapper over the same API the UI uses — it needs discovery, storage, and the observer, so it cannot live in the engine. The engine binary stays independently runnable against a bare plan file with no cloud context, no database, and no API, which is what keeps it testable and what makes it usable in CI.
+**The engine** — one command, one self-contained run spec, no Python involved:
+
+```bash
+metrix-engine --spec runspec.json --summary - --events events.ndjson
+metrix-engine --calibrate --out machine-profile.json
+```
+
+The run spec carries the plan *and* the target list, so a sweep across eight containers is that same single invocation — there is no separate sweep command, and no orchestrator above the engine. A spec is written by hand for local work, or exported from the API (`GET /api/runs/{id}/spec`) once a profile has resolved the targets.
+
+**Remote execution** is the same command somewhere else:
+
+```bash
+scp engine/dist/metrix-engine loadbox:~/ && scp -r plans/checkout-mixed loadbox:~/
+ssh loadbox 'metrix-engine --spec checkout-mixed/runspec.json --summary -' > summary.ndjson
+```
+
+Nothing about that path is special-cased. It is the plain shape of the tool, which is why it will still work when it is wired up properly later (M6.7).
 
 ---
 
@@ -148,7 +163,7 @@ Ordered so that the riskiest assumptions get tested earliest and each milestone 
 | Step | Deliverable |
 |---|---|
 | 0.1 | Repo skeleton, Rust workspace, `uv init` for the API, committed lockfiles |
-| 0.2 | `metrix-plan` types for a minimal plan (target, load, one scenario, one step) |
+| 0.2 | `metrix-spec` types for a minimal run spec (targets, load, one scenario, one step) |
 | 0.3 | `schemars` schema generation + `scripts/check-schema.sh` |
 | 0.4 | `metrix-mock`: HTTP target with configurable latency distribution, error injection, and slow-start behavior |
 | 0.5 | CI: `cargo test`, `cargo clippy -D warnings`, `uv run pytest`, schema drift check |
@@ -163,15 +178,15 @@ A thin vertical slice through every layer, before any layer is complete.
 
 | Step | Deliverable |
 |---|---|
-| 1.1 | Engine: open-model fixed-rate scheduler, HTTP/1.1 + HTTP/2 via `hyper`/`rustls`, one request type |
+| 1.1 | Engine: open-model fixed-rate scheduler, HTTP/1.1 + HTTP/2 via `hyper`/`rustls`, one request type, **run spec in / NDJSON out with no API present** |
 | 1.2 | `metrix-metrics`: per-worker HDR histograms + counters, merged on a 250ms tick |
 | 1.3 | NDJSON summary output; `--events` per-request stream |
 | 1.4 | Engine self-metrics: send-schedule drift, in-flight, queue depth (§13.2) |
-| 1.5 | API: run lifecycle — spawn engine, ingest NDJSON, write SQLite + run directory |
-| 1.6 | UI shell: Tabler, left nav, Config / Performance › Stats / Performance › Charts / Recordings |
+| 1.5 | API: run-spec assembly, engine supervision, NDJSON ingest, SQLite + run directory |
+| 1.6 | Static front end: `index.html`, Tabler, left nav, ES module skeleton (`api` / `stream` / `state` / `table`) |
 | 1.7 | SSE stream at 1s with `Last-Event-ID` replay; **Stats table page live** (§14) |
 
-**Done when:** a plan runs 30s at 75 RPS against the mock, the stats table updates once per second without lag or column jitter, achieved RPS matches target within tolerance, and reconnecting the browser mid-run leaves no gap.
+**Done when:** `metrix-engine --spec ...` runs 30s at 75 RPS against the mock **from a bare shell with the API stopped**, and separately, the same run launched from the browser updates the stats table once per second without lag or column jitter, with reconnect leaving no gap.
 
 *Why this shape:* the pipeline is where integration risk lives — subprocess supervision, backpressure, stream reconnect. Proving it end-to-end at week two is worth far more than a feature-complete engine with nothing to display it.
 
@@ -185,7 +200,7 @@ Nothing after this point is meaningful if this milestone is wrong.
 | 2.2 | Percentile support rules: the 2250 floor, CIs on p99, p99.9 suppression (§12.1) |
 | 2.3 | Coordinated-omission correction reported beside raw (§12.2) |
 | 2.4 | Run annotations + detector framework (§13.1), starting with `concurrency_cap_reached`, `rate_not_achieved`, `send_schedule_drift`, `sample_count_low` |
-| 2.5 | `metrix calibrate` + machine profile; headroom check and refusal above 90% (§13.2) |
+| 2.5 | `metrix-engine --calibrate` + machine profile; headroom check and refusal above 90% (§13.2) |
 | 2.6 | Run metadata: plan hash, engine version, API version + lock hash, seed, machine profile (§9.8) |
 
 **Done when:** against a mock with a known injected distribution, reported percentiles match the true values within their stated confidence intervals; a deliberately capped run raises `concurrency_cap_reached` with the right window percentage; and a run driven past the calibrated ceiling is refused rather than reported.
@@ -213,7 +228,7 @@ Nothing after this point is meaningful if this milestone is wrong.
 
 | Step | Deliverable |
 |---|---|
-| 4.1 | Target profiles with explicit endpoint lists (no discovery) |
+| 4.1 | Target profiles with explicit endpoint lists (no discovery); profile → run-spec targets block |
 | 4.2 | Observer: SSH collection, 1s samples, normalized metric shape (§2.3) |
 | 4.3 | HTTP scrape collector; graceful degradation and `collection_gap` annotation |
 | 4.4 | Baseline/settle host statistics: delta-from-baseline, recovery curves, leak detection (§9.7) |
@@ -221,8 +236,9 @@ Nothing after this point is meaningful if this milestone is wrong.
 | 4.6 | ECS discovery: hostname → ALB → target group → service → tasks → containers → instances (§3.1) |
 | 4.7 | Resolved inventory: storage, pinning to runs, refresh at phase boundaries |
 | 4.8 | Direct container addressing: Host override, SNI, reachability verification at setup (§3.4) |
+| 4.9 | **Engine: sequential multi-target execution** — target list, ordering, inter-target gap, per-target phased runs (§3.5) |
 
-**Done when:** a hostname resolves to a task list with image digests; observation-only recording works with no plan attached; a run against one container carries correct Host and SNI; and an unreachable VPC fails at profile setup with a useful message rather than at run time.
+**Done when:** a hostname resolves to a task list with image digests; observation-only recording starts and stops from the front end with no plan attached; a run against one container carries correct Host and SNI; a hand-written spec listing three mock targets runs all three in sequence from a bare shell; and an unreachable VPC fails at profile setup rather than at run time.
 
 ### M5 — Analysis
 
@@ -246,9 +262,10 @@ Nothing after this point is meaningful if this milestone is wrong.
 | 6.1 | Breakpoint mode (§11): stepped ramp, per-step statistics, `step_recovery` |
 | 6.2 | Stop conditions incl. generator-vs-target discrimination and `generator_limited` abort (§11.3) |
 | 6.3 | Refinement pass; breakpoint report with knee / cliff / max-sustained / limiting resource |
-| 6.4 | Sequential sweep (§3.5) and sweep comparison view (§17.6) |
+| 6.4 | Sweep comparison view (§17.6) over the multi-target runs from 4.9 |
 | 6.5 | `POST /api/plans/generate` from OpenAPI / WSDL / HAR / access log (§8) |
 | 6.6 | SLO evaluation, engine exit codes, machine-readable verdict for CI (§16) |
+| 6.7 | **Remote execution**: static build, `engine/dist` bundle, ship-and-run over SSH, stream collection back to the API |
 
 **Done when:** a breakpoint run against a mock with a known capacity ceiling finds it within one step width; the same run against a deliberately under-provisioned generator aborts as `generator_limited` rather than reporting a number; and a generated draft plan validates and runs without hand-editing.
 
@@ -258,12 +275,13 @@ Nothing after this point is meaningful if this milestone is wrong.
 
 These are easy to erode step by step, so they are worth restating as build-time rules:
 
-1. **boto3 appears only under `api/src/metrix_api/discovery/`.** No AWS SDK in the engine, ever.
-2. **The engine never blocks on a consumer.** Any stream backpressure is dropped and annotated, never allowed to perturb the send loop.
-3. **No allocation or locking on the hot path.** Per-worker aggregation, merged on the snapshot tick.
-4. **Every displayed percentile carries its sample count.** The rule lives in one place in `stats/` and the UI cannot bypass it.
-5. **Secrets never reach SQLite, run directories, exports, or error samples.** Redaction is applied at capture, not at display.
-6. **Desktop only.** No responsive breakpoints.
+1. **The engine never depends on the API.** No Python on the load path, no config outside the run spec, no network call to the control plane. Every engine feature must be exercisable as `metrix-engine --spec file.json` on a machine with nothing else installed.
+2. **boto3 appears only under `api/src/metrix_api/discovery/`.** No AWS SDK in the engine, ever.
+3. **The engine never blocks on a consumer.** Any stream backpressure is dropped and annotated, never allowed to perturb the send loop.
+4. **No allocation or locking on the hot path.** Per-worker aggregation, merged on the snapshot tick.
+5. **Every displayed percentile carries its sample count.** The rule lives in one place in `stats/` and the UI cannot bypass it.
+6. **Secrets never reach SQLite, run directories, exports, or error samples.** Redaction is applied at capture, not at display.
+7. **Desktop only.** No responsive breakpoints.
 
 ---
 
@@ -296,13 +314,14 @@ Discovery is tested against committed JSON fixtures of real `describe_*` respons
 | Schema drift between engine and API | Generated schema + CI check from M0.3 |
 | Exec generators becoming the default | Lua built first (M3.6) |
 | SSE backpressure perturbing a run | Engine never blocks (rule 2); verified in M1 acceptance |
-| Discovery complexity leaking into the engine | Rule 1, enforced by a lint that fails on `boto3` imports outside `discovery/` |
+| Discovery complexity leaking into the engine | Rules 1–2, with a CI job that runs the full M1 acceptance with the API stopped |
+| Front end drifting into a framework | One static page, no build step; if a bundler becomes necessary, that is a decision to revisit deliberately |
 
 ---
 
 ## 7. First week
 
-1. M0.1–0.3 — skeleton, plan types, schema generation.
+1. M0.1–0.3 — skeleton, run-spec types, schema generation.
 2. M0.4 — the mock target, with a dial-able latency distribution.
 3. M1.1–1.3 — fixed-rate scheduler and NDJSON output.
 4. Run 30s at 75 RPS against the mock and compare the reported p50/p95/p99 against the injected distribution by hand.
