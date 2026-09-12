@@ -1,0 +1,28 @@
+{
+  "order": "shuffle",
+  "gap": "30s",
+  "list": [
+    {
+      "id": "task-a1b2c3",
+      "address": "10.0.3.41:8080",
+      "host_header": "api.staging.example.com",
+      "attributes": {
+        "instance_type": "m6i.large",
+        "availability_zone": "us-east-1a",
+        "task_definition": "shop-api:47",
+        "image_digest": "sha256:9f2c1e"
+      }
+    },
+    {
+      "id": "task-d4e5f6",
+      "address": "10.0.3.77:8080",
+      "host_header": "api.staging.example.com",
+      "attributes": {
+        "instance_type": "m6i.large",
+        "availability_zone": "us-east-1b",
+        "task_definition": "shop-api:47",
+        "image_digest": "sha256:9f2c1e"
+      }
+    }
+  ]
+}

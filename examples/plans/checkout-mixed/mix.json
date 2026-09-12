@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "name": "checkout-mixed",
+  "calls": ["calls/shop.json"],
+
+  "defaults": {
+    "headers": { "Accept": "application/json" },
+    "timeout_ms": 5000,
+    "follow_redirects": false
+  },
+
+  "auth": {
+    "mode": "oauth_client_credentials",
+    "token_url": "https://idp.example.com/oauth2/token",
+    "client_id": "{{ env.CLIENT_ID }}",
+    "client_secret": "{{ secret.staging_client_secret }}",
+    "scope": "orders.write",
+    "inject": { "header": "Authorization", "format": "Bearer {{ token }}" },
+    "refresh": { "strategy": "expires_in_margin", "margin_s": 30, "on_401": "refresh_once" },
+    "identity": "shared"
+  },
+
+  "phases": { "baseline": "30s", "settle": "60s" },
+
+  "load": {
+    "mode": "fixed",
+    "duration": "60s",
+    "warmup": "10s",
+    "model": "open",
+    "rate": 150,
+    "max_concurrency": 200
+  },
+
+  "datasets": {
+    "users": { "file": "data/users.csv", "mode": "round_robin" }
+  },
+
+  "generators": {
+    "order-xml": { "type": "lua", "file": "gen/order.lua", "entry": "generate" }
+  },
+
+  "chains": [
+    {
+      "name": "login-fail",
+      "percent": 30,
+      "session": "fresh",
+      "steps": [{ "id": "post", "call": "login-bad-password" }]
+    },
+    {
+      "name": "login",
+      "percent": 10,
+      "session": "fresh",
+      "steps": [{ "id": "post", "call": "login" }]
+    },
+    {
+      "name": "logout",
+      "percent": 5,
+      "session": "reuse",
+      "steps": [{ "id": "post", "call": "logout" }]
+    },
+    {
+      "name": "search",
+      "percent": 20,
+      "session": "reuse",
+      "steps": [{ "id": "query", "call": "search-products" }]
+    },
+    {
+      "name": "cart-add-remove",
+      "percent": 20,
+      "session": "pool",
+      "pool_size": 50,
+      "steps": [
+        { "id": "add", "call": "cart-add" },
+        { "id": "remove", "call": "cart-remove" }
+      ]
+    },
+    {
+      "name": "checkout",
+      "percent": 15,
+      "session": "fresh",
+      "steps": [
+        { "id": "create", "call": "create-order" },
+        {
+          "id": "poll",
+          "call": "get-order",
+          "repeat_until": {
+            "json": "$.status",
+            "equals": "complete",
+            "max_attempts": 5,
+            "interval_ms": 200
+          }
+        }
+      ]
+    }
+  ],
+
+  "engine": { "worker_threads": 8, "connections_per_host": 256 },
+  "capture": { "error_samples": 10, "body_max_kb": 64, "redact": ["Authorization", "Set-Cookie"] },
+  "observe": { "interval_ms": 1000, "collect": ["cpu", "memory", "disk", "net", "process"] },
+
+  "slo": [
+    { "metric": "p99_latency_ms", "chain": "search", "max": 400 },
+    { "metric": "error_rate", "max": 0.001 }
+  ]
+}

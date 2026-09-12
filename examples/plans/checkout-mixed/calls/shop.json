@@ -1,0 +1,70 @@
+{
+  "login": {
+    "description": "Sign in with valid credentials and take a session token",
+    "method": "POST",
+    "path": "/api/session",
+    "headers": { "Content-Type": "application/json" },
+    "body": "{\"user\":\"{{ users.email }}\",\"pass\":\"{{ users.password }}\"}",
+    "assert": [{ "status": 200 }, { "json": "$.token", "exists": true }],
+    "extract": { "token": { "json": "$.token" } }
+  },
+
+  "login-bad-password": {
+    "description": "Sign in with a wrong password. A 401 here is a pass, not an error.",
+    "method": "POST",
+    "path": "/api/session",
+    "headers": { "Content-Type": "application/json" },
+    "body": "{\"user\":\"{{ users.email }}\",\"pass\":\"not-the-password\"}",
+    "assert": [{ "status": 401 }]
+  },
+
+  "logout": {
+    "description": "End the current session",
+    "method": "DELETE",
+    "path": "/api/session",
+    "assert": [{ "status_in": [200, 204] }]
+  },
+
+  "search-products": {
+    "description": "Full-text product search, the highest-volume read path",
+    "method": "GET",
+    "path": "/api/products/search",
+    "query": { "q": "{{ pick('shoes','hat','lamp','desk') }}", "page": "{{ rand(1,20) }}" },
+    "assert": [{ "status": 200 }, { "json": "$.items", "exists": true }, { "max_latency_ms": 300 }],
+    "extract": { "pid": { "json": "$.items[0].id" } }
+  },
+
+  "cart-add": {
+    "description": "Add one item to the cart",
+    "method": "POST",
+    "path": "/api/cart/items",
+    "headers": { "Content-Type": "application/json" },
+    "body": "{\"product\":\"{{ pid }}\",\"qty\":1}",
+    "assert": [{ "status": 201 }],
+    "extract": { "line_id": { "json": "$.id" } }
+  },
+
+  "cart-remove": {
+    "description": "Remove the line item added by the previous step",
+    "method": "DELETE",
+    "path": "/api/cart/items/{{ line_id }}",
+    "assert": [{ "status_in": [200, 204] }]
+  },
+
+  "create-order": {
+    "description": "Submit an order as XML; returns 201 or 202 with an order id",
+    "method": "POST",
+    "path": "/api/orders",
+    "headers": { "Content-Type": "application/xml" },
+    "body": { "generator": "order-xml", "args": { "user": "{{ users.email }}" } },
+    "assert": [{ "status_in": [201, 202] }, { "xpath": "/order/id", "exists": true }],
+    "extract": { "order_id": { "xpath": "/order/id/text()" } }
+  },
+
+  "get-order": {
+    "description": "Poll an order until it reaches a terminal state",
+    "method": "GET",
+    "path": "/api/orders/{{ order_id }}",
+    "assert": [{ "status": 200 }]
+  }
+}
