@@ -7,9 +7,37 @@
 
 :root {
   --metrix-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+
+  /* Tabler's defaults are tuned for a marketing-adjacent dashboard. This is a
+     measurement tool read for minutes at a time, so muted text is darkened until a
+     label is as readable as a number, and the corners are softened to Tabler's own
+     large radius. Both are variable overrides, not rule overrides: nothing here
+     fights the vendored stylesheet. */
+  --tblr-body-color: #222222;
+  --tblr-muted: #4b5563;
+  --tblr-secondary: #4b5563;
+  --tblr-secondary-rgb: 75, 85, 99;
+  --tblr-border-radius: .5rem;
+  /* Small controls keep a tighter corner than a card, but 2px beside an 8px card
+     reads as a mistake rather than as a hierarchy. */
+  --tblr-border-radius-sm: .375rem;
+  --tblr-icon-color: #6b7280;
+}
+
+/* Tabler declares the navbar's own colours on `.navbar`, so a `:root` value never
+   reaches them. Menu labels are the most-read text on the page; they get the body
+   colour rather than the muted one. */
+.navbar-vertical {
+  --tblr-navbar-color: #222222;
 }
 
 /* ------------------------------------------------------------------ the shell */
+
+/* `overflow-y: scroll` reserves a scrollbar gutter whether or not the menu
+   overflows, which reads as a stripe of dead space beside the content rather than
+   as a scrollbar. This menu is four items long; let the gutter appear only if it is
+   ever needed. */
+.navbar-vertical.navbar-expand-sm { overflow-y: auto; }
 
 .navbar-vertical .navbar-brand {
   justify-content: flex-start;

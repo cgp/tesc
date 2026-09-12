@@ -173,3 +173,12 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - Content is unchanged — same four pages, same routes, same numbers. The one addition is menu section labels (Setup / Performance / Archive), so Recordings no longer reads as part of Performance.
 - Verified in the browser against seeded data: every page, a live recording started from Config, the gap alert, Stop, and the status node surviving six seconds of ticks.
 - Verified: `scripts/check.sh` all green — 170 passed, 1 skipped.
+
+## 2026-09-12 — A1.9 follow-up: a truncated file, and contrast.
+
+- **`config.js` was committed empty.** The line-ending cleanup in the previous commit used `open(f,'wb').write(open(f,'rb').read()…)`; `'wb'` truncates before the read runs, so the file was blanked *after* the last browser check and shipped at 0 bytes. It surfaced as `entry.view.render is not a function`, which points at the router rather than at the file.
+- `scripts/check.sh` gained a fifth rule: **no tracked source file is empty.** An empty file is never intentional and always fails somewhere other than where it is. Verified by emptying a module and watching the check name it.
+- **Contrast raised.** Muted text was `#6c7a91`, which is a marketing grey; menu labels now take the body colour (`#222`), muted text is `#4b5563`, and icons `#6b7280`. All variable overrides — the navbar's colour had to be set on `.navbar-vertical` because Tabler declares it there and a `:root` value never reaches it.
+- **Corners softened** to Tabler's own large radius, 8px for cards and 6px for small controls; 2px beside an 8px card read as a mistake rather than a hierarchy.
+- **The gap beside the menu halved, 31px to 16px.** Half of it was never margin: `.navbar-vertical` is `overflow-y: scroll`, which reserves a scrollbar gutter whether or not a four-item menu overflows, and an empty gutter reads as dead space. Now `auto`.
+- Verified: `scripts/check.sh` all green — 170 passed, 1 skipped. Every route re-rendered in the browser with no new console errors.

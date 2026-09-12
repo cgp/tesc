@@ -68,6 +68,21 @@ if [[ $scope == all || $scope == contract ]]; then
         echo "ok"
     ' _ "$root"
 
+    # An empty tracked source file is never intentional, and it fails in a way that
+    # points somewhere else -- a truncated module reads as a routing bug. Cheap to
+    # check, and it has already caught one file emptied by a careless rewrite.
+    run "contract: no tracked source file is empty" bash -c '
+        root="$1"
+        cd "$root" || exit 1
+        empty=$(git ls-files -- "*.py" "*.rs" "*.js" "*.css" "*.html" "*.sql" "*.sh" "*.toml"             | while read -r f; do [[ -f $f && ! -s $f ]] && echo "$f"; done)
+        if [[ -n $empty ]]; then
+            echo "empty tracked source file(s):"
+            echo "$empty" | sed "s/^/  /"
+            exit 1
+        fi
+        echo "ok"
+    ' _ "$root"
+
     # The front end must draw itself without the public internet: this tool watches
     # private networks, and a menu that renders only when a CDN answers is a menu
     # that does not render on the box that needs it. Tabler is vendored under
