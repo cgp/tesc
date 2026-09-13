@@ -59,14 +59,14 @@ The JavaScript is split into ES modules along clear seams so it stays maintainab
 |---|---|
 | `api.js` | Every fetch call; the only place a URL appears |
 | `stream.js` | SSE connection, reconnect, `Last-Event-ID` replay |
-| `state.js` | Current run state; the single source the views read |
+| `state.js` | Shared state; subscriptions select the values each view reads |
 | `table.js` | The stats table (§14) |
 | `charts.js` | uPlot setup and updates (§15) |
 | `config.js` | Profiles, plans, validation display |
 | `recordings.js` | Archive, series, comparison views |
 | `ui.js` | Icons and empty states — the markup the views share |
 
-Views subscribe to `state.js` and re-render from it; nothing else talks to the network. Charts use uPlot, which handles thousands of points at 60fps without fighting us.
+Views declare selectors for the state they read; subscriptions compare selected values by identity and render only when those values change. Updates replace state objects rather than mutate them in place. The shell, health badge, error banner and active view subscribe separately: polling, live samples and background list responses must preserve an open editor's fields, focus and selection. An open profile editor selects only its draft; intentional editor actions capture the form before replacing that draft. Views make no network calls. Charts use uPlot, which handles thousands of points at 60fps without fighting us.
 
 **Desktop only.** No mobile layout, no responsive breakpoints, no touch affordances — this is a wide-screen tool for reading dense tables and multi-series charts side by side, and narrowing it would cost exactly the density that makes it useful. Where "responsive" appears in this document it means *does not lag* (§2.5), never *reflows for small screens*.
 

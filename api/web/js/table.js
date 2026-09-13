@@ -8,6 +8,10 @@
 import { duration, escape, metricValue, targetLabel } from "./format.js";
 import { empty, icon } from "./ui.js";
 
+export function selectState(state) {
+  return state.live?.latest ? [state.live] : [state.live, state.selectedRecording];
+}
+
 export function render(state) {
   const live = state.live;
   const recording = state.selectedRecording;

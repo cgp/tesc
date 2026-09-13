@@ -4,7 +4,7 @@
 #
 #   scripts/check.sh            everything
 #   scripts/check.sh engine     Rust only
-#   scripts/check.sh api        Python only
+#   scripts/check.sh api        Python and front end
 #   scripts/check.sh contract   schemas and the rules that must not erode
 set -uo pipefail
 
@@ -37,6 +37,7 @@ fi
 if [[ $scope == all || $scope == api ]]; then
     run "api: ruff" uv run --project "$root/api" ruff check "$root/api"
     run "api: pytest" uv run --project "$root/api" pytest -q "$root/api"
+    run "api: front-end regression" node --test "$root/api/tests/web/"*.test.mjs
 fi
 
 # ------------------------------------------------------------------- contract

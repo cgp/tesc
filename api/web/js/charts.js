@@ -7,6 +7,10 @@
 import { escape } from "./format.js";
 import { icon } from "./ui.js";
 
+export function selectState(state) {
+  return [state.selectedRecording];
+}
+
 export function render(state) {
   const recording = state.selectedRecording;
 

@@ -4,9 +4,8 @@
 // runs exactly the validation a hand-written file goes through -- one write path,
 // and a form that cannot save something the file loader would reject.
 //
-// A draft lives in state, not in the DOM. Every state change replaces the markup,
-// so adding an endpoint row would otherwise wipe every field typed so far; instead
-// the form is read back into the draft before any change that re-renders.
+// The editor selects only its draft. Typing stays in the live form until an
+// intentional editor action reads it back before rebuilding or saving the draft.
 
 import { escape, targetLabel } from "./format.js";
 import { empty, icon } from "./ui.js";
@@ -30,8 +29,13 @@ export function blankEndpoint() {
   return { id: "", address: "", host_header: "", collect: { transport: "none" } };
 }
 
+export function selectState(state) {
+  return state.profileDraft
+    ? [state.profileDraft]
+    : [state.profileDraft, state.profiles, state.brokenProfiles, state.profilesReadAt, state.resolving];
+}
+
 export function render(state) {
-  if (state.error) return `<div class="alert alert-danger">${escape(state.error)}</div>`;
   if (state.profileDraft) return editor(state.profileDraft);
 
   const broken = state.brokenProfiles.length

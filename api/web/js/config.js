@@ -4,8 +4,11 @@
 import { escape } from "./format.js";
 import { empty, field } from "./ui.js";
 
+export function selectState(state) {
+  return [state.health];
+}
+
 export function render(state) {
-  if (state.error) return `<div class="alert alert-danger">${escape(state.error)}</div>`;
   if (!state.health) {
     return empty({
       icon: "alert-triangle",

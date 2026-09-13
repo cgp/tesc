@@ -1,5 +1,5 @@
-// Wiring: hash routing, data loading, click actions, and one render pass per state
-// change.
+// Wiring: hash routing, data loading, click actions, and selective subscriptions
+// for the shell, health badge, error banner and active view.
 //
 // Views are pure functions of state (state.js) and never touch the network; api.js
 // is the only module that does, and stream.js writes into state without knowing
@@ -51,6 +51,19 @@ const ROUTES = {
 };
 
 const DEFAULT_ROUTE = "recordings";
+
+function activeRoute(state) {
+  return state.route ?? { name: DEFAULT_ROUTE };
+}
+
+function activeEntry(state) {
+  return ROUTES[activeRoute(state).name] ?? ROUTES[DEFAULT_ROUTE];
+}
+
+function selectView(state) {
+  const route = activeRoute(state);
+  return [route.name, route.recordingId, ...activeEntry(state).view.selectState(state)];
+}
 
 function parseHash() {
   const path = (location.hash || "").replace(/^#\/?/, "");
@@ -159,9 +172,9 @@ function render(state) {
   }
 }
 
-function renderView(state) {
-  const route = state.route ?? { name: DEFAULT_ROUTE };
-  const entry = ROUTES[route.name] ?? ROUTES[DEFAULT_ROUTE];
+function renderShell(state) {
+  const route = activeRoute(state);
+  const entry = activeEntry(state);
 
   document.getElementById("page-pretitle").textContent = entry.section;
   document.getElementById("page-title").textContent = entry.title;
@@ -171,15 +184,21 @@ function renderView(state) {
   for (const item of document.querySelectorAll("#nav .nav-item[data-route]")) {
     item.classList.toggle("active", item.dataset.route === route.name);
   }
+}
 
+function renderView(state) {
   // A live table patches its own cells rather than being rebuilt every second:
   // replacing the markup would destroy text selection and make the Stop button
   // unclickable under the cursor.
-  if (!state.error && route.name === "stats" && table.patch(state)) return;
+  if (activeRoute(state).name === "stats" && table.patch(state)) return;
 
-  document.getElementById("view").innerHTML = state.error
+  document.getElementById("view").innerHTML = activeEntry(state).view.render(state);
+}
+
+function renderError(state) {
+  document.getElementById("error").innerHTML = state.error
     ? `<div class="alert alert-danger">${escape(state.error)}</div>`
-    : entry.view.render(state);
+    : "";
 }
 
 async function onRouteChange() {
@@ -190,24 +209,31 @@ async function onRouteChange() {
   await load(route);
 }
 
-async function pollHealth() {
+function renderHealth(state) {
   const badge = document.getElementById("health");
   const dot = badge.querySelector(".status-dot");
   const text = document.getElementById("health-text");
-  try {
-    const health = await api.health();
-    set({ health });
+  const health = state.health;
+  if (health) {
     badge.className = "status status-green";
     badge.title = health.home;
     // Only a reachable API pulses. A dot still animating while nothing answers is
     // the one thing this indicator must never do.
     dot.classList.add("status-dot-animated");
     text.textContent = `v${health.version}`;
-  } catch {
+  } else {
     badge.className = "status status-red";
     badge.title = "";
     dot.classList.remove("status-dot-animated");
     text.textContent = "API unreachable";
+  }
+}
+
+async function pollHealth() {
+  try {
+    set({ health: await api.health() });
+  } catch {
+    set({ health: null });
   }
 }
 
@@ -226,9 +252,8 @@ async function rejoinLive() {
 
 /* ------------------------------------------------------------ profile editing */
 
-// The draft is the source of truth, not the DOM: every state change replaces the
-// markup, so anything typed has to be read back before a change that re-renders.
-// Every mutating action goes through here first.
+// Read typing back before intentional editor changes. Background subscriptions
+// never rebuild this form, so unrelated API responses preserve the live DOM.
 function syncDraft() {
   const draft = get().profileDraft;
   const form = document.querySelector("[data-profile-form]");
@@ -324,8 +349,8 @@ async function deleteProfile(name) {
 
 /* ------------------------------------------------------------------ listeners */
 
-// One delegated listener rather than per-render bindings, since the view is replaced
-// wholesale on every state change.
+// One delegated listener rather than per-render bindings, since intentional view
+// updates replace its markup.
 document.addEventListener("click", (event) => {
   const button = event.target.closest("[data-action]");
   if (!button) return;
@@ -368,7 +393,14 @@ document.addEventListener("submit", (event) => {
   saveProfile();
 });
 
-subscribe(render);
+subscribe((state) => [activeRoute(state).name], renderShell);
+subscribe((state) => [state.health], renderHealth);
+subscribe((state) => [state.error], renderError);
+subscribe(selectView, render);
+renderShell(get());
+renderHealth(get());
+renderError(get());
+render(get());
 window.addEventListener("hashchange", onRouteChange);
 
 await pollHealth();

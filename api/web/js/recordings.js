@@ -4,6 +4,12 @@
 import { bytes, duration, escape, targetLabel, timestamp } from "./format.js";
 import { empty, field, icon } from "./ui.js";
 
+export function selectState(state) {
+  return state.selectedRecording
+    ? [state.selectedRecording]
+    : [state.selectedRecording, state.recordings];
+}
+
 export function render(state) {
   if (state.selectedRecording) return detail(state.selectedRecording);
 

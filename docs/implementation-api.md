@@ -103,7 +103,7 @@ Nothing here requires the engine. Through A3 the product is a host-observation t
 - [x] **A1.7** — Static front end: `index.html`, Tabler, left nav, ES module skeleton
 - [x] **A1.8** — SSE stream at 1s with `Last-Event-ID` replay; live host stats on the Stats page
 - [x] **A1.9** — Visual pass: Tabler vendored (no CDN), menu icons, Tabler components throughout
-- [x] **A1.10** — Profiles as their own page: create, edit and delete, endpoint by endpoint
+- [x] **A1.10** — Profiles as their own page: create, edit and delete, endpoint by endpoint; selective subscriptions preserve active editors during background updates
 
 **Done when:** an observation-only recording of a live host streams to the browser at 1s, survives a reconnect with no gap, persists, and reopens later — with no engine built.
 
@@ -154,6 +154,7 @@ Nothing here requires the engine. Through A3 the product is a host-observation t
 
 - **Unit:** NDJSON ingest, series identity, noise-floor and CI math, regression logic, discovery response parsing.
 - **Integration:** full recording lifecycle, SSE reconnect with gap verification, purge behavior.
+- **Front end:** Node's built-in test runner exercises page wiring with a minimal DOM; health polling, live updates and background responses preserve editor fields, focus and selection. Runs under `scripts/check.sh api` alongside Python checks (Node 18+); `web/js/package.json` declares ES modules without dependencies or a build step.
 - **Recorded AWS fixtures:** discovery is tested against committed JSON fixtures of real `describe_*` responses — including partial-resolution cases (NLB with no ECS, task with no ENI, deregistered target). Live AWS is never required to run the suite.
 - **Recorded engine fixtures:** a canned `summary.ndjson` from the F0.3 schema drives ingest, the stats table, and the charts long before an engine exists. This is what makes A4 wiring rather than discovery.
 - **Live host tests** (`tests/test_integration_live.py`): collection against a real machine, skipped unless `api/tests/integration.toml` exists (gitignored; see `integration.sample.toml`). Authentication uses the native SSH setup -- `~/.ssh/config` and default keys -- so if `ssh <host>` works from a shell, the tests work. They cover what fixtures cannot: that the remote shell accepts the script, that this distribution's `/proc` parses, that every metric group actually yields a value, and that clock skew is small enough for series to align.

@@ -284,3 +284,9 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - A refresh that cannot reach AWS costs the check, not the recording. Failing to close a recording because a control-plane call timed out would be a worse tool.
 - Verified in a browser against a recorded account: resolved a profile from cold, watched the endpoints and the draining-target note appear, recorded against the discovered tasks, and read the pinned inventory back on the recording. No console errors, no horizontal overflow at 1264px.
 - Verified: `scripts/check.sh` all green — 297 passed, 1 skipped.
+
+## 2026-09-12 — Preserve profile editors during background updates
+
+- Reworked shared front-end state subscriptions to select each view's dependencies; the shell, health badge, error banner and active view update independently.
+- Fixed health polling and unrelated live/list/error updates clearing new or edited profile forms. Active drafts retain their fields, focus and selection until an intentional editor action or navigation.
+- Updated the API design and A1.10 implementation details. Added a Node regression test to `scripts/check.sh api` covering form preservation, health failure/recovery, route changes and live Stats updates; no additional milestones completed.
