@@ -114,6 +114,12 @@ class Gap:
 #: The code every collection failure is recorded under, so one query finds them all.
 COLLECTION_GAP = "collection_gap"
 
+#: A host metric that never came back inside its band during settle, and drifted the
+#: bad way. Warn, not invalid: it is the cheapest evidence of a leak there is, and it
+#: is evidence rather than proof -- a box legitimately busier after a run than before
+#: it looks identical from here.
+NOT_RETURNED_TO_BASELINE = "not_returned_to_baseline"
+
 #: A target that produced not one sample for the whole recording. Invalid rather
 #: than warn: the box was in the profile, so a reader would count it among what was
 #: measured, and a mean over "the environment" that silently omits one of its

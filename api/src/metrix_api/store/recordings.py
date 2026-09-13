@@ -232,6 +232,66 @@ def finish(
     return get(conn, recording_id)
 
 
+class BaselineRefused(Exception):
+    """A recording that must not silently become the thing everything is judged by."""
+
+
+def mark_baseline(
+    conn: sqlite3.Connection, recording_id: str, *, override: bool = False
+) -> RecordingRow:
+    """Make this the baseline for its series, and demote whatever held it.
+
+    Refused for a recording carrying an `invalid` annotation unless someone overrides
+    it deliberately (design-api 17.1). This is the point of the whole severity
+    mechanism: a baseline is what every later recording is measured against, so
+    adopting one taken while a target was unreachable would silently poison the
+    comparison rather than fail it.
+
+    One baseline per series, because a series is the set of recordings that are
+    comparable at all -- two would mean "normal" depended on which one you opened.
+    """
+    row = get(conn, recording_id)
+    if not override and (blocking := invalid_annotations(conn, recording_id)):
+        raise BaselineRefused(
+            f"{recording_id} carries "
+            + ", ".join(sorted({a['code'] for a in blocking}))
+            + " and cannot be a baseline; fix the recording, take another, or override "
+            "deliberately"
+        )
+
+    with transaction(conn):
+        conn.execute(
+            "UPDATE recording SET is_baseline = 0 WHERE series_key = ? AND id != ?",
+            (row.series_key, recording_id),
+        )
+        conn.execute("UPDATE recording SET is_baseline = 1 WHERE id = ?", (recording_id,))
+    return get(conn, recording_id)
+
+
+def clear_baseline(conn: sqlite3.Connection, recording_id: str) -> RecordingRow:
+    with transaction(conn):
+        conn.execute("UPDATE recording SET is_baseline = 0 WHERE id = ?", (recording_id,))
+    return get(conn, recording_id)
+
+
+def baseline_for(conn: sqlite3.Connection, series_key: str) -> RecordingRow | None:
+    """The recording everything in this series is compared against, if one is set."""
+    row = conn.execute(
+        "SELECT id FROM recording WHERE series_key = ? AND is_baseline = 1 LIMIT 1",
+        (series_key,),
+    ).fetchone()
+    return get(conn, row["id"]) if row else None
+
+
+def invalid_annotations(conn: sqlite3.Connection, recording_id: str) -> list[sqlite3.Row]:
+    """Everything on this recording that says its numbers cannot be trusted."""
+    return conn.execute(
+        "SELECT * FROM annotation WHERE recording_id = ? AND severity = 'invalid'"
+        " ORDER BY from_ms",
+        (recording_id,),
+    ).fetchall()
+
+
 def abandon_running(conn: sqlite3.Connection) -> list[str]:
     """Close recordings left `running` by a process that did not exit cleanly.
 
@@ -421,6 +481,60 @@ def samples(
         params,
     ).fetchall()
     return [(r["target_id"], r["t_ms"], r["metric"], r["value"]) for r in rows]
+
+
+def window(
+    conn: sqlite3.Connection,
+    recording_id: str,
+    *,
+    target_id: str,
+    from_ms: int = 0,
+    to_ms: int | None = None,
+) -> dict[str, list[float]]:
+    """Every metric's values for one target over one slice of the timeline.
+
+    A phase is a slice, so this is what a per-phase summary reads. Returned per
+    metric rather than as rows because that is the shape the summariser wants, and
+    regrouping it in three callers is how the three drift apart.
+    """
+    clauses = ["recording_id = ?", "target_id = ?", "t_ms >= ?"]
+    params: list[object] = [recording_id, target_id, from_ms]
+    if to_ms is not None:
+        clauses.append("t_ms <= ?")
+        params.append(to_ms)
+
+    values: dict[str, list[float]] = {}
+    for row in conn.execute(
+        f"SELECT metric, value FROM host_sample WHERE {' AND '.join(clauses)} ORDER BY t_ms",
+        params,
+    ):
+        values.setdefault(row["metric"], []).append(row["value"])
+    return values
+
+
+def window_series(
+    conn: sqlite3.Connection,
+    recording_id: str,
+    *,
+    target_id: str,
+    from_ms: int = 0,
+    to_ms: int | None = None,
+) -> dict[str, list[tuple[int, float]]]:
+    """The same slice, keeping the clock: what a recovery curve is measured from."""
+    clauses = ["recording_id = ?", "target_id = ?", "t_ms >= ?"]
+    params: list[object] = [recording_id, target_id, from_ms]
+    if to_ms is not None:
+        clauses.append("t_ms <= ?")
+        params.append(to_ms)
+
+    points: dict[str, list[tuple[int, float]]] = {}
+    for row in conn.execute(
+        f"SELECT metric, t_ms, value FROM host_sample WHERE {' AND '.join(clauses)}"
+        " ORDER BY t_ms",
+        params,
+    ):
+        points.setdefault(row["metric"], []).append((row["t_ms"], row["value"]))
+    return points
 
 
 def series(conn: sqlite3.Connection, recording_id: str, target_id: str, metric: str):

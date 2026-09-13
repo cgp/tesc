@@ -17,11 +17,13 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 
 from metrix_api import __version__
+from metrix_api.analysis import SETTLE_PHASE, leaks
 from metrix_api.discovery.resolve import Resolver, compare
 from metrix_api.observer import transport_for
 from metrix_api.observer.collector import Clock, collect_all
 from metrix_api.observer.metrics import (
     HOST_COUNT_CHANGED,
+    NOT_RETURNED_TO_BASELINE,
     TARGET_UNREACHABLE,
     Annotation,
     Gap,
@@ -186,6 +188,42 @@ class Recorder:
                 ),
             )
 
+    def _note_leaks(self, ended: int) -> None:
+        """Flag anything that did not return to baseline during settle.
+
+        Silent for an observation-only recording, which has no settle phase to
+        measure: baseline and settle collapse into one window there, so there is no
+        "after" and nothing to claim (design-api 10.2). A phased load run has both,
+        and this is where the leak signal is raised.
+        """
+        for target, result in leaks(self.conn, self.recording_id):
+            store.add_annotation(
+                self.conn,
+                self.recording_id,
+                Annotation(
+                    code=NOT_RETURNED_TO_BASELINE,
+                    severity="warn",
+                    from_ms=0,
+                    to_ms=ended,
+                    target_id=target,
+                    phase=SETTLE_PHASE,
+                    message=(
+                        f"{result.metric} on {target} did not return to its baseline "
+                        f"during settle: finished at {result.final:.3g} against a "
+                        f"baseline of {result.baseline:.3g} (band ±{result.band:.3g})"
+                    ),
+                    detail={
+                        "metric": result.metric,
+                        "final": result.final,
+                        "baseline": result.baseline,
+                        "band": result.band,
+                        "peak": result.peak,
+                        "peak_at_ms": result.peak_at_ms,
+                        "samples": result.n,
+                    },
+                ),
+            )
+
     @staticmethod
     def _describe(endpoint) -> str:
         """Where collection was attempted, in the spelling the Profiles page shows."""
@@ -237,6 +275,7 @@ class Recorder:
         # and a phased load run (A4) will call this at each of its own.
         self.refresh(at_ms=ended)
         self._note_unreachable(ended)
+        self._note_leaks(ended)
         for endpoint in self.profile.observed:
             store.end_phase(
                 self.conn, self.recording_id, endpoint.id, store.OBSERVATION_PHASE, ended

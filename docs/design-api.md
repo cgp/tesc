@@ -240,6 +240,10 @@ Recovery metrics, derived from the settle phase and meaningless without it:
 - Peak value reached *after* traffic stopped — queues, GC, and flushes often peak during drain, not under load
 - Whether a metric fails to return to baseline at all within the settle window (leak signal: memory, FDs, threads, connections)
 
+**Sample counts apply here too, with their own floor.** §12.1 governs request counts; a host series sampled at 1s has far fewer points, so the rule is stated separately: a median needs at least three samples, a p95 at least twenty — below which the 95th percentile is the maximum wearing a hat. An unsupported figure is **withheld rather than shown with a caveat**, because a caveat in a table is a caveat nobody quotes. Every figure carries its `n`.
+
+**"Different from baseline" is measured against the baseline's own spread**, not a percentage: 2× the baseline window's IQR, the same band the trend view uses for regressions (§17.4), floored at 2% of the baseline median so a metric that barely moves does not flag on rounding. Recovery uses a wider band (3×, floored at 5%) because *has it come back* is a different question from *is it different*, and demanding an exact return would report a permanent leak on every box that is merely busy.
+
 This channel answers *why*: p99 climbing exactly as iowait spikes is a different bug from p99 climbing while the box is idle — and a box that was already at 55% CPU before you sent a single request is a different story from one that started clean, which is what the baseline phase is there to tell you.
 
 ### 9.9 Derived / comparative
@@ -259,6 +263,8 @@ This channel answers *why*: p99 climbing exactly as iowait spikes is a different
 A recording with no plan attached: baseline and settle collapse into one continuous observation window, started and stopped manually or by duration. Everything in §9.7 and §9.8 is captured; §9.1–6.6 are simply absent.
 
 This is the mode for "what does this box normally look like?" — and it is what makes baseline comparison worth anything. A saved observation-only recording can be marked as the **environment baseline** for a profile, and later load runs can be compared against it rather than only against their own baseline phase. That answers a question a single run cannot: is this environment behaving normally *today*, before we even applied load?
+
+Comparison is **per box and pooled across boxes**, and the pooled view is the one that answers the question. A discovered environment replaces its tasks on every deployment, so matching this recording's targets against the baseline's usually matches nothing; pooling every box's readings into one distribution describes *a typical box in this environment*, which survives the tasks being replaced. The per-box rows sit beside it for the case pooling hides — two instance types under one service — and a box is listed only where its verdict differs from the pooled one, since that is what "one machine is the odd one out" looks like.
 
 Observation-only recordings can also be triggered on a schedule, so an environment accumulates a normal-behavior history over time.
 

@@ -1,7 +1,7 @@
 // The archive. Observation-only recordings and load runs are the same object with
 // different sections populated, so one list shows both.
 
-import { bytes, duration, escape, targetLabel, timestamp } from "./format.js";
+import { bytes, duration, escape, metricValue, targetLabel, timestamp } from "./format.js";
 import { empty, field, icon } from "./ui.js";
 
 export function selectState(state) {
@@ -30,6 +30,14 @@ export function render(state) {
       (r) => `<tr>
         <td class="name">
           <a href="#/recordings/${encodeURIComponent(r.id)}">${escape(r.id)}</a>
+          ${
+            r.is_baseline
+              ? `<span class="badge bg-blue-lt ms-2"
+                       title="Everything in this series is compared against this">
+                   baseline
+                 </span>`
+              : ""
+          }
         </td>
         <td class="text-secondary">${escape(r.kind)}</td>
         <td>${statusBadge(r.status)}</td>
@@ -251,6 +259,185 @@ function signedBytes(value) {
   return `<span class="${tone}">${value > 0 ? "+" : "−"}${bytes(Math.abs(value))}</span>`;
 }
 
+/**
+ * How this recording sits against the one its series is measured from.
+ *
+ * Only what moved. A table of every metric that behaved exactly as it always does is
+ * a table nobody reads, and the finding it buries is the one thing here worth
+ * seeing. "Nothing moved" is itself an answer, and is stated rather than left as an
+ * empty card.
+ *
+ * Every figure carries the sample count behind it, which is not decoration: a median
+ * over eleven samples and one over six hundred are different claims, and the API
+ * withholds the numbers it cannot support (stats/summary.py).
+ */
+function comparisonCard(recording) {
+  const comparison = recording.comparison;
+  if (!comparison) return "";
+
+  if (!comparison.baseline_id) {
+    return `<div class="card">
+      <div class="card-header"><h3 class="card-title">Against normal</h3></div>
+      <div class="card-body text-secondary">
+        No baseline is set for this series, so there is nothing to compare against.
+        Mark a recording of this environment doing nothing in particular as the
+        baseline, and later ones answer <em>is this behaving normally today?</em>
+        ${recording.is_baseline ? "This recording <strong>is</strong> that baseline." : ""}
+      </div>
+    </div>`;
+  }
+
+  const rows = comparison.moved
+    .map((d) => {
+      const direction = d.worse ? "text-danger" : "text-success";
+      const sign = d.change > 0 ? "+" : "";
+      // `*` is the pooled view. A named box appears only where it disagrees with
+      // that, which is the case worth reading: one machine out of step.
+      const where =
+        d.target === "*"
+          ? `<span class="text-secondary">every box</span>`
+          : `<span class="badge bg-yellow-lt" title="This box differs from the rest"
+                   >${escape(targetLabel(d.target))}</span>`;
+      return `<tr>
+        <td class="name">${escape(d.metric)} ${where}</td>
+        <td class="num">${figure(d.baseline)}</td>
+        <td class="num">${figure(d.current)}</td>
+        <td class="num ${direction}">${sign}${metricValue(d.metric, d.change)}
+          <span class="text-secondary">(${sign}${d.change_pct.toFixed(1)}%)</span></td>
+        <td class="num text-secondary">±${metricValue(d.metric, d.band)}</td>
+      </tr>`;
+    })
+    .join("");
+
+  const missing = [
+    comparison.only_now.length
+      ? `${comparison.only_now.length} target(s) here are not in the baseline`
+      : "",
+    comparison.only_baseline.length
+      ? `${comparison.only_baseline.length} in the baseline are gone`
+      : "",
+  ].filter(Boolean);
+
+  return `<div class="card">
+    <div class="card-header">
+      <div>
+        <h3 class="card-title">Against normal</h3>
+        <div class="card-subtitle">
+          Compared with <a href="#/recordings/${encodeURIComponent(
+            comparison.baseline_id
+          )}">${escape(comparison.baseline_id)}</a>, the baseline for this series.
+          A metric is listed only when it moved further than the baseline's own
+          spread — a band measured, not chosen.
+          ${missing.length ? escape(missing.join("; ")) + "." : ""}
+        </div>
+      </div>
+    </div>
+    ${
+      rows
+        ? `<div class="table-responsive">
+             <table class="table card-table table-vcenter metrix-table">
+               <thead><tr>
+                 <th style="width:34%">Metric</th>
+                 <th class="num" style="width:17%">Normally</th>
+                 <th class="num" style="width:17%">This time</th>
+                 <th class="num" style="width:20%">Change</th>
+                 <th class="num" style="width:12%">Band</th>
+               </tr></thead>
+               <tbody>${rows}</tbody>
+             </table>
+           </div>`
+        : `<div class="card-body text-secondary">Nothing moved beyond its band. This
+             environment is behaving the way it normally does.</div>`
+    }
+  </div>`;
+}
+
+// The median, and the count it rests on. Never one without the other.
+function figure(summary) {
+  if (summary.p50 == null) {
+    return `<span class="text-secondary" title="${summary.n} samples is too few">
+      — <small>n=${summary.n}</small></span>`;
+  }
+  return `${metricValue(summary.metric, summary.p50)}
+    <small class="text-secondary">n=${summary.n}</small>`;
+}
+
+/**
+ * What happened after the traffic stopped.
+ *
+ * Absent entirely for an observation-only recording: baseline and settle collapse
+ * into one window there, so there is no "after" and nothing to claim. A card reading
+ * "no data" on every recording anyone has taken so far would be worse than no card.
+ */
+function recoveryCard(recording) {
+  const targets = recording.recovery?.targets ?? {};
+  const rows = Object.entries(targets)
+    .flatMap(([target, metrics]) =>
+      Object.values(metrics).map((r) => {
+        const verdict = r.returned
+          ? r.recovered_ms === 0
+            ? `<span class="text-success">never left the band</span>`
+            : `<span class="text-success">back after ${duration(r.recovered_ms)}</span>`
+          : r.leaked
+            ? `<span class="text-danger">never came back</span>`
+            : `<span class="text-secondary">still out, the good way</span>`;
+        return `<tr>
+          <td class="name" title="${escape(target)}">${escape(targetLabel(target))}</td>
+          <td>${escape(r.metric)}</td>
+          <td>${verdict}</td>
+          <td class="num">${metricValue(r.metric, r.peak)}
+            <span class="text-secondary">at ${duration(r.peak_at_ms)}</span></td>
+          <td class="num">${metricValue(r.metric, r.final)}
+            <span class="text-secondary">vs ${metricValue(r.metric, r.baseline)}</span></td>
+          <td class="num text-secondary">n=${r.n}</td>
+        </tr>`;
+      })
+    )
+    .join("");
+  if (!rows) return "";
+
+  return `<div class="card">
+    <div class="card-header">
+      <div>
+        <h3 class="card-title">After the traffic stopped</h3>
+        <div class="card-subtitle">Time back to within the baseline's own spread, and
+          the worst value seen during settle — which for free memory is the lowest,
+          not the highest. Queues, collections and flushes often peak after the last
+          request rather than under load. A metric that never
+          came back, and drifted the wrong way, is the leak signal.</div>
+      </div>
+    </div>
+    <div class="table-responsive">
+      <table class="table card-table table-vcenter metrix-table">
+        <thead><tr>
+          <th style="width:14%">Target</th>
+          <th style="width:20%">Metric</th>
+          <th style="width:20%">Recovered</th>
+          <th class="num" style="width:20%">Worst after stop</th>
+          <th class="num" style="width:20%">Ended at</th>
+          <th class="num" style="width:6%">Samples</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function baselineButton(recording) {
+  const marked = Boolean(recording.is_baseline);
+  return `<button class="btn btn-sm ${marked ? "btn-primary" : ""}"
+                  data-action="baseline-toggle"
+                  data-recording="${escape(recording.id)}"
+                  data-baseline="${marked ? "1" : "0"}"
+                  title="${
+                    marked
+                      ? "Stop treating this as normal for its series"
+                      : "Treat this as normal for its series, and compare later recordings with it"
+                  }">
+    ${icon("target")} ${marked ? "Baseline" : "Set as baseline"}
+  </button>`;
+}
+
 function detail(recording) {
   const annotations = recording.annotations.length
     ? `<div class="list-group list-group-flush">${recording.annotations
@@ -278,7 +465,10 @@ function detail(recording) {
     <div class="card">
       <div class="card-header">
         <h3 class="card-title">${escape(recording.id)}</h3>
-        <div class="card-actions">${statusBadge(recording.status)}</div>
+        <div class="card-actions d-flex align-items-center gap-2">
+        ${baselineButton(recording)}
+        ${statusBadge(recording.status)}
+      </div>
       </div>
       <div class="card-body">
         <div class="datagrid">
@@ -296,6 +486,8 @@ function detail(recording) {
         </div>
       </div>
     </div>
+    ${comparisonCard(recording)}
+    ${recoveryCard(recording)}
     ${inventoryCard(recording)}
     ${hostsCard(recording)}
     ${diskCard(recording)}

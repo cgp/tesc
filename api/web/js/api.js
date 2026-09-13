@@ -58,6 +58,15 @@ export const api = {
   stopRecording: (id) =>
     request(`/api/recordings/${encodeURIComponent(id)}/stop`, { method: "POST" }),
   live: () => request("/api/recordings/live"),
+  comparison: (id) => request(`/api/recordings/${encodeURIComponent(id)}/comparison`),
+  recovery: (id) => request(`/api/recordings/${encodeURIComponent(id)}/recovery`),
+  markBaseline: (id, override = false) =>
+    request(
+      `/api/recordings/${encodeURIComponent(id)}/baseline${override ? "?override=true" : ""}`,
+      { method: "POST" }
+    ),
+  clearBaseline: (id) =>
+    request(`/api/recordings/${encodeURIComponent(id)}/baseline`, { method: "DELETE" }),
   series: (id, metric, target) =>
     request(
       `/api/recordings/${encodeURIComponent(id)}/series?` +

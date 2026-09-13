@@ -112,7 +112,7 @@ Nothing here requires the engine. Through A3 the product is a host-observation t
 - [x] **A2.1** — ECS discovery: hostname → ALB → target group → service → tasks → containers → instances (§3.1)
 - [x] **A2.2** — Resolved inventory: storage, run pinning, refresh at phase boundaries, `host_count_changed`
 - [x] **A2.3** — Reachability verification at profile setup; `targets.json` written from a profile
-- [ ] **A2.4** — Environment baselines; baseline/settle deltas, recovery curves, leak detection (§9.7)
+- [x] **A2.4** — Environment baselines; baseline/settle deltas, recovery curves, leak detection (§9.7)
 
 **Done when:** a hostname resolves to a task list with image digests, and observation attaches to those identities.
 

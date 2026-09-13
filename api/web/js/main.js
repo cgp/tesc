@@ -102,6 +102,11 @@ async function load(route) {
     if (id) {
       const recording = await api.recording(id);
       recording.latest = await latestValues(recording);
+      // Fetched with the recording rather than on demand: it is the first question
+      // asked of a finished one, and a card that appears a second later reads as a
+      // page still loading.
+      recording.comparison = await api.comparison(id);
+      recording.recovery = await api.recovery(id);
       set({ selectedRecording: recording });
     }
   } catch (error) {
@@ -349,6 +354,39 @@ async function verifyProfile(name) {
   }
 }
 
+/**
+ * Mark a recording as the baseline its series is compared against, or clear it.
+ *
+ * A refusal is a 409 rather than an error to shrug at: the recording carries an
+ * `invalid` annotation, and adopting it would quietly poison every later comparison.
+ * The confirmation says what is wrong before offering the override.
+ */
+async function toggleBaseline(id, isBaseline) {
+  try {
+    set({ error: null });
+    if (isBaseline) {
+      await api.clearBaseline(id);
+    } else {
+      try {
+        await api.markBaseline(id);
+      } catch (refusal) {
+        const message =
+          `This recording cannot be a baseline:
+
+${refusal.message}
+
+` +
+          `Everything in this series would be measured against it. Use it anyway?`;
+        if (!window.confirm(message)) return;
+        await api.markBaseline(id, true);
+      }
+    }
+    await onRouteChange();
+  } catch (error) {
+    set({ error: error.message });
+  }
+}
+
 async function deleteProfile(name) {
   const message =
     `Delete the profile "${name}"?
@@ -384,6 +422,9 @@ document.addEventListener("click", (event) => {
   if (action === "profile-reload") reloadProfiles();
   if (action === "profile-resolve") resolveProfile(profile);
   if (action === "profile-verify") verifyProfile(profile);
+  if (action === "baseline-toggle") {
+    toggleBaseline(recording, button.dataset.baseline === "1");
+  }
   if (action === "profile-cancel") set({ profileDraft: null });
   if (action === "profile-save") saveProfile();
   if (action === "endpoint-add") {

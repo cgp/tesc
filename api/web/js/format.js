@@ -4,13 +4,16 @@
 export function bytes(value) {
   if (value == null || Number.isNaN(value)) return "—";
   const units = ["B", "KB", "MB", "GB", "TB"];
-  let n = value;
+  // Scale the magnitude, not the value: a delta can be negative, and the loop below
+  // would never fire for one -- printing "-800000000 B" where "-763.0 MB" belongs.
+  const sign = value < 0 ? "-" : "";
+  let n = Math.abs(value);
   let i = 0;
   while (n >= 1024 && i < units.length - 1) {
     n /= 1024;
     i += 1;
   }
-  return `${n.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+  return `${sign}${n.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
 export function percent(value) {

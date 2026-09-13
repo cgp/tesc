@@ -8,7 +8,9 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from metrix_api import analysis
 from metrix_api.deps import get_db
+from metrix_api.stats import Delta, Recovery, Summary
 from metrix_api.store import inventories
 from metrix_api.store import recordings as store
 
@@ -108,6 +110,163 @@ def _inventory(conn: sqlite3.Connection, recording_id: str) -> dict[str, Any] | 
         "confirmed_at": stored.confirmed_at,
         **{k: v for k, v in stored.inventory.to_document().items() if k in ("resources", "notes")},
     }
+
+
+def _summary(summary: Summary) -> dict[str, Any]:
+    """Every field carries `n`, because that is the rule this is here to enforce."""
+    return {
+        "metric": summary.metric,
+        "n": summary.n,
+        "min": summary.minimum,
+        "max": summary.maximum,
+        "mean": summary.mean,
+        "p50": summary.p50,
+        "p95": summary.p95,
+        "iqr": summary.iqr,
+        "supported": summary.supported,
+    }
+
+
+def _delta(delta: Delta) -> dict[str, Any]:
+    return {
+        "metric": delta.metric,
+        "baseline": _summary(delta.baseline),
+        "current": _summary(delta.current),
+        "change": delta.change,
+        "change_pct": delta.change_pct,
+        "band": delta.band,
+        "outside_band": delta.outside_band,
+        "worse": delta.worse,
+        "comparable": delta.comparable,
+    }
+
+
+def _recovery(result: Recovery) -> dict[str, Any]:
+    return {
+        "metric": result.metric,
+        "recovered_ms": result.recovered_ms,
+        "returned": result.returned,
+        "leaked": result.leaked,
+        "peak": result.peak,
+        "peak_at_ms": result.peak_at_ms,
+        "final": result.final,
+        "baseline": result.baseline,
+        "band": result.band,
+        "n": result.n,
+    }
+
+
+@router.get("/{recording_id}/summary")
+def get_summary(
+    recording_id: str, conn: sqlite3.Connection = Depends(get_db)
+) -> dict[str, Any]:
+    """What each metric did, per target and per phase.
+
+    `*` among the targets is the pooled view: every box's readings in one
+    distribution, which is what "how does this environment behave" asks. It is the
+    wrong summary when the boxes are not alike, which is why the per-target rows sit
+    beside it rather than being replaced by it.
+    """
+    try:
+        store.get(conn, recording_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {
+        "recording_id": recording_id,
+        "targets": {
+            target: {metric: _summary(s) for metric, s in metrics.items()}
+            for target, metrics in analysis.summaries(conn, recording_id).items()
+        },
+        "phases": [
+            {
+                "target_id": w.target_id,
+                "phase": w.phase,
+                "from_ms": w.from_ms,
+                "to_ms": w.to_ms,
+                "metrics": {metric: _summary(s) for metric, s in w.metrics.items()},
+            }
+            for w in analysis.phase_windows(conn, recording_id)
+        ],
+    }
+
+
+@router.get("/{recording_id}/comparison")
+def get_comparison(
+    recording_id: str, conn: sqlite3.Connection = Depends(get_db)
+) -> dict[str, Any]:
+    """This recording against the baseline for its series.
+
+    Is this environment behaving normally today? Only recordings of the same setup
+    are compared -- same profile, addressing and interval -- because those are what
+    have to match for two of them to mean the same thing.
+    """
+    try:
+        store.get(conn, recording_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    comparison = analysis.against_baseline(conn, recording_id)
+    return {
+        "recording_id": comparison.recording_id,
+        "baseline_id": comparison.baseline_id,
+        "targets": {
+            target: {metric: _delta(d) for metric, d in deltas.items()}
+            for target, deltas in comparison.deltas.items()
+        },
+        "moved": [{"target": target, **_delta(d)} for target, d in comparison.moved],
+        "only_now": comparison.only_now,
+        "only_baseline": comparison.only_baseline,
+    }
+
+
+@router.get("/{recording_id}/recovery")
+def get_recovery(
+    recording_id: str, conn: sqlite3.Connection = Depends(get_db)
+) -> dict[str, Any]:
+    """What happened after the traffic stopped. Empty without a settle phase."""
+    found = analysis.recoveries(conn, recording_id)
+    return {
+        "recording_id": recording_id,
+        "targets": {
+            target: {metric: _recovery(r) for metric, r in by_metric.items()}
+            for target, by_metric in found.items()
+        },
+    }
+
+
+@router.post("/{recording_id}/baseline")
+def set_baseline(
+    recording_id: str,
+    override: bool = False,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    """Make this the baseline its series is compared against.
+
+    Refused for a recording carrying an `invalid` annotation unless overridden
+    deliberately: a baseline is what everything later is measured against, so one
+    taken while a target was unreachable would quietly poison every comparison
+    instead of failing one.
+    """
+    try:
+        row = store.mark_baseline(conn, recording_id, override=override)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except store.BaselineRefused as exc:
+        # 409: the request is well formed and the recording is real; it is the state
+        # of that recording that says no. Retrying with `override` is the way past.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _row(row)
+
+
+@router.delete("/{recording_id}/baseline")
+def unset_baseline(
+    recording_id: str, conn: sqlite3.Connection = Depends(get_db)
+) -> dict[str, Any]:
+    try:
+        return _row(store.clear_baseline(conn, recording_id))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/{recording_id}/series")
