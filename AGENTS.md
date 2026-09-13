@@ -8,10 +8,10 @@ Load generator with machine-authored test plans, plus host observation. Rust eng
 |---|---|
 | `docs/design-api-engine-contract.md` | What each side owns, the handoff, decisions. **Read first.** |
 | `docs/design-api.md` | Control plane, observation, front end |
-| `docs/design-engine.md` | Load generation and measurement (not yet started) |
+| `docs/design-engine.md` | Load generation and measurement |
 | `docs/profiles.md` | User-facing: how to write a profile. The only doc aimed outward. |
 | `docs/implementation-api.md` | Track A checklist — **current work** |
-| `docs/implementation-engine.md` | Track B checklist — not started |
+| `docs/implementation-engine.md` | Track B checklist — B1.1 complete |
 | `CHANGELOG.md` | Running work log. Append, never consult. |
 
 Section numbers (§N) are shared across the three design docs and are not contiguous within any one file.

@@ -2,7 +2,7 @@
 
 The load generator: what it executes, how it measures, and why the numbers can be trusted. Pairs with [design-api.md](design-api.md); the boundary is in [design-api-engine-contract.md](design-api-engine-contract.md).
 
-> **Status: designed, not yet being implemented.** Work starts on the API and observation side ([implementation-api.md](implementation-api.md)); this document is the standing design for when the engine track begins ([implementation-engine.md](implementation-engine.md)). It is recorded now because several API-side decisions — the NDJSON contract, the bundle format, the statistics the front end must display honestly — only make sense against it.
+> **Status: engine implementation has begun.** B1.1 supplies the mock target; the load path follows in [implementation-engine.md](implementation-engine.md). The API and observation track remains independent.
 
 The engine takes one self-contained plan bundle and emits NDJSON. It knows nothing about the API, the database, the UI, or AWS, and nothing in this design may assume otherwise.
 
@@ -28,6 +28,43 @@ A standalone binary that takes **one self-contained plan bundle** — calls, mix
 - Exit code reflects SLO evaluation (§16), so CI can gate on it.
 
 **Why Rust for this specifically:** at a few tens of thousands of RPS from one box, the generator's own GC pauses and scheduler jitter become indistinguishable from the target's latency. A load generator that can't hold its own send schedule produces numbers that describe the generator.
+
+---
+
+### 2.2 Mock target (B1.1)
+
+`cargo run --manifest-path engine/Cargo.toml -p metrix-mock -- --config examples/mock.json`
+starts a standalone cleartext HTTP/1.1 / HTTP/2 (prior knowledge) target. `--listen`
+overrides the default `127.0.0.1:8080`; port zero prints the assigned address.
+With no config it returns JSON 200 responses after a fixed 10ms delay on any route.
+
+The strict JSON config supplies `seed`, `latency`, optional `errors`, `slow_start`,
+`capacity_rps`, `max_in_flight`, and `max_connections`. Latency is `fixed` (`ms`),
+`normal` (`mean_ms`, `stddev_ms`), `lognormal` (`median_ms`, `sigma`, in log space),
+or `bimodal` (`fast_ms`, `slow_ms`, `slow_probability`). Samples are clipped to
+`[0, max_latency_ms]` (default ceiling 60000ms), including slow-start's extra delay,
+which decreases linearly from `extra_latency_ms` to zero over `duration_ms` since
+server start. These are injected delays after the request body is drained, not
+promises about network latency; successful and HTTP-error responses expose the
+planned delay in `x-metrix-mock-delay-ms` so measurements can be checked against it.
+
+Each error has an unconditional `rate`; their sum must not exceed one. Types are
+`http` (400–599 `status`), `disconnect` (no response), and `timeout` (no response
+for `delay_ms`, then disconnect). HTTP/2 transport faults reset the affected stream.
+A seeded RNG makes arrival-ordered decisions repeatable with the locked build;
+concurrent arrival order and operating-system timing are not reproducible. All
+configured milliseconds must be finite and in `[0, 3600000]`; slow-start duration
+and timeout delay must be positive. Lognormal median must be positive and sigma
+finite in `[0, 100]`. Unknown fields and invalid probabilities fail before binding.
+
+`capacity_rps` is a token bucket with one second of burst, initially full; excess
+requests get immediate 503s. `max_in_flight` independently rejects excess active
+requests with 503, including multiplexed HTTP/2 streams. `max_connections` closes
+newly accepted sockets at the limit (transport rejection, not a guaranteed TCP
+ECONNREFUSED). Idle keep-alive sockets count until closed. Rejections do not consume
+random samples. Limits are disabled when omitted; zero is invalid. Ctrl-C stops
+the listener and cancels outstanding connections. The mock may allocate and lock;
+the generator's hot-path constraints do not apply to this test target.
 
 ---
 

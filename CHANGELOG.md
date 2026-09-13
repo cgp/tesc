@@ -378,3 +378,12 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - The runs table shows the metric that moved rather than the one that sorts first — the reason to open a run is almost always the metric that left its band, and a column of `conn.established` is not what anyone came for.
 - Verified in a browser against a ten-run history with one invalid run and a CPU jump: the band appears at exactly the sixth run and nowhere earlier, the invalid run is hollow with both lines broken around it, and a two-run series says why it has no band instead of drawing bare points. No console errors, no horizontal overflow at 1280px.
 - Verified: `scripts/check.sh` all green — 388 passed, 1 skipped, 67 front-end tests.
+
+## 2026-09-13 — B1.1: standalone engine mock target
+
+- Implement metrix-mock as a standalone HTTP/1.1 and HTTP/2 prior-knowledge server with strict JSON configuration and an ephemeral-port option.
+- Add seeded fixed, normal, lognormal, and bimodal latency; HTTP errors, disconnects, and timeouts; linear slow start; a token-bucket capacity ceiling; and independent request/connection limits.
+- Expose planned response delay and outcome headers, cancel active connections on shutdown, and document timing, clipping, burst, and transport-rejection semantics with examples/mock.json.
+- Add distribution, validation, CLI, and real-socket tests covering keep-alive, multiplexing, fault recovery, limit release, and cancellation. Mark B1.1 complete; B1.2 remains next.
+- Restore the existing synthetic NDJSON contract fixture and exempt that exact file from the runtime-data ignore rule, fixing two schema tests in fresh checkouts.
+- Validation: bash scripts/check.sh passes (19 mock tests, 384 API tests, 67 front-end tests; 5 live-host tests skipped). Standalone binary smoke test returns HTTP 200 with the configured default 10ms delay.
