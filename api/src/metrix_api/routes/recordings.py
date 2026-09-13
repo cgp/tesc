@@ -114,17 +114,7 @@ def _inventory(conn: sqlite3.Connection, recording_id: str) -> dict[str, Any] | 
 
 def _summary(summary: Summary) -> dict[str, Any]:
     """Every field carries `n`, because that is the rule this is here to enforce."""
-    return {
-        "metric": summary.metric,
-        "n": summary.n,
-        "min": summary.minimum,
-        "max": summary.maximum,
-        "mean": summary.mean,
-        "p50": summary.p50,
-        "p95": summary.p95,
-        "iqr": summary.iqr,
-        "supported": summary.supported,
-    }
+    return summary.to_document()
 
 
 def _delta(delta: Delta) -> dict[str, Any]:
@@ -178,6 +168,10 @@ def get_summary(
             target: {metric: _summary(s) for metric, s in metrics.items()}
             for target, metrics in analysis.summaries(conn, recording_id).items()
         },
+        # Per target rather than per metric: every metric on one box is collected in
+        # the same sample, so they share a span, and a column of identical values
+        # repeated once per row is noise.
+        "spans": store.spans(conn, recording_id),
         "phases": [
             {
                 "target_id": w.target_id,

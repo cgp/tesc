@@ -512,6 +512,31 @@ def window(
     return values
 
 
+def spans(conn: sqlite3.Connection, recording_id: str) -> dict[str, dict[str, int]]:
+    """First and last sample time per target, and how many there were.
+
+    The diagnostic design-api 14.2 asks Start and Finish for: a target whose last
+    sample is thirty seconds before the recording ended stopped answering, and a
+    column of medians will not say so.
+    """
+    return {
+        row["target_id"]: {
+            "first_ms": row["first_ms"],
+            "last_ms": row["last_ms"],
+            "n": row["n"],
+        }
+        for row in conn.execute(
+            # DISTINCT t_ms, not COUNT(*): a sample is one moment, and the table
+            # stores a row per metric within it. Counting rows would say a box with
+            # four metrics was sampled four times as often as it was.
+            "SELECT target_id, MIN(t_ms) AS first_ms, MAX(t_ms) AS last_ms,"
+            " COUNT(DISTINCT t_ms) AS n"
+            " FROM host_sample WHERE recording_id = ? GROUP BY target_id",
+            (recording_id,),
+        )
+    }
+
+
 def window_series(
     conn: sqlite3.Connection,
     recording_id: str,

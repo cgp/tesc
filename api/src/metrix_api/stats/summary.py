@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from statistics import median
+from statistics import median, stdev
 
 #: A quantile needs enough samples that it is not just the extreme value. The rule is
 #: `n * (1 - q) >= 1` -- at least one whole sample in the tail being described -- with
@@ -84,10 +84,32 @@ class Summary:
     #: Interquartile range: how much this metric moves on its own over this window.
     #: It is what makes "different from baseline" a claim rather than an observation.
     iqr: float | None = None
+    #: Standard deviation. It earns its column (design-api 14.2): a median of 40 beside
+    #: a deviation of 300 says "bimodal or unstable" faster than any percentile. It is
+    #: also the wrong thing to set a threshold on, because these distributions are
+    #: right-skewed and it overstates the typical spread -- which is why median and p95
+    #: sit next to it rather than behind a picker.
+    stddev: float | None = None
 
     @property
     def supported(self) -> bool:
         return self.p50 is not None
+
+    def to_document(self) -> dict[str, float | int | str | bool | None]:
+        """The wire shape, written once. The live stream and the REST endpoint serve
+        the same table, so they must serve it in the same words."""
+        return {
+            "metric": self.metric,
+            "n": self.n,
+            "min": self.minimum,
+            "max": self.maximum,
+            "mean": self.mean,
+            "p50": self.p50,
+            "p95": self.p95,
+            "iqr": self.iqr,
+            "stddev": self.stddev,
+            "supported": self.supported,
+        }
 
 
 def summarize(metric: str, values: list[float]) -> Summary:
@@ -105,6 +127,9 @@ def summarize(metric: str, values: list[float]) -> Summary:
         mean=sum(ordered) / n,
         p50=median(ordered) if n >= MIN_FOR_MEDIAN else None,
         p95=quantile(ordered, 0.95) if n >= MIN_FOR_P95 else None,
+        # Two points define a deviation, so this needs a lower floor than the median;
+        # one point has none at all rather than a deviation of zero.
+        stddev=stdev(ordered) if n >= 2 else None,
         # The IQR of two points is the gap between them, which says nothing about
         # spread; the median threshold is the right floor for it too.
         iqr=(

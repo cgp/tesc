@@ -101,7 +101,16 @@ test("background API updates preserve profile fields, focus and selection", asyn
   assert.equal(elements.get("health-text").textContent, "API unreachable");
   healthFails = false;
   await poll();
-  set({ live: { latest: { "cpu.busy": { host: 12 } }, targets: ["host"], metrics: ["cpu.busy"] } });
+  const summaries = (n) => ({ "*": { "cpu.busy": { metric: "cpu.busy", n, p50: n, supported: true } } });
+  set({
+    live: {
+      latest: { "cpu.busy": { host: 12 } },
+      targets: ["host"],
+      metrics: ["cpu.busy"],
+      summaries: summaries(12),
+      spans: {},
+    },
+  });
   set({ profiles: [], brokenProfiles: [], profilesReadAt: Date.now(), resolving: "other-server" });
   set({ error: "Failed <request>" });
   assert.match(elements.get("error").innerHTML, /Failed &lt;request&gt;/);
@@ -140,6 +149,6 @@ test("background API updates preserve profile fields, focus and selection", asyn
   const statsBefore = replacements;
   await poll();
   assert.equal(replacements, statsBefore);
-  set({ live: { ...get().live, latest: { "cpu.busy": { host: 34 } } } });
+  set({ live: { ...get().live, summaries: summaries(34) } });
   assert.ok(replacements > statsBefore, "Stats must still respond to live updates");
 });

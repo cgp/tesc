@@ -32,6 +32,9 @@ export function connect(recordingId) {
         metrics: snapshot.metrics,
         latest: snapshot.latest,
         counts: snapshot.counts,
+        summaries: snapshot.summaries ?? {},
+        spans: snapshot.spans ?? {},
+        phase: snapshot.phase,
         gaps: get().live?.gaps ?? [],
         annotations: get().live?.annotations ?? [],
         connection: "live",
@@ -54,6 +57,9 @@ export function connect(recordingId) {
     live.metrics = Object.keys(latest).sort();
     live.elapsedMs = payload.elapsed_ms;
     live.counts = payload.counts;
+    // Computed server-side, where the sample-count rule lives (stats/summary.py).
+    live.summaries = payload.summaries ?? live.summaries ?? {};
+    live.spans = payload.spans ?? live.spans ?? {};
     live.connection = "live";
     set({ live });
   });

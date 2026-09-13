@@ -21,10 +21,16 @@ const state = {
   //: yesterday shown as if it were current would be worse than no result.
   verifying: null,
   verified: {},
+  //: Which column the stats table is ordered by, if a person has chosen one.
+  //: Null means the default: metric name, alphabetically.
+  tableSort: null,
   recordings: [],
   selectedRecording: null,
   live: null,
   error: null,
+  //: A short confirmation of something that worked, in the same slot as the error.
+  //: A copy button with no visible effect is indistinguishable from a broken one.
+  notice: null,
 };
 
 const listeners = new Set();

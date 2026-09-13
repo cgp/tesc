@@ -136,6 +136,27 @@
 .metrix-table td.name { font-weight: 500; }
 .metrix-table tbody tr:hover { background: var(--tblr-bg-surface-tertiary); }
 
+/* A sortable heading has to look clickable before it is clicked; the arrow only
+   appears once a column is active, which is too late to invite the first one. */
+.metrix-sortable { cursor: pointer; user-select: none; }
+.metrix-sortable:hover { color: var(--tblr-primary); }
+
+/* The row that names a target, above the metrics collected from it. Grouping is what
+   keeps this readable as boxes multiply -- and the group row must not read as data,
+   hence the tint and the lack of hover. */
+.metrix-stats tbody tr.metrix-group > td {
+  background: var(--tblr-bg-surface-secondary);
+  font-size: .8125rem;
+  padding-top: .35rem;
+  padding-bottom: .35rem;
+}
+.metrix-stats tbody tr.metrix-group:hover > td {
+  background: var(--tblr-bg-surface-secondary);
+}
+/* Several tbodies in one table, one per group: without this the border between them
+   doubles up and reads as a section break where the table simply continues. */
+.metrix-stats tbody + tbody { border-top: 0; }
+
 /* ------------------------------------------------------------------- the rest */
 
 /* A value the sample count cannot support is shown, but never as a bare number. */

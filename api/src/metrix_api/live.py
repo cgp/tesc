@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
+from metrix_api.analysis import ENVIRONMENT
 from metrix_api.config import Config
 from metrix_api.discovery.ecs import Clients
 from metrix_api.discovery.resolve import Resolver
@@ -35,6 +36,7 @@ from metrix_api.observer.collector import Clock
 from metrix_api.observer.metrics import Annotation, Gap, Sample
 from metrix_api.profiles import Profile
 from metrix_api.recording import Recorder, start_observation
+from metrix_api.stats import summarize
 from metrix_api.store import recordings as store
 from metrix_api.store.db import connect, migrate
 
@@ -154,6 +156,19 @@ class LiveRecording:
     _pending: dict[tuple[str, int], dict[str, float]] = field(default_factory=dict)
     _ticker: asyncio.Task | None = None
 
+    #: Every value seen, per target and metric, so the table can show a distribution
+    #: while the recording is still running rather than only after it stops.
+    #:
+    #: Held here and summarised server-side because the sample-count rule lives in
+    #: `stats/` and the UI must not be able to bypass it -- a median computed in
+    #: JavaScript would be a second implementation of exactly the rule that has to
+    #: hold in one place. The cost is a sort per metric per second: at 1s sampling an
+    #: hour-long recording is a few hundred thousand floats, which sorts in
+    #: milliseconds, and observation recordings are minutes rather than hours.
+    _values: dict[tuple[str, str], list[float]] = field(default_factory=dict)
+    #: First and last sample time per target: the Start/Finish diagnostic of 14.2.
+    _spans: dict[str, dict[str, int]] = field(default_factory=dict)
+
     @property
     def recording_id(self) -> str:
         return self.recorder.recording_id
@@ -162,7 +177,31 @@ class LiveRecording:
         self._pending[(sample.target_id, sample.t_ms)] = dict(sample.metrics)
         for metric, value in sample.metrics.items():
             self.latest.setdefault(metric, {})[sample.target_id] = value
+            self._values.setdefault((sample.target_id, metric), []).append(value)
+        # One sample is one moment, however many metrics it carried.
+        span = self._spans.setdefault(
+            sample.target_id, {"first_ms": sample.t_ms, "last_ms": sample.t_ms, "n": 0}
+        )
+        span["last_ms"] = sample.t_ms
+        span["n"] += 1
+
         self.counts["samples"] += 1
+
+    def summaries(self) -> dict[str, dict[str, dict[str, Any]]]:
+        """The distribution so far, per target, plus the pooled view across them.
+
+        Same shape the finished recording serves from `/summary`, so the table is one
+        view rather than two that drift (design-api 14.3).
+        """
+        pooled: dict[str, list[float]] = {}
+        found: dict[str, dict[str, dict[str, Any]]] = {}
+        for (target, metric), values in self._values.items():
+            found.setdefault(target, {})[metric] = summarize(metric, values).to_document()
+            pooled.setdefault(metric, []).extend(values)
+        found[ENVIRONMENT] = {
+            metric: summarize(metric, values).to_document() for metric, values in pooled.items()
+        }
+        return found
 
     def note_gap(self, gap: Gap) -> None:
         self.counts["gaps"] += 1
@@ -198,6 +237,11 @@ class LiveRecording:
             "metrics": sorted(self.latest),
             "latest": self.latest,
             "counts": dict(self.counts),
+            "summaries": self.summaries(),
+            "spans": {t: dict(s) for t, s in self._spans.items()},
+            # Which phase produced these numbers. It sits in the table header because
+            # a figure read without knowing its phase is a figure read wrong (14.3).
+            "phase": store.OBSERVATION_PHASE,
         }
 
     async def _tick(self) -> None:
@@ -218,6 +262,11 @@ class LiveRecording:
                         "samples": samples,
                         "elapsed_ms": self.recorder.clock.now_ms(),
                         "counts": dict(self.counts),
+                        # Not a delta, unlike the samples beside it: a distribution
+                        # cannot be sent as one, and recomputing it in the browser
+                        # would put a second copy of the sample-count rule there.
+                        "summaries": self.summaries(),
+                        "spans": {t: dict(s) for t, s in self._spans.items()},
                     },
                 )
 

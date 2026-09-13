@@ -58,6 +58,7 @@ export const api = {
   stopRecording: (id) =>
     request(`/api/recordings/${encodeURIComponent(id)}/stop`, { method: "POST" }),
   live: () => request("/api/recordings/live"),
+  summary: (id) => request(`/api/recordings/${encodeURIComponent(id)}/summary`),
   comparison: (id) => request(`/api/recordings/${encodeURIComponent(id)}/comparison`),
   recovery: (id) => request(`/api/recordings/${encodeURIComponent(id)}/recovery`),
   markBaseline: (id, override = false) =>

@@ -105,6 +105,7 @@ async function load(route) {
       // Fetched with the recording rather than on demand: it is the first question
       // asked of a finished one, and a card that appears a second later reads as a
       // page still loading.
+      recording.summary = await api.summary(id);
       recording.comparison = await api.comparison(id);
       recording.recovery = await api.recovery(id);
       set({ selectedRecording: recording });
@@ -201,9 +202,25 @@ function renderView(state) {
 }
 
 function renderError(state) {
-  document.getElementById("error").innerHTML = state.error
-    ? `<div class="alert alert-danger">${escape(state.error)}</div>`
-    : "";
+  const slot = document.getElementById("error");
+  if (state.error) {
+    slot.innerHTML = `<div class="alert alert-danger">${escape(state.error)}</div>`;
+  } else if (state.notice) {
+    slot.innerHTML = `<div class="alert alert-success">${escape(state.notice)}</div>`;
+  } else {
+    slot.innerHTML = "";
+  }
+}
+
+/** A confirmation that clears itself. It reports that something worked, which stops
+ *  being news almost immediately -- unlike an error, which waits to be dealt with. */
+let noticeTimer = null;
+function notify(message) {
+  set({ error: null, notice: message });
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => {
+    if (get().notice === message) set({ notice: null });
+  }, 4000);
 }
 
 async function onRouteChange() {
@@ -387,6 +404,50 @@ ${refusal.message}
   }
 }
 
+/**
+ * Order the stats table by a column. Clicking the active one reverses it.
+ *
+ * Numbers descend first: the reason to sort by p95 is to find the worst row, and
+ * making that a second click is one click of friction on the common case. The metric
+ * name ascends first, for the same reason in reverse.
+ */
+function sortTable(column) {
+  const current = get().tableSort;
+  const first = column === "metric" ? "asc" : "desc";
+  const direction =
+    current?.key === column ? (current.direction === "asc" ? "desc" : "asc") : first;
+  set({ tableSort: { key: column, direction } });
+}
+
+/**
+ * Put the table somewhere else: the clipboard as TSV, or a file as CSV.
+ *
+ * Both reflect the order on screen (§14.3), because the common case is pasting these
+ * numbers into a ticket right after finding the row that looks wrong.
+ */
+async function copyTable() {
+  const text = table.toDelimited(get(), "	");
+  try {
+    await navigator.clipboard.writeText(text);
+    notify("Table copied as TSV.");
+  } catch {
+    // Clipboard access can be refused, and a silent no-op looks like a dead button.
+    set({ error: "The browser would not allow writing to the clipboard." });
+  }
+}
+
+function downloadTable() {
+  const state = get();
+  const id = state.live?.recordingId ?? state.selectedRecording?.id ?? "metrix";
+  const blob = new Blob([table.toDelimited(state, ",")], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${id}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 async function deleteProfile(name) {
   const message =
     `Delete the profile "${name}"?
@@ -422,6 +483,9 @@ document.addEventListener("click", (event) => {
   if (action === "profile-reload") reloadProfiles();
   if (action === "profile-resolve") resolveProfile(profile);
   if (action === "profile-verify") verifyProfile(profile);
+  if (action === "table-sort") sortTable(button.dataset.column);
+  if (action === "table-copy") copyTable();
+  if (action === "table-csv") downloadTable();
   if (action === "baseline-toggle") {
     toggleBaseline(recording, button.dataset.baseline === "1");
   }
@@ -456,7 +520,7 @@ document.addEventListener("submit", (event) => {
 
 subscribe((state) => [activeRoute(state).name], renderShell);
 subscribe((state) => [state.health], renderHealth);
-subscribe((state) => [state.error], renderError);
+subscribe((state) => [state.error, state.notice], renderError);
 subscribe(selectView, render);
 renderShell(get());
 renderHealth(get());

@@ -299,6 +299,8 @@ Available from the column picker: min, max, p75, p90, p95, p99 (with its confide
 
 **On standard deviation:** it is here because it was asked for, and it genuinely earns a column — a median of 40ms beside a standard deviation of 300ms tells you at a glance that a step is bimodal or unstable, which no percentile shows as quickly. Worth knowing that latency distributions are right-skewed, so std dev overstates the typical spread and is a poor thing to set a threshold on; median and p95 describe the experience better, and sit adjacent in the table for that reason. Nothing hidden — just don't let std dev be the number that decides something.
 
+**With no engine, the rows are host metrics grouped under their target**, and the run-total row at the top is every box's readings pooled into one distribution — the same pooled view the baseline comparison uses (§10.2). The columns become Count, Min, Median, p95, Max and Std dev, and a figure the sample count cannot support is drawn as an em dash carrying that count rather than as a blank or a zero. Sorting is within a group: sorting across groups would dissolve the grouping into a flat list and lose which box a row belongs to. The chain-and-step rows of §14.1 arrive with the engine and slot into the same shape.
+
 ### 14.3 Live behavior
 
 - Updates once per second from the same stream as the charts (§2.5).

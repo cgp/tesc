@@ -462,3 +462,18 @@ def test_a_leak_becomes_an_annotation_when_a_recording_closes(db) -> None:
 def _summary_is_frozen() -> None:
     """Type-level reminder: a Summary is data, never a mutable accumulator."""
     assert Summary(metric="x", n=0)
+
+
+def test_a_span_counts_moments_rather_than_rows(db) -> None:
+    """A box with four metrics was not sampled four times as often as it was."""
+    recording = record(
+        db,
+        values={
+            "box-a": [
+                (i * 1000, {"cpu.busy": 5.0, "mem.used_bytes": 1.0, "conn.established": 2.0})
+                for i in range(10)
+            ]
+        },
+    )
+    span = store.spans(db, recording)["box-a"]
+    assert span == {"first_ms": 0, "last_ms": 9000, "n": 10}
