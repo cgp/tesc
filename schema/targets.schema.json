@@ -40,6 +40,14 @@
       ],
       "pattern": "^(\\d+[smh])+$"
     },
+    "HttpVersion": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "http1",
+        "http2"
+      ]
+    },
     "Target": {
       "type": "object",
       "properties": {
@@ -60,6 +68,11 @@
             "string",
             "null"
           ]
+        },
+        "http_version": {
+          "description": "Protocol selection: auto uses ALPN for TLS and HTTP/1.1 for cleartext.",
+          "$ref": "#/$defs/HttpVersion",
+          "default": "auto"
         },
         "id": {
           "description": "Stable identity for charts and comparison — a task id, instance id, or hostname.",

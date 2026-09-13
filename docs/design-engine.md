@@ -2,7 +2,7 @@
 
 The load generator: what it executes, how it measures, and why the numbers can be trusted. Pairs with [design-api.md](design-api.md); the boundary is in [design-api-engine-contract.md](design-api-engine-contract.md).
 
-> **Status: engine implementation has begun.** B1.1 supplies the mock target; the load path follows in [implementation-engine.md](implementation-engine.md). The API and observation track remains independent.
+> **Status: core load-path implementation.** B1.1 supplies the mock target; B1.2 adds fixed-rate scheduling and HTTP transport. See [implementation-engine.md](implementation-engine.md) for the remaining milestones.
 
 The engine takes one self-contained plan bundle and emits NDJSON. It knows nothing about the API, the database, the UI, or AWS, and nothing in this design may assume otherwise.
 
@@ -65,6 +65,49 @@ ECONNREFUSED). Idle keep-alive sockets count until closed. Rejections do not con
 random samples. Limits are disabled when omitted; zero is invalid. Ctrl-C stops
 the listener and cancels outstanding connections. The mock may allocate and lock;
 the generator's hot-path constraints do not apply to this test target.
+
+---
+
+### 2.3 Fixed-rate execution (B1.2)
+
+`metrix-engine --plan examples/plans/mock-fixed` executes the initial supported
+subset: one target, one 100% chain, one static call, fixed open load, and explicitly
+zero baseline/warmup/settle. Later-step features (assertions, extraction, generators,
+auth, sessions beyond stateless `fresh`, mixtures, sweeps, SLOs, redirects and target
+Host/SNI overrides) fail before network I/O. This keeps partial execution from
+silently producing a different workload. Bundle files must stay within its root.
+
+Arrival `n` is due at monotonic start + `n / rate`, with start inclusive and end
+exclusive. Responses never move that clock. An occupied request or connection cap
+drops that arrival; a late wake-up skips expired arrivals and admits at most the
+latest due one. There is no catch-up burst or unbounded work queue. Admission uses
+preallocated reusable future slots, with no per-request task spawn or scheduler
+lock. HTTP framing, headers and connection establishment still allocate inside the
+transport; the allocation-free rule applies to scheduling and aggregation state.
+One deadline thread uses native `std::thread::sleep` timers (high-resolution on
+current Windows); an atomic waker coalesces notifications when the scheduler is
+busy. It never waits for admission or request completion, and cancellation stops
+it within its bounded sleep slices. This avoids Tokio's coarse Windows timer
+wake-ups dropping traffic at the 75 RPS acceptance rate.
+The timeout (default 5000ms) covers connection/readiness, send and complete body
+drain. Natural completion drains admitted requests under their original deadlines;
+Ctrl-C cancels them and closes owned connections. Requests are never retried.
+
+Each target's `http_version` is `auto` (default: cleartext HTTP/1.1, TLS ALPN preferring
+HTTP/2), `http1`, or `http2` (cleartext prior knowledge; TLS requires ALPN `h2`).
+TLS verifies the address hostname/IP using compiled-in WebPKI roots. One connection
+is established before the arrival clock starts; HTTP/1.1 grows a reusable pool up
+to `connections_per_host` (default 256), while HTTP/2 multiplexes over one socket.
+Connection and stream failures are counted without logging request/response data.
+`max_concurrency` defaults to 200; worker threads default to physical cores minus
+one, minimum one. DNS resolution happens at setup; reconnects use those addresses.
+
+Until B1.3–B1.5, the binary writes only an end-of-run diagnostic to stderr: offered,
+admitted, sent among finished attempts, response, failure, cancellation and skipped
+counts, peak in-flight, and maximum send drift (with its finished-send count). These answer whether the requested
+traffic was attempted; there are no percentiles or NDJSON promises yet. HTTP status
+codes are responses, not assertion failures. Exit 0 means execution finished, 1
+means setup/internal failure, and 130 means interruption; SLO verdicts land in B4.6.
 
 ---
 

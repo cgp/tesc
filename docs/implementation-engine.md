@@ -2,7 +2,7 @@
 
 The load generator. Buildable and testable with nothing but a shell, a bundle, and the mock target — no API, no database, no cloud credentials.
 
-> **Status: B1.1 complete.** The standalone mock target is implemented; B1.2, the fixed-rate scheduler and HTTP transport, is next.
+> **Status: B1.1–B1.2 complete.** The mock and standalone fixed-rate HTTP load path are implemented. B1.3, per-worker histograms and snapshot aggregation, is next.
 
 Design: [design-engine.md](design-engine.md). Boundary and shared foundation (**F0, do this first**): [design-api-engine-contract.md](design-api-engine-contract.md). The other track: [implementation-api.md](implementation-api.md).
 
@@ -70,7 +70,7 @@ Buildable and testable with nothing but a shell, a bundle, and the mock target.
 ### B1 — Core load path
 
 - [x] **B1.1** — `metrix-mock`: configurable latency distribution, error injection, slow start, capacity ceiling
-- [ ] **B1.2** — Open-model fixed-rate scheduler, HTTP/1.1 + HTTP/2 via `hyper`/`rustls`
+- [x] **B1.2** — Open-model fixed-rate scheduler, HTTP/1.1 + HTTP/2 via `hyper`/`rustls`
 - [ ] **B1.3** — `metrix-metrics`: per-worker HDR histograms and counters, merged on a 250ms tick
 - [ ] **B1.4** — NDJSON `--summary` and `--events` output per the F0.3 contract
 - [ ] **B1.5** — Self-metrics: send-schedule drift, in-flight, queue depth (§13.2)
@@ -156,6 +156,6 @@ The mock target (B1.1) is the measurement ground truth: seeded latency distribut
 
 ## 7. Where to start
 
-B1.1 then B1.2–B1.4: the mock with a dial-able latency distribution, then a fixed-rate scheduler holding 75 RPS for 30s and writing NDJSON.
+B1.3 then B1.4: build aggregation and NDJSON on the fixed-rate path. `examples/plans/mock-fixed` runs one static call against the mock; unsupported later-step features fail before sending traffic ([design-engine.md §2.3](design-engine.md#23-fixed-rate-execution-b12)). The Rust tests already run the copied binary at 75 RPS for 30s with only its bundle, requiring at least 98% achieved traffic and explicit skip/drift accounting.
 
 Then compare the reported p50/p95/p99 against the injected distribution by hand. That comparison is the real milestone — everything downstream assumes those numbers are right.

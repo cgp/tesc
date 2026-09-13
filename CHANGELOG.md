@@ -387,3 +387,12 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - Add distribution, validation, CLI, and real-socket tests covering keep-alive, multiplexing, fault recovery, limit release, and cancellation. Mark B1.1 complete; B1.2 remains next.
 - Restore the existing synthetic NDJSON contract fixture and exempt that exact file from the runtime-data ignore rule, fixing two schema tests in fresh checkouts.
 - Validation: bash scripts/check.sh passes (19 mock tests, 384 API tests, 67 front-end tests; 5 live-host tests skipped). Standalone binary smoke test returns HTTP 200 with the configured default 10ms delay.
+
+## 2026-09-13 — B1.2: fixed-rate scheduler and HTTP transport
+
+- Make metrix-engine --plan executable for one static call, one target, fixed open load and zero phases; reject unsupported later-step semantics before network I/O and keep bundle file references inside its root.
+- Schedule absolute arrivals with reusable request slots, bounded concurrency and connection admission, explicit late/cap skips, deadline-bounded drain and cancellation. Use a dedicated native-sleep clock with coalesced atomic wake-ups to avoid coarse Windows timers reducing the offered load.
+- Add direct hyper HTTP/1.1 pooling and HTTP/2 multiplexing, verified rustls TLS/ALPN, whole-request timeouts, body draining and connection recovery without retries. Add targets.http_version and regenerate its shared schema.
+- Add examples/plans/mock-fixed, end-of-run count/drift diagnostics, and tests for validation, request construction, scheduling, faults, TLS and cancellation. Run a copied binary at 75 RPS for 30 seconds from a temporary directory containing only the binary and bundle; require at least 98% of offered arrivals and report every skip.
+- Mark B1.2 complete; B1.3 aggregation is next. No NDJSON, percentile, phase or SLO implementation is claimed by this step.
+- Validation: bash scripts/check.sh passes, including 20 new engine tests, the standalone 75 RPS/30s acceptance, 384 API tests, 67 front-end tests and schema drift checks (5 live-host tests skipped).
