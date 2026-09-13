@@ -1,6 +1,13 @@
 //! Hyper connections and rustls directly; no protocol abstraction or ambient proxy config.
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    net::SocketAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
@@ -129,10 +136,12 @@ pub(crate) enum Connection {
     Http1 {
         sender: http1::SendRequest<Full<Bytes>>,
         _driver: Arc<Driver>,
+        used: bool,
     },
     Http2 {
         sender: http2::SendRequest<Full<Bytes>>,
         _driver: Arc<Driver>,
+        used: bool,
     },
 }
 
@@ -149,12 +158,21 @@ impl Connection {
             Self::Http2 { sender, .. } => sender.is_closed(),
         }
     }
-    fn multiplex(&self) -> Self {
+    fn multiplex(&mut self) -> Self {
         match self {
-            Self::Http2 { sender, _driver } => Self::Http2 {
-                sender: sender.clone(),
-                _driver: Arc::clone(_driver),
-            },
+            Self::Http2 {
+                sender,
+                _driver,
+                used,
+            } => {
+                let previous = *used;
+                *used = true;
+                Self::Http2 {
+                    sender: sender.clone(),
+                    _driver: Arc::clone(_driver),
+                    used: previous,
+                }
+            }
             Self::Http1 { .. } => unreachable!("HTTP/1.1 connections are checked out exclusively"),
         }
     }
@@ -170,6 +188,7 @@ where
             .map_err(|_| Failure::Protocol)?;
         Ok(Connection::Http2 {
             sender,
+            used: false,
             _driver: Arc::new(Driver(tokio::spawn(async {
                 let _ = connection.await;
             }))),
@@ -180,6 +199,7 @@ where
             .map_err(|_| Failure::Protocol)?;
         Ok(Connection::Http1 {
             sender,
+            used: false,
             _driver: Arc::new(Driver(tokio::spawn(async {
                 let _ = connection.await;
             }))),
@@ -234,7 +254,7 @@ impl Pool {
 
     pub fn acquire(&mut self) -> Option<Lease> {
         if self.version == HttpVersion::Http2 {
-            if let Some(shared) = &self.shared {
+            if let Some(shared) = &mut self.shared {
                 if !shared.is_closed() {
                     return Some(Lease {
                         connection: Some(shared.multiplex()),
@@ -288,6 +308,25 @@ pub(crate) struct Job {
     pub template: Arc<RequestTemplate>,
     pub scheduled: Instant,
     pub admitted: Instant,
+    pub send_state: Arc<SendState>,
+}
+
+/// Allocated once per reusable slot. Zero means not sent; one encodes zero drift.
+#[derive(Default)]
+pub(crate) struct SendState(AtomicU64);
+
+impl SendState {
+    pub fn reset(&self) {
+        self.0.store(0, Ordering::Relaxed);
+    }
+    pub fn drift(&self) -> Option<Duration> {
+        let value = self.0.load(Ordering::Relaxed);
+        (value != 0).then(|| Duration::from_nanos(value - 1))
+    }
+    fn record(&self, drift: Duration) {
+        let encoded = drift.as_nanos().min(u128::from(u64::MAX - 1)) as u64 + 1;
+        self.0.store(encoded, Ordering::Relaxed);
+    }
 }
 
 #[derive(Debug, Default)]
@@ -299,6 +338,9 @@ pub(crate) struct Observation {
     pub status: Option<u16>,
     pub bytes_received: u64,
     pub error: Option<Failure>,
+    pub request_duration: Option<Duration>,
+    pub connections_opened: u64,
+    pub connection_reused: bool,
 }
 
 pub(crate) struct Completion {
@@ -322,11 +364,13 @@ pub(crate) async fn execute(job: Option<Job>) -> Completion {
         {
             job.lease.connection = None; // Close stale socket before opening its replacement.
             job.lease.connection = Some(job.endpoint.connect().await?);
+            observation.connections_opened += 1;
         }
         exchange(
             job.lease.connection.as_mut().expect("connected"),
             &job.template,
             job.scheduled,
+            &job.send_state,
             &mut observation,
         )
         .await
@@ -334,6 +378,7 @@ pub(crate) async fn execute(job: Option<Job>) -> Completion {
     .await
     .unwrap_or(Err(Failure::Timeout));
     observation.total = job.admitted.elapsed();
+    observation.request_duration = observation.sent.map(|sent| sent.elapsed());
     observation.error = result.err();
     if observation.error.is_some()
         && job
@@ -354,26 +399,31 @@ async fn exchange(
     connection: &mut Connection,
     template: &RequestTemplate,
     scheduled: Instant,
+    send_state: &SendState,
     observation: &mut Observation,
 ) -> Result<(), Failure> {
     let mut request = Request::new(Full::new(template.body.clone()));
     *request.method_mut() = template.method.clone();
     *request.headers_mut() = template.headers.clone();
     let response = match connection {
-        Connection::Http1 { sender, .. } => {
+        Connection::Http1 { sender, used, .. } => {
             *request.uri_mut() = UriPath::origin(&template.uri);
             sender.ready().await.map_err(|_| Failure::Send)?;
-            mark_sent(observation, scheduled);
+            mark_sent(observation, scheduled, send_state);
+            observation.connection_reused = *used;
+            *used = true;
             sender
                 .send_request(request)
                 .await
                 .map_err(|_| Failure::Send)?
         }
-        Connection::Http2 { sender, .. } => {
+        Connection::Http2 { sender, used, .. } => {
             *request.uri_mut() = template.uri.clone();
             *request.version_mut() = hyper::Version::HTTP_2;
             sender.ready().await.map_err(|_| Failure::Send)?;
-            mark_sent(observation, scheduled);
+            mark_sent(observation, scheduled, send_state);
+            observation.connection_reused = *used;
+            *used = true;
             sender
                 .send_request(request)
                 .await
@@ -392,10 +442,11 @@ async fn exchange(
     Ok(())
 }
 
-fn mark_sent(observation: &mut Observation, scheduled: Instant) {
+fn mark_sent(observation: &mut Observation, scheduled: Instant, send_state: &SendState) {
     let sent = Instant::now();
     observation.sent = Some(sent);
     observation.drift = sent.saturating_duration_since(scheduled);
+    send_state.record(observation.drift);
 }
 
 // Keep origin-form construction out of request string formatting.

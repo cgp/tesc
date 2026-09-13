@@ -15,10 +15,16 @@ use hyper::{
 };
 use metrix_plan::{Body, CallFile, LoadMode, LoadModel, Mix, SessionPolicy, Target, Targets};
 use serde::de::DeserializeOwned;
+use sha2::{Digest, Sha256};
 
 use crate::schedule::Schedule;
 
 pub struct Plan {
+    pub(crate) name: String,
+    pub(crate) hash: String,
+    pub(crate) chain: String,
+    pub(crate) step: String,
+    pub(crate) call: String,
     pub(crate) target: Target,
     pub(crate) request: Arc<RequestTemplate>,
     pub(crate) rate: f64,
@@ -41,8 +47,9 @@ impl Plan {
         let root = root
             .canonicalize()
             .map_err(|_| "--plan: cannot open bundle directory")?;
-        let mix: Mix = read(&root, Path::new("mix.json"))?;
-        let targets: Targets = read(&root, Path::new("targets.json"))?;
+        let mut documents = BTreeMap::new();
+        let mix: Mix = read(&root, Path::new("mix.json"), &mut documents)?;
+        let targets: Targets = read(&root, Path::new("targets.json"), &mut documents)?;
         require(
             mix.version == 1,
             "mix.json/version: only version 1 is supported",
@@ -146,7 +153,7 @@ impl Plan {
         )?;
         let mut calls = BTreeMap::new();
         for file in &mix.calls {
-            for (name, call) in read::<CallFile>(&root, file)? {
+            for (name, call) in read::<CallFile>(&root, file, &mut documents)? {
                 require(
                     !name.is_empty() && calls.insert(name, call).is_none(),
                     "mix.json/calls: empty or duplicate call name",
@@ -225,6 +232,11 @@ impl Plan {
             "call/timeout_ms: must be positive and representable by the monotonic clock",
         )?;
         Ok(Self {
+            name: mix.name.clone(),
+            hash: bundle_hash(&documents),
+            chain: chain.name.clone(),
+            step: step.id.clone(),
+            call: step.call.clone(),
             target,
             request: Arc::new(RequestTemplate {
                 method: call.method.to_string().parse().expect("plan method enum"),
@@ -242,7 +254,11 @@ impl Plan {
     }
 }
 
-fn read<T: DeserializeOwned>(root: &Path, relative: &Path) -> Result<T, String> {
+fn read<T: DeserializeOwned>(
+    root: &Path,
+    relative: &Path,
+    documents: &mut BTreeMap<String, Vec<u8>>,
+) -> Result<T, String> {
     require(
         !relative.as_os_str().is_empty()
             && relative
@@ -260,13 +276,31 @@ fn read<T: DeserializeOwned>(root: &Path, relative: &Path) -> Result<T, String> 
     )?;
     let bytes = fs::read(path).map_err(|_| "bundle: cannot read referenced file")?;
     // Serde errors can quote input values. Retain location, never potentially secret input.
-    serde_json::from_slice(&bytes).map_err(|error| {
+    let document = serde_json::from_slice(&bytes).map_err(|error| {
         format!(
             "bundle document: invalid JSON or document shape at line {}, column {}",
             error.line(),
             error.column()
         )
-    })
+    })?;
+    let name = relative
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/");
+    documents.insert(name, bytes);
+    Ok(document)
+}
+
+fn bundle_hash(documents: &BTreeMap<String, Vec<u8>>) -> String {
+    let mut hash = Sha256::new();
+    for (path, bytes) in documents {
+        hash.update((path.len() as u64).to_le_bytes());
+        hash.update(path.as_bytes());
+        hash.update((bytes.len() as u64).to_le_bytes());
+        hash.update(bytes);
+    }
+    format!("sha256:{:x}", hash.finalize())
 }
 
 fn static_text(value: &str) -> Result<(), String> {

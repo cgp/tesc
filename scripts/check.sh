@@ -43,6 +43,9 @@ fi
 # ------------------------------------------------------------------- contract
 if [[ $scope == all || $scope == contract ]]; then
     run "contract: schemas match the Rust types" bash "$root/scripts/check-schema.sh"
+    if [[ $scope == all ]]; then
+        run "contract: emitted NDJSON matches the schema" uv run --project "$root/api" python "$root/scripts/check-engine-output.py"
+    fi
 
     # Rule 1/2 of both implementation plans: the engine gets concrete addresses and
     # never a cloud identity. Cheap to check, and the kind of thing that erodes one

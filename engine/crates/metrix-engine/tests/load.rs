@@ -23,6 +23,18 @@ fn assert_accounting(report: &Report) {
         report.responses + report.failed + report.cancelled
     );
     assert!(report.sent_finished <= report.responses + report.failed);
+    assert_eq!(report.metrics.counters.started, report.admitted);
+    assert_eq!(report.metrics.counters.completed, report.responses);
+    assert_eq!(report.metrics.counters.failed, report.failed);
+    assert_eq!(report.metrics.counters.cancelled, report.cancelled);
+    assert_eq!(report.metrics.total.count(), report.sent_finished);
+    assert_eq!(report.metrics.drift.count(), report.sent);
+    assert!(report.sent_finished <= report.sent && report.sent <= report.admitted);
+    assert_eq!(
+        report.metrics.chain.count(),
+        report.responses + report.failed
+    );
+    assert_eq!(report.metrics.total.overflow, 0);
 }
 
 async fn against_mock(
