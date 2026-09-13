@@ -15,7 +15,7 @@ import { empty, field, icon } from "./ui.js";
 export function selectState(state) {
   return state.selectedRecording
     ? [state.selectedRecording]
-    : [state.selectedRecording, state.recordings, state.archive];
+    : [state.selectedRecording, state.recordings, state.archive, state.selectedRecordings];
 }
 
 export function render(state) {
@@ -53,6 +53,13 @@ export function render(state) {
   const rows = state.recordings
     .map(
       (r) => `<tr>
+        <td>
+          <input class="form-check-input m-0" type="checkbox"
+                 data-change-action="recording-select" data-recording="${escape(r.id)}"
+                 aria-label="Select ${escape(r.id)}"${
+                   state.selectedRecordings?.includes(r.id) ? " checked" : ""
+                 }>
+        </td>
         <td class="name">
           <a href="#/recordings/${encodeURIComponent(r.id)}">${escape(r.id)}</a>
           ${
@@ -82,11 +89,32 @@ export function render(state) {
         <h3 class="card-title">Recordings
           <span class="card-subtitle">${showing(state)}</span>
         </h3>
+        <div class="card-actions">
+          <button class="btn btn-danger" data-action="delete-selected"
+                  ${state.selectedRecordings?.length ? "" : "disabled"}
+                  title="Remove these recordings and everything in them. A purge keeps the figures; this does not.">
+            ${icon("trash")} ${
+              state.selectedRecordings?.length
+                ? `Delete ${state.selectedRecordings.length}`
+                : "Delete selected"
+            }
+          </button>
+        </div>
       </div>
       <div class="table-responsive">
         <table class="table card-table table-vcenter metrix-table">
           <thead><tr>
-            <th style="width:22%">Recording</th>
+            <th style="width:4%">
+              <input class="form-check-input m-0" type="checkbox"
+                     data-change-action="recording-select-all"
+                     aria-label="Select every recording on this page"${
+                       state.recordings.length &&
+                       state.recordings.every((r) => state.selectedRecordings?.includes(r.id))
+                         ? " checked"
+                         : ""
+                     }>
+            </th>
+            <th style="width:18%">Recording</th>
             <th style="width:10%">Kind</th>
             <th style="width:9%">Status</th>
             <th style="width:12%">Notes</th>

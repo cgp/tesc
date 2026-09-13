@@ -6,7 +6,7 @@ import json
 import sqlite3
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from metrix_api import analysis, export
@@ -432,6 +432,23 @@ def post_purge(
         "files": result.files,
         "bytes": result.bytes,
     }
+
+
+@router.post("/delete")
+def post_delete_selected(
+    request: Request,
+    recording_ids: list[str] = Body(..., embed=True),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    """Remove several obsolete recordings from disk and the archive."""
+    if not recording_ids:
+        raise HTTPException(status_code=400, detail="select at least one recording")
+    for recording_id in recording_ids:
+        _require(conn, recording_id)
+
+    for recording_id in recording_ids:
+        purging.delete_recording(_config(request), conn, recording_id)
+    return {"deleted": recording_ids}
 
 
 # ----------------------------------------------------------------------- export

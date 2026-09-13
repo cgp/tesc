@@ -473,3 +473,14 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - Added regressions for live drift before slow responses, sample conservation, cancellation, stalled TLS/pre-send timeouts, HTTP/2 peer-capacity limits, executor stalls and emitted metric/sample-count pairing. Reused exact distribution maxima without histogram encoding for scalar drift output.
 - B1.5 and B1 complete; B2.1 phase timeline is next. Changes remain isolated on engine in its worktree.
 - Validation: full bash scripts/check.sh passed, including Rust fmt/clippy/tests, the copied binary 75 RPS/30s acceptance run, emitted NDJSON schema validation, 384 Python tests and 67 front-end regressions.
+
+## 2026-09-13 — Delete, alongside purge, because they lose different things.
+
+- **A recording can now be deleted outright**, selected from the archive and removed in one action. Purging answers *we are done with the request-level evidence*; deleting answers *this should not be in the history at all* — a bad run, a misconfigured target, an experiment nobody is interested in any more.
+- **The two are kept apart rather than folded into one control with a checkbox.** A purge cannot cost you a number and a delete takes all of them, and a person reaching for the first should never be one misread away from the second. The button and the dialog both say which is which: *a purge keeps the figures and drops only the request-level data; this keeps nothing.*
+- **A baseline in the selection is called out by id.** Deleting one leaves every later recording in its series with nothing to be compared against — a consequence that lands on a page the person deleting is not looking at.
+- **A selection cannot outlive the rows it was made over.** It is cleared whenever the list is reloaded, so narrowing a filter can never turn *delete the three I picked* into *delete three I can no longer see*.
+- **Cascade deletion is asserted, not assumed.** SQLite honours `ON DELETE CASCADE` only when `PRAGMA foreign_keys` is on — off by default — so a test counts rows in all six child tables before and after. Orphaned samples would be invisible, never read again, and would grow the database forever. The pinned inventory is deliberately not cascaded: one snapshot is commonly shared by every run against an environment that did not change, and it outlives them.
+- Fixed the checkbox column overflowing every row it was in: the `.form-check` wrapper carries padding for a label that is not there. It is now a bare input with an `aria-label`, the same shape the series page already uses to pick runs.
+- Verified in a browser: the dialog named the baseline by id, declining deleted nothing, confirming removed both recordings and their files, the archive count fell 12 → 10, the deleted ids 404, and the button disabled itself again. No clipped cells, no horizontal overflow at 1280px, no console errors.
+- Verified: `scripts/check.sh` all green — 470 passed, 1 skipped, 122 front-end tests.

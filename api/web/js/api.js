@@ -81,6 +81,7 @@ export const api = {
   purgeable: (id) => request(`/api/recordings/${encodeURIComponent(id)}/purgeable`),
   purge: (id) =>
     request(`/api/recordings/${encodeURIComponent(id)}/purge`, { method: "POST" }),
+  deleteSelected: (ids) => request("/api/recordings/delete", json("POST", { recording_ids: ids })),
   purgeSeries: (key) =>
     request(`/api/series/purge?${new URLSearchParams({ key })}`, { method: "POST" }),
   series: (id, metric, target) => {

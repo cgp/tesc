@@ -22,6 +22,7 @@ from metrix_api import analysis, export
 from metrix_api import purge as purging
 from metrix_api.config import load_config
 from metrix_api.main import create_app
+from metrix_api.observer.facts import HostFacts
 from metrix_api.observer.metrics import Annotation, Gap, Sample
 from metrix_api.profiles import parse_profile, save_profile
 from metrix_api.store import open_store
@@ -238,6 +239,87 @@ class TestPurgeRoutes:
     def test_purging_something_that_does_not_exist_is_a_404(self, client) -> None:
         assert client.post("/api/recordings/not-a-run/purge").status_code == 404
         assert client.get("/api/recordings/not-a-run/purgeable").status_code == 404
+
+    def test_selected_recordings_are_deleted_together(self, home, client) -> None:
+        with open_store(home.database) as conn:
+            ids = [record(conn, started=at(i + 1)) for i in range(2)]
+        for recording_id in ids:
+            bulk(home, recording_id)
+
+        body = client.post("/api/recordings/delete", json={"recording_ids": ids}).json()
+
+        assert body["deleted"] == ids
+        assert all(not home.run_dir(recording_id).exists() for recording_id in ids)
+        with open_store(home.database) as conn:
+            for recording_id in ids:
+                with pytest.raises(LookupError):
+                    store.get(conn, recording_id)
+
+    def test_selected_delete_validates_all_ids_before_deleting(self, home, client) -> None:
+        with open_store(home.database) as conn:
+            recording_id = record(conn)
+        bulk(home, recording_id)
+
+        response = client.post(
+            "/api/recordings/delete", json={"recording_ids": [recording_id, "missing"]}
+        )
+
+        assert response.status_code == 404
+        assert any(home.run_dir(recording_id).iterdir())
+
+    def test_deleting_leaves_nothing_of_the_recording_behind(self, home, client) -> None:
+        """The row goes and every child row goes with it.
+
+        SQLite enforces `ON DELETE CASCADE` only when `PRAGMA foreign_keys` is on,
+        which is off by default -- so this asserts the outcome rather than trusting
+        the declaration. Orphaned samples would be invisible, would never be read
+        again, and would grow the database forever.
+        """
+        with open_store(home.database) as conn:
+            recording_id = record(
+                conn,
+                gap=True,
+                note=Annotation(code="host_count_changed", severity="warn", from_ms=0,
+                                message="2 -> 3"),
+            )
+            store.save_facts(
+                conn,
+                recording_id,
+                "box-a",
+                HostFacts(identity={"hostname": "app-1"}, filesystems=[]),
+                at="start",
+            )
+            children = (
+                "recording_target",
+                "phase",
+                "host_sample",
+                "collection_gap",
+                "annotation",
+                "host_identity",
+            )
+            before = {
+                table: conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE recording_id = ?", (recording_id,)
+                ).fetchone()[0]
+                for table in children
+            }
+        assert all(before.values()), f"nothing to cascade from: {before}"
+
+        client.post("/api/recordings/delete", json={"recording_ids": [recording_id]})
+
+        with open_store(home.database) as conn:
+            after = {
+                table: conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE recording_id = ?", (recording_id,)
+                ).fetchone()[0]
+                for table in children
+            }
+        assert after == dict.fromkeys(children, 0), f"orphaned rows: {after}"
+
+    def test_deleting_nothing_is_refused_rather_than_treated_as_success(
+        self, client
+    ) -> None:
+        assert client.post("/api/recordings/delete", json={"recording_ids": []}).status_code == 400
 
     def test_a_series_purge_names_what_it_skipped(self, home, client) -> None:
         with open_store(home.database) as conn:

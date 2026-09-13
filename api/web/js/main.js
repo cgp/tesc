@@ -152,6 +152,9 @@ async function load(route) {
         recordings: page.recordings,
         archive: { filters, facets: page.facets, total: page.total, limit: page.limit },
         selectedRecording: null,
+        // Cleared with the rows it was made over. A selection that survives a filter
+        // change is a way to delete recordings that are no longer on the screen.
+        selectedRecordings: [],
       });
       return;
     }
@@ -578,6 +581,70 @@ This cannot be undone.`;
 }
 
 /**
+ * Delete recordings outright — the archive is the wrong place for them.
+ *
+ * Different from a purge, and deliberately so. A purge keeps the answer and drops
+ * the evidence; this says the run should not be in the history at all: a bad run, or
+ * one nobody is interested in any more. Nothing survives it, which is why it names
+ * what it is about to take.
+ *
+ * A baseline is called out by name. Deleting one leaves every later recording in its
+ * series with nothing to be compared against, and that consequence lands somewhere
+ * the person deleting is not looking.
+ */
+async function deleteSelectedRecordings() {
+  const ids = get().selectedRecordings ?? [];
+  if (!ids.length) return;
+  const baselines = get()
+    .recordings.filter((r) => ids.includes(r.id) && r.is_baseline)
+    .map((r) => r.id);
+  const warning = baselines.length
+    ? `
+
+${count(baselines.length, "of these is a baseline", "of these are baselines")}:
+  ${baselines.join(`
+  `)}
+Its series loses what it is compared against.`
+    : "";
+  const message =
+    `Delete ${count(ids.length, "recording")} permanently?
+
+This removes their files, measurements, notes and archive entries — a purge keeps
+the figures and drops only the request-level data; this keeps nothing.${warning}
+
+This cannot be undone.`;
+  if (!window.confirm(message)) return;
+  try {
+    set({ error: null });
+    const result = await api.deleteSelected(ids);
+    set({ selectedRecordings: [] });
+    notify(`Deleted ${count(result.deleted.length, "recording")}.`);
+    await onRouteChange();
+  } catch (error) {
+    set({ error: error.message });
+  }
+}
+
+function toggleRecordingSelection(id, selected) {
+  const chosen = get().selectedRecordings ?? [];
+  set({
+    selectedRecordings: selected
+      ? chosen.includes(id) ? chosen : [...chosen, id]
+      : chosen.filter((recordingId) => recordingId !== id),
+  });
+}
+
+function toggleVisibleRecordingSelection(selected) {
+  const visible = get().recordings.map((recording) => recording.id);
+  const chosen = get().selectedRecordings ?? [];
+  set({
+    selectedRecordings: selected
+      ? [...new Set([...chosen, ...visible])]
+      : chosen.filter((id) => !visible.includes(id)),
+  });
+}
+
+/**
  * Mark a recording as the baseline its series is compared against, or clear it.
  *
  * A refusal is a 409 rather than an error to shrug at: the recording carries an
@@ -737,6 +804,7 @@ document.addEventListener("click", (event) => {
   if (action === "profile-verify") verifyProfile(profile);
   if (action === "archive-clear") clearArchiveFilters();
   if (action === "purge") purgeRecording(button.dataset.recording);
+  if (action === "delete-selected") deleteSelectedRecordings();
   if (action === "run-toggle") toggleRun(button.dataset.recording);
   if (action === "compare-runs") compareSelected();
   if (action === "compare-clear") set({ selectedRuns: [] });
@@ -769,6 +837,10 @@ document.addEventListener("change", (event) => {
   if (event.target.closest('[data-change-action="draft-reload"]')) syncDraft();
   const filter = event.target.closest('[data-change-action="archive-filter"]');
   if (filter) filterArchive(filter.dataset.filter, filter.value.trim());
+  const recording = event.target.closest('[data-change-action="recording-select"]');
+  if (recording) toggleRecordingSelection(recording.dataset.recording, recording.checked);
+  const all = event.target.closest('[data-change-action="recording-select-all"]');
+  if (all) toggleVisibleRecordingSelection(all.checked);
 });
 
 // A form with no submit button still submits on Enter, which would reload the page

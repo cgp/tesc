@@ -121,6 +121,24 @@ test("Clear is offered only when there is something to clear", () => {
   );
 });
 
+test("the archive offers selection checkboxes and disables deletion until selected", () => {
+  const markup = view([recording()]);
+  assert.match(markup, /data-change-action="recording-select"/);
+  assert.match(markup, /data-action="delete-selected"[\s\S]*disabled/);
+  assert.match(markup, /data-change-action="recording-select-all"/);
+});
+
+test("selected recordings enable the archive delete action", () => {
+  const row = recording();
+  const markup = render({
+    selectedRecording: null,
+    recordings: [row],
+    selectedRecordings: [row.id],
+    archive: { filters: {}, facets: {}, total: 1 },
+  });
+  assert.doesNotMatch(markup, /data-action="delete-selected"[\s\S]*disabled/);
+});
+
 test("a search term is escaped back into the box, not interpreted", () => {
   const markup = view([recording()], { filters: { q: '"><script>' } });
   assert.match(markup, /&quot;&gt;&lt;script&gt;/);
@@ -171,4 +189,18 @@ test("one already purged says so instead of offering it again", () => {
   assert.doesNotMatch(markup, /data-action="purge"/);
   assert.match(markup, /purged/);
   assert.match(markup, /Every figure on this page is unaffected/);
+});
+
+test("the delete button counts what it will take once something is picked", () => {
+  const row = recording();
+  const markup = render({
+    selectedRecording: null,
+    recordings: [row, recording({ id: "b" })],
+    selectedRecordings: [row.id, "b"],
+    archive: { filters: {}, facets: {}, total: 2 },
+  });
+  assert.match(markup, /Delete 2/);
+  // Said on the button, not only in the dialog: the difference between the two
+  // destructive actions should be legible before either is pressed.
+  assert.match(markup, /A purge keeps the figures; this does not/);
 });

@@ -155,3 +155,13 @@ def purge_series(config: Config, conn: sqlite3.Connection, series_key: str) -> P
             skipped=[*total.skipped, *one.skipped],
         )
     return total
+
+
+def delete_recording(config: Config, conn: sqlite3.Connection, recording_id: str) -> None:
+    """Remove one recording's files and database row permanently."""
+    store.get(conn, recording_id)
+    directory = config.run_dir(recording_id)
+    if directory.is_dir():
+        shutil.rmtree(directory)
+    with transaction(conn):
+        conn.execute("DELETE FROM recording WHERE id = ?", (recording_id,))
