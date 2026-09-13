@@ -441,3 +441,10 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - Added schedule-corrected chain duration, request total and TTFB beside raw latency. Each terminal sample has one corrected counterpart measured from planned arrival, including admission or send delay; skipped arrivals stay explicit shortfalls and cancellation creates no latency samples.
 - Retained corrected HDR histograms through worker merges, phase boundaries and drain. Emit interval histograms with overflow counts and final percentiles with the existing sample-support and confidence-interval rules through the frozen annotation contract. Warmup remains separate and serialization stays on writer threads.
 - Updated design and checklist: B2.3 complete, B2.4 next. Validation: bash scripts/check.sh passed, including HTTP/1.1 and HTTP/2 delay tests, correction arithmetic, HDR round-trip, overflow and count conservation, the standalone 75 RPS/30s run, 384 API tests (5 skipped), 67 front-end tests and emitted-stream schema checks.
+
+## 2026-09-13 — Engine B2.4
+
+- Added concurrency-cap, offered-rate, send-drift, and low-sample-count annotations. Detectors account for traffic phases, partial runs, cap occupancy, and actual admitted sends; percentile suppression uses the shared stats support rules.
+- Added validated bundle settings for rate tolerance and send-drift thresholds, and regenerated the compatible mix schema. Annotation generation stays on the bounded output writer and preserves the frozen NDJSON contract.
+- Completed B2.4; B2.5 calibration and headroom is next.
+- Validation: full `bash scripts/check.sh` passed, including Rust checks and tests, standalone execution, 384 API tests (5 skipped), 67 frontend tests, generated schemas, and emitted NDJSON validation.

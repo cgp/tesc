@@ -353,6 +353,12 @@ pub struct EngineTuning {
     pub connections_per_host: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_cores: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0, max = 99))]
+    pub rate_tolerance_pct: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 3600000))]
+    pub send_drift_threshold_ms: Option<u64>,
 }
 
 /// What to keep from failed calls.

@@ -719,6 +719,24 @@
             "null"
           ]
         },
+        "rate_tolerance_pct": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "maximum": 99,
+          "minimum": 0
+        },
+        "send_drift_threshold_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "maximum": 3600000,
+          "minimum": 1
+        },
         "worker_threads": {
           "description": "Default: physical cores minus one.",
           "type": [

@@ -148,6 +148,40 @@ fn validation_messages_do_not_echo_secrets_from_invalid_input() {
     assert!(error.contains("line") && !error.contains("top-secret"));
 }
 
+#[test]
+fn validates_bundle_detector_settings_and_tiny_rates_without_panicking() {
+    let dir = tempfile::tempdir().unwrap();
+    bundle(dir.path(), "127.0.0.1:1".parse().unwrap(), "http1");
+    for (tolerance, drift, accepted) in [
+        (0, 1, true),
+        (99, 3_600_000, true),
+        (100, 1, false),
+        (2, 0, false),
+        (2, 3_600_001, false),
+    ] {
+        edit(dir.path(), "mix.json", |d| {
+            d["engine"]["rate_tolerance_pct"] = json!(tolerance);
+            d["engine"]["send_drift_threshold_ms"] = json!(drift);
+        });
+        assert_eq!(Plan::load(dir.path()).is_ok(), accepted);
+    }
+    edit(dir.path(), "mix.json", |d| {
+        d["engine"]
+            .as_object_mut()
+            .unwrap()
+            .remove("send_drift_threshold_ms");
+        d["engine"]["rate_tolerance_pct"] = json!(2);
+        d["load"]["rate"] = json!(1e-300);
+    });
+    assert_eq!(
+        Plan::load(dir.path())
+            .unwrap()
+            .detector_config
+            .drift_threshold,
+        std::time::Duration::from_secs(3600)
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn symlinks_cannot_escape_the_bundle() {

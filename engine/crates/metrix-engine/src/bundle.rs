@@ -35,6 +35,7 @@ pub struct Plan {
     pub(crate) concurrency: usize,
     pub(crate) connections: usize,
     pub worker_threads: usize,
+    pub detector_config: crate::DetectorConfig,
 }
 
 pub(crate) struct RequestTemplate {
@@ -112,6 +113,20 @@ impl Plan {
             .ok_or("mix.json/load/rate: required for fixed load")?;
         let duration = mix.load.duration.as_duration();
         Schedule::validate(rate, duration)?;
+        let tolerance = mix.engine.rate_tolerance_pct.unwrap_or(2);
+        let explicit_drift = mix.engine.send_drift_threshold_ms;
+        require(
+            tolerance < 100 && explicit_drift.is_none_or(|ms| (1..=3_600_000).contains(&ms)),
+            "mix.json/engine: detector tolerance must be 0..99 and drift threshold 1..3600000ms",
+        )?;
+        let detector_config = crate::DetectorConfig {
+            rate_tolerance_pct: tolerance,
+            drift_threshold: explicit_drift
+                .map(Duration::from_millis)
+                .unwrap_or_else(|| {
+                    Duration::from_secs_f64((1.0 / rate).min(3600.0)).max(Duration::from_millis(5))
+                }),
+        };
         let baseline = mix.phases.baseline.as_duration();
         let warmup = mix.load.warmup.map_or(Duration::ZERO, |d| d.as_duration());
         let settle = mix.phases.settle.as_duration();
@@ -271,6 +286,7 @@ impl Plan {
             concurrency,
             connections,
             worker_threads,
+            detector_config,
         })
     }
 }

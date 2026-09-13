@@ -1,6 +1,8 @@
 //! Fixed-rate load execution independent of the control plane.
 
 mod bundle;
+mod detectors;
+pub use detectors::{DetectorConfig, Diagnostics, Health as PhaseHealth};
 mod execution;
 mod http;
 mod output;
@@ -47,6 +49,7 @@ pub struct Report {
     pub last_window: Option<Window>,
     pub windows: u64,
     pub windows_dropped: u64,
+    pub diagnostics: Diagnostics,
 }
 
 struct Slot {
@@ -153,6 +156,9 @@ fn flush(
     report.metrics.merge(interval);
     warmup_interval.merge_and_reset(warmup_workers);
     report.warmup_metrics.merge(warmup_interval);
+    report
+        .diagnostics
+        .sync(&report.metrics, &report.warmup_metrics);
     let warmup_active = if active == 0 {
         0
     } else {

@@ -803,6 +803,23 @@ The detector set, at minimum:
 
 Free-text operator notes attach to the same list, so machine and human annotations read together.
 
+B2.4 evaluates traffic phases on cumulative 250ms snapshots and phase-end flushes.
+Cap occupancy integrates observed in-flight transitions, clipped to each phase;
+warmup requests still occupying slots count toward the measured cap. Any occupancy
+warns, escalating above 25% of the full measured duration (elapsed duration on
+interruption). Rate compares observed phase-admitted sends with discrete offered
+arrivals after one second, allowing one pending arrival on live snapshots; drain
+and idle time never dilute the denominator. Drops carry separate late, concurrency
+and connection counts. Drift uses actual observed sends, including unfinished
+requests, and records maximum drift and sample count. Drain completions retain
+admission phase. `engine.rate_tolerance_pct` defaults to 2 (0–99 allowed);
+`engine.send_drift_threshold_ms` defaults to the larger of 5ms and one arrival
+period, capped at one hour (explicit values 1–3,600,000 allowed). Both live thresholds
+are strict. Detectors emit on first detection, severity changes and phase-end
+updates, with phase ranges and counts. Final `sample_count_low` lists the raw
+percentiles suppressed by `stats/`, including histogram overflow, and labels partial
+runs. These warnings do not change exit codes; SLO verdicts remain B4.6.
+
 **On `concurrency_cap_reached` specifically:** hitting the cap is not inherently a failure — it is often exactly the closed-model test you intended. What matters is that the headline numbers stop describing the target and start describing the cap, and nothing in a chart shows that. Hence the explicit note, the shaded chart region, and the escalation to `invalid` when the cap dominates the window.
 
 ### 13.2 Tracking our own limits
@@ -840,8 +857,8 @@ Both gauges are sampled at each snapshot and return to zero on drain/cancellatio
 in the interval, including timer resolution and executor delay, rather than an
 estimate from target latency. Missed ticks coalesce into one observed sample.
 Final partial windows carry the interval's samples; zero samples means unavailable,
-as stated by the companion annotation. Detector thresholds and calibration remain
-B2.4–B2.5. OS resource probes do not run on the request path.
+as stated by the companion annotation. Calibration remains
+B2.5. OS resource probes do not run on the request path.
 
 **In run metadata,** the calibrated ceiling, the machine profile id, and the observed peak headroom are recorded (§9.8). Without this, a comparison across a generator hardware change silently attributes a generator improvement to the target.
 

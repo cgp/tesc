@@ -64,6 +64,9 @@ enum Packet {
         t_ms: u64,
         phase: Phase,
         window: Box<Window>,
+        diagnostics: Box<crate::Diagnostics>,
+        closing: bool,
+        partial: bool,
     },
     Request(RequestData),
     Percentiles {
@@ -262,7 +265,14 @@ impl Output {
         }));
     }
 
-    pub(crate) fn summary(&self, window: &Window, phase: Phase) {
+    pub(crate) fn summary(
+        &self,
+        window: &Window,
+        phase: Phase,
+        diagnostics: &crate::Diagnostics,
+        closing: bool,
+        partial: bool,
+    ) {
         if self.summary.sender.capacity() <= RESERVED
             || self
                 .summary
@@ -271,6 +281,9 @@ impl Output {
                     t_ms: self.elapsed(),
                     phase,
                     window: Box::new(window.clone()),
+                    diagnostics: Box::new(*diagnostics),
+                    closing,
+                    partial,
                 })
                 .is_err()
         {
@@ -477,6 +490,7 @@ fn write_stream(
     let mut buffer = Vec::with_capacity(4096);
     let mut last_losses = (0, 0, 0);
     let mut started = false;
+    let mut detectors = [crate::detectors::Seen::default(); 2];
     while let Some(packet) = receiver.blocking_recv() {
         let packet = match packet {
             Packet::Fence(sender) => {
@@ -528,15 +542,50 @@ fn write_stream(
         let record = match packet {
             Packet::Fence(_) => unreachable!("fences handled above"),
             Packet::Record(record) => *record,
-            Packet::Percentiles { t_ms, from_ms, partial, metrics } => Record::Annotation(Annotation {
+            Packet::Percentiles {
+                t_ms,
+                from_ms,
+                partial,
+                metrics,
+            } => {
+                let raw = [
+                    percentiles(&metrics.chain),
+                    percentiles(&metrics.total),
+                    percentiles(&metrics.ttfb),
+                ];
+                let mut suppressed = Vec::new();
+                for (name, p) in ["chain_duration", "request_total", "ttfb"]
+                    .into_iter()
+                    .zip(&raw)
+                {
+                    for (q, p) in [
+                        ("p50", &p.p50),
+                        ("p95", &p.p95),
+                        ("p99", &p.p99),
+                        ("p99.9", &p.p99_9),
+                    ] {
+                        if p.support == metrix_metrics::stats::Support::Suppressed {
+                            suppressed.push(serde_json::json!({"distribution": name, "percentile": q, "count": p.count, "overflow": p.overflow, "reason": p.suppression}));
+                        }
+                    }
+                }
+                if !suppressed.is_empty() {
+                    write_record(&mut writer, &mut buffer, &Record::Annotation(Annotation {
+                        t_ms, target_id: Some(identity.target.clone()), code: "sample_count_low".into(), severity: Severity::Warn,
+                        phase: Some(Phase::Measure), from_ms, to_ms: Some(t_ms),
+                        message: "Raw latency percentiles were withheld because their recorded population cannot support them.".into(),
+                        detail: Some(serde_json::json!({"partial": partial, "suppressed": suppressed})),
+                    }))?;
+                }
+                Record::Annotation(Annotation {
                 t_ms, target_id: Some(identity.target.clone()), code: "load_percentiles".into(), severity: Severity::Info,
                 phase: Some(Phase::Measure), from_ms, to_ms: Some(t_ms),
                 message: "Measured latency percentiles with actual sample counts and binomial order-statistic 95% intervals; warmup is excluded. Intervals assume independent stationary samples.".into(),
                 detail: Some(serde_json::json!({
                     "partial": partial, "chain": identity.chain, "step": identity.step,
-                    "chain_duration": percentiles(&metrics.chain),
-                    "request_total": percentiles(&metrics.total),
-                    "ttfb": percentiles(&metrics.ttfb),
+                    "chain_duration": raw[0],
+                    "request_total": raw[1],
+                    "ttfb": raw[2],
                     "schedule_corrected": {
                         "method": "scheduled_arrival", "synthetic_samples": 0, "includes_skipped_arrivals": false,
                         "chain_duration": percentiles(&metrics.corrected_chain),
@@ -544,12 +593,38 @@ fn write_stream(
                         "ttfb": percentiles(&metrics.corrected_ttfb),
                     },
                 })),
-            }),
+            })
+            }
             Packet::Summary {
                 t_ms,
                 phase,
                 mut window,
+                diagnostics,
+                closing,
+                partial,
             } => {
+                let base = t_ms.saturating_sub(millis(window.to));
+                for (index, (health, traffic_phase)) in [
+                    (diagnostics.warmup, Phase::Warmup),
+                    (diagnostics.measure, Phase::Measure),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    for annotation in crate::detectors::annotations(
+                        health,
+                        *diagnostics,
+                        traffic_phase,
+                        (base, t_ms),
+                        closing,
+                        partial,
+                        &mut detectors[index],
+                    ) {
+                        let mut annotation = annotation;
+                        annotation.target_id = Some(identity.target.clone());
+                        write_record(&mut writer, &mut buffer, &Record::Annotation(annotation))?;
+                    }
+                }
                 write_summary(
                     &mut writer,
                     &mut buffer,

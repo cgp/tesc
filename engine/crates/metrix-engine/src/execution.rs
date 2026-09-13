@@ -54,6 +54,13 @@ pub(crate) async fn run(
     let mut warmup_interval = Accumulator::default();
     let mut lag = Lag::default();
     let start = Instant::now();
+    report.diagnostics = crate::Diagnostics::new(
+        plan.detector_config,
+        plan.concurrency,
+        plan.baseline,
+        plan.warmup,
+        plan.duration,
+    );
     let measure_from_ms = output.map(|o| {
         o.elapsed().saturating_add(
             (plan.baseline + plan.warmup)
@@ -75,6 +82,7 @@ pub(crate) async fn run(
     let mut pool = Some(pool);
     let mut initial_connection_counted = false;
     loop {
+        report.diagnostics.observe(start.elapsed(), active);
         let phase = timeline.phase;
         if !initial_connection_counted && matches!(phase, Phase::Warmup | Phase::Measure) {
             if phase == Phase::Warmup {
@@ -89,8 +97,12 @@ pub(crate) async fn run(
                 let (arrival, late) = schedule.due(Instant::now());
                 debug_assert!(arrival.is_none());
                 report.offered += late;
+                let h = report.diagnostics.phase_mut(phase);
+                h.offered += late;
+                h.skipped_late += late;
                 report.skipped_late += late;
             }
+            report.diagnostics.observe(start.elapsed(), active);
             flush(
                 Recording {
                     slots: &mut slots,
@@ -108,7 +120,13 @@ pub(crate) async fn run(
                 snapshots.as_ref(),
             );
             if let Some(output) = output {
-                output.summary(report.last_window.as_ref().expect("flushed window"), phase);
+                output.summary(
+                    report.last_window.as_ref().expect("flushed window"),
+                    phase,
+                    &report.diagnostics,
+                    timeline.ready(Instant::now(), active) || report.interrupted,
+                    report.interrupted,
+                );
             }
             if !timeline.advance(Instant::now())? {
                 break;
@@ -131,9 +149,10 @@ pub(crate) async fn run(
                     if slot.phase == Phase::Warmup { warmup_workers[slot.worker].cancel(); } else { workers[slot.worker].cancel(); }
                     if let Some(output) = output { output.cancel(slot.iteration, slot.phase, slot.admitted.elapsed()); }
                 } }
+                report.diagnostics.observe(start.elapsed(), active);
                 flush(Recording { slots: &mut slots, workers: &mut workers, warmup_workers: &mut warmup_workers, warmup_interval: &mut warmup_interval, lag: &mut lag, phase },
                     &mut interval_metrics, &mut report, &mut last_snapshot, start.elapsed(), 0, snapshots.as_ref());
-                if let Some(output) = output { output.summary(report.last_window.as_ref().expect("flushed window"), phase); }
+                if let Some(output) = output { output.summary(report.last_window.as_ref().expect("flushed window"), phase, &report.diagnostics, timeline.ready(Instant::now(), active) || report.interrupted, report.interrupted); }
                 break;
             }
             _ = async { if let Some(deadline) = deadline { tokio::time::sleep_until(deadline).await; } else { std::future::pending::<()>().await; } } => {}
@@ -143,9 +162,10 @@ pub(crate) async fn run(
                 lag.samples += 1;
                 report.max_scheduler_lag = report.max_scheduler_lag.max(late);
                 report.scheduler_lag_samples += 1;
+                report.diagnostics.observe(start.elapsed(), active);
                 flush(Recording { slots: &mut slots, workers: &mut workers, warmup_workers: &mut warmup_workers, warmup_interval: &mut warmup_interval, lag: &mut lag, phase },
                     &mut interval_metrics, &mut report, &mut last_snapshot, start.elapsed(), active, snapshots.as_ref());
-                if let Some(output) = output { output.summary(report.last_window.as_ref().expect("flushed window"), phase); }
+                if let Some(output) = output { output.summary(report.last_window.as_ref().expect("flushed window"), phase, &report.diagnostics, timeline.ready(Instant::now(), active) || report.interrupted, report.interrupted); }
             }
             (index, completion) = poll_fn(|cx| {
                 for (index, slot) in slots.iter_mut().enumerate() {
@@ -181,6 +201,7 @@ pub(crate) async fn run(
             _ = async { timeline.clock.as_ref().expect("traffic clock").tick(&mut timeline.clock_tick).await; }, if timeline.clock.is_some() => {
                 let (arrival, late) = timeline.schedule.as_mut().expect("traffic schedule").due(Instant::now());
                 report.offered += late + u64::from(arrival.is_some());
+                let h = report.diagnostics.phase_mut(phase); h.offered += late + u64::from(arrival.is_some()); h.skipped_late += late;
                 report.skipped_late += late;
                 if let Some(scheduled) = arrival {
                     if let Some(slot) = slots.iter_mut().find(|s| !s.active) {
@@ -200,8 +221,8 @@ pub(crate) async fn run(
                             active += 1;
                             report.admitted += 1;
                             report.peak_in_flight = report.peak_in_flight.max(active);
-                        } else { report.skipped_connections += 1; }
-                    } else { report.skipped_concurrency += 1; }
+                        } else { report.skipped_connections += 1; report.diagnostics.phase_mut(phase).skipped_connections += 1; }
+                    } else { report.skipped_concurrency += 1; report.diagnostics.phase_mut(phase).skipped_concurrency += 1; }
                 }
             }
         }
