@@ -63,6 +63,12 @@ Exactly two things cross the boundary. Everything else is private to one side.
 
 **Into the engine: a plan bundle.** A directory containing `mix.json`, `targets.json`, `calls/`, and any generators and datasets (§4.4). The API assembles and exports one; a person can write one by hand. The engine reads it and needs nothing else — no database, no API, no cloud credentials.
 
+**A stored plan is the mix and the calls; `targets.json` is never stored with it.** It is written at assembly time from a named profile, because the profile is the thing that knows how to resolve a hostname into the boxes actually behind it (§3.1) and the engine knows nothing about profiles. One plan against three environments is three bundles differing in one file. A `targets.json` found in a stored plan — an exported bundle that was edited and re-imported — is reported and then ignored rather than obeyed or refused: silently honouring it would give two sources of truth, and refusing it would break the export-edit-reimport loop the export exists for.
+
+**The assembled bytes are deterministic, and that is a correctness requirement.** The engine identifies a plan by a SHA-256 over the exact bytes it read, and that hash is part of a run's series identity (§17.2). If assembling the same plan twice produced different bytes — a reordered object, a different indent, a zip carrying the clock — the hash would move and every run would start a fresh series with no history. So documents are written one way: sorted keys, two-space indent, trailing newline, UTF-8, LF; and zip entries take a fixed timestamp.
+
+The hash rule is implemented on both sides — length-framed path, path, length-framed content, content, in sorted path order — so the API can record what a run will be identified by before the run starts. Two implementations of one identity can disagree, so `scripts/check-bundle-contract.py` assembles a bundle, hands it to the real binary, and compares the API's hash with the `plan_hash` the engine reports. It is checked against the thing itself rather than against a copy of the same assumption.
+
 **Out of the engine: NDJSON.** Two streams with different volumes and consumers:
 
 | Stream | Cadence | Consumer |

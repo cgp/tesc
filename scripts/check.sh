@@ -45,6 +45,9 @@ if [[ $scope == all || $scope == contract ]]; then
     run "contract: schemas match the Rust types" bash "$root/scripts/check-schema.sh"
     if [[ $scope == all ]]; then
         run "contract: emitted NDJSON matches the schema" uv run --project "$root/api" python "$root/scripts/check-engine-output.py"
+        # The other direction across the same boundary: the engine reads what the API
+        # assembles, and the two agree on the plan hash a run is filed under.
+        run "contract: the engine accepts an assembled bundle" uv run --project "$root/api" python "$root/scripts/check-bundle-contract.py"
     fi
 
     # Rule 1/2 of both implementation plans: the engine gets concrete addresses and
