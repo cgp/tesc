@@ -51,6 +51,82 @@ export function render(state) {
   return list(state);
 }
 
+/**
+ * The long answer to "what is this page for", behind the help button.
+ *
+ * Written here rather than on the page because it is read once, by someone who has
+ * just arrived, and is in the way every time after that. The short answer is the
+ * subtitle; this is the part that explains why the band exists and what it will not
+ * claim. It is our own text, never anything from the API, so there is nothing to
+ * escape.
+ */
+export function help() {
+  return {
+    title: "Series and trends",
+    body: `
+      <p>A single recording says what happened during it. This page answers the
+        question that needs more than one: <strong>is this getting better or worse
+        than it was?</strong> Two runs cannot answer it either — a difference between
+        two numbers means nothing until you know how much that number moves on its
+        own.</p>
+
+      <h4>How runs are grouped</h4>
+      <p>Runs group themselves. Everything recorded against the same
+        <strong>setup identity</strong> — kind, profile, addressing mode, collection
+        interval and API version — is one series, in time order. There is nothing to
+        tag, because manual tagging gets skipped exactly when it matters.</p>
+      <p>Change any part of that identity and the runs belong to a
+        <em>different</em> series. Nothing bridges the two: the old history is still
+        there under its own identity, and the only way to compare across a setup
+        change is to open both deliberately. Measuring through a changed profile or a
+        changed collector and blaming the target is the most expensive mistake this
+        view could make.</p>
+
+      <h4>The band</h4>
+      <p>The shaded band is the series' own noise, measured rather than chosen: the
+        middle of the last ten runs, and twice how much they scattered around it.
+        A point inside the band has not moved — that is what the band is for, and it
+        is why "regression" can mean anything here at all.</p>
+      <p>It is measured from the runs <strong>before</strong> each point, never from a
+        window containing it. A window that included the point it was judging would
+        widen to swallow exactly the movement it exists to detect. That is also why
+        it is drawn as a step: it holds from each run until the next one re-measures
+        it, and a smooth ribbon would show a band that was never in force.</p>
+      <p>Below five usable runs <strong>no band is drawn at all</strong>. A band
+        measured from three runs is narrow enough to flag the fourth for being a
+        Tuesday, and the list of series says how many more runs each one needs.</p>
+
+      <h4>What is left out, and why</h4>
+      <ul>
+        <li>A run carrying an <strong>invalid</strong> note is drawn as a hollow
+          point and kept out of the band. That it failed validity is part of the
+          history; its numbers are not, and the line breaks around it rather than
+          being drawn through readings already known not to be trusted.</li>
+        <li>A run whose sample count could not support a median breaks the line too.
+          A withheld number is never drawn as a zero.</li>
+        <li>The grey line is the <strong>baseline phase alone</strong> — what the
+          environment was doing before the run asked it for anything. A metric that
+          crept up alongside its own idle is the environment drifting, not the
+          application regressing.</li>
+      </ul>
+
+      <h4>What this page will not say</h4>
+      <p>It says a point sits <em>outside the band</em>, and no more than that.
+        Calling something a regression takes three things together: the move, a
+        sample count that supports the claim, and a run with no invalid note. Until
+        all three are checked, the word would be wrong on precisely the runs the
+        other two conditions exist to catch.</p>
+
+      <h4>Reading the charts</h4>
+      <p>One point per run, on a <strong>real time axis</strong> rather than a run
+        count, so a fortnight when nothing was recorded shows up as the gap it was —
+        often the explanation for the step everyone is staring at. All the charts
+        share one crosshair. The table underneath carries the sample count behind
+        every figure and links to the run it came from.</p>
+    `,
+  };
+}
+
 /* ------------------------------------------------------------------- the list */
 
 function list(state) {

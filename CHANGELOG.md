@@ -378,3 +378,14 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - The runs table shows the metric that moved rather than the one that sorts first — the reason to open a run is almost always the metric that left its band, and a column of `conn.established` is not what anyone came for.
 - Verified in a browser against a ten-run history with one invalid run and a CPU jump: the band appears at exactly the sixth run and nowhere earlier, the invalid run is hollow with both lines broken around it, and a two-run series says why it has no band instead of drawing bare points. No console errors, no horizontal overflow at 1280px.
 - Verified: `scripts/check.sh` all green — 388 passed, 1 skipped, 67 front-end tests.
+
+## 2026-09-13 — A page explanation, behind a button.
+
+- **The Series subtitle was confusing** — "the same setup over time, against the band its own runs measure" packed the mechanism into the one line that should carry the question. It now asks it: *is a setup getting better or worse, run by run?*
+- **A help button beside the page title**, opening the long version: how runs group themselves, what the band is and why it is measured from the runs before each point, what is drawn hollow and left out of it, and what the page deliberately will not call a regression. The short answer belongs in the subtitle; the long one is read once, by someone who has just arrived, and is in the way every time after that.
+- A native `<dialog>`, which brings the focus trap and the inert background for nothing. Dismissed by Escape, by the close button, or by clicking away. Clicking away needs script because the backdrop is not an element — a click on it arrives with the dialog as its target, exactly like a click on the dialog's own padding, and only the coordinates tell them apart.
+- **Escape is handled rather than assumed.** A modal `<dialog>` is supposed to close itself on Escape and mostly does; it was found not to in one embedded browser, where the keydown arrived trusted, no `cancel` event fired, and the dialog stayed open with no keyboard way out. Three lines to not depend on it.
+- The button is drawn only on pages that have written an explanation. One that opens an empty dialog teaches people the help button is not worth pressing.
+- Leaving the page closes it, rather than leaving an explanation of the previous page floating over the next one.
+- Verified in a browser: opened from the button, dismissed all three ways, hidden on Config, no console errors, no horizontal overflow at 1280px.
+- Verified: `scripts/check.sh` all green — 388 passed, 1 skipped, 76 front-end tests.

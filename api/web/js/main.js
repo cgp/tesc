@@ -52,7 +52,7 @@ const ROUTES = {
   series: {
     section: "Archive",
     title: "Series",
-    subtitle: "The same setup over time, against the band its own runs measure.",
+    subtitle: "Is a setup getting better or worse, run by run?",
     view: series,
   },
 };
@@ -231,6 +231,35 @@ function renderShell(state) {
   for (const item of document.querySelectorAll("#nav .nav-item[data-route]")) {
     item.classList.toggle("active", item.dataset.route === route.name);
   }
+
+  // Offered only where a page has written one. A help button that opens an empty
+  // dialog teaches people that the help button is not worth pressing.
+  document.getElementById("help-open").hidden = typeof entry.view.help !== "function";
+  closeHelp();
+}
+
+/* ------------------------------------------------------------- page explanation */
+
+/**
+ * The long version of what a page is for.
+ *
+ * A dialog rather than a paragraph on the page: the short answer belongs in the
+ * subtitle and the long one is read once, by someone who has just arrived, and is in
+ * the way every time after that. A native `<dialog>` gives Escape, the focus trap
+ * and the inert background without any of it being written here.
+ */
+function openHelp() {
+  const entry = activeEntry(get());
+  if (typeof entry.view.help !== "function") return;
+  const { title, body } = entry.view.help();
+  document.getElementById("help-title").textContent = title;
+  document.getElementById("help-body").innerHTML = body;
+  document.getElementById("help").showModal();
+}
+
+function closeHelp() {
+  const dialog = document.getElementById("help");
+  if (dialog.open) dialog.close();
 }
 
 function renderView(state) {
@@ -534,6 +563,35 @@ async function deleteProfile(name) {
 
 // One delegated listener rather than per-render bindings, since intentional view
 // updates replace its markup.
+document.getElementById("help-open").addEventListener("click", openHelp);
+
+// Escape, handled rather than assumed. A modal <dialog> is supposed to close itself
+// on Escape and mostly does, but it was found not to in one embedded browser -- the
+// keydown arrived trusted, no `cancel` event fired, and the dialog stayed open with
+// no other way out on the keyboard. Three lines to not depend on it.
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  const dialog = document.getElementById("help");
+  if (!dialog.open) return;
+  event.preventDefault();
+  dialog.close();
+});
+
+// Clicking away closes it. The backdrop is not an element, so a click on it arrives
+// with the dialog itself as the target -- which is also what a click on the dialog's
+// own padding does. Hit-testing the box is what tells the two apart.
+document.getElementById("help").addEventListener("click", (event) => {
+  const dialog = event.currentTarget;
+  if (event.target !== dialog) return;
+  const box = dialog.getBoundingClientRect();
+  const inside =
+    event.clientX >= box.left &&
+    event.clientX <= box.right &&
+    event.clientY >= box.top &&
+    event.clientY <= box.bottom;
+  if (!inside) dialog.close();
+});
+
 document.addEventListener("click", (event) => {
   const button = event.target.closest("[data-action]");
   if (!button) return;
@@ -549,6 +607,7 @@ document.addEventListener("click", (event) => {
   if (action === "profile-resolve") resolveProfile(profile);
   if (action === "profile-verify") verifyProfile(profile);
   if (action === "archive-clear") clearArchiveFilters();
+  if (action === "help-close") closeHelp();
   if (action === "table-sort") sortTable(button.dataset.column);
   if (action === "table-copy") copyTable();
   if (action === "table-csv") downloadTable();

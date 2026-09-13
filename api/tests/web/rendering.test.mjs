@@ -27,7 +27,17 @@ test("background API updates preserve profile fields, focus and selection", asyn
       };
     },
     getElementById(id) {
-      if (!elements.has(id)) elements.set(id, { classList });
+      // `addEventListener` and the <dialog> methods because main.js binds the help
+      // dialog at import time; this test is about subscriptions, not about help.
+      if (!elements.has(id)) {
+        elements.set(id, {
+          classList,
+          addEventListener() {},
+          open: false,
+          showModal() {},
+          close() {},
+        });
+      }
       return elements.get(id);
     },
     querySelector(selector) {

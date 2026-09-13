@@ -133,7 +133,22 @@
     <div class="page-header">
       <div class="container-fluid">
         <div class="page-pretitle" id="page-pretitle"></div>
-        <h2 class="page-title" id="page-title">Metrix</h2>
+        <div class="page-title-row">
+          <h2 class="page-title" id="page-title">Metrix</h2>
+          <!-- Shown only on pages that have written an explanation. A help button
+               that opens an empty dialog is worse than no help button. -->
+          <button type="button" class="btn btn-icon btn-ghost-secondary metrix-help-open"
+                  id="help-open" hidden aria-haspopup="dialog"
+                  aria-label="What this page is for" title="What this page is for">
+            <!-- tabler: help-circle -->
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0"/>
+              <path d="M12 16v.01"/>
+              <path d="M12 13a2 2 0 0 0 .914 -3.782a1.98 1.98 0 0 0 -2.414 .483"/>
+            </svg>
+          </button>
+        </div>
         <div class="page-lede text-secondary" id="page-subtitle"></div>
       </div>
     </div>
@@ -145,6 +160,21 @@
     </div>
   </div>
 </div>
+
+<!--
+  The page explanation. A native <dialog> rather than Bootstrap's modal: it gives
+  Escape, the focus trap and the inert background for nothing, and it is one element
+  instead of three nested ones. Dismissing by clicking outside is the only part that
+  needs script, because a click on the backdrop targets the dialog itself.
+-->
+<dialog id="help" class="metrix-help" aria-labelledby="help-title">
+  <div class="metrix-help-head">
+    <h3 class="metrix-help-title" id="help-title"></h3>
+    <button type="button" class="btn-close" data-action="help-close"
+            aria-label="Close"></button>
+  </div>
+  <div class="metrix-help-body" id="help-body"></div>
+</dialog>
 
 <!--
   Tabler's own JS (Bootstrap's components, bundled). Deferred and vendored so the

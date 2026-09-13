@@ -217,6 +217,57 @@
    happened, and this is simply true every time the page is opened. */
 .metrix-note { max-width: 90ch; margin: 0; font-size: .875rem; }
 
+/* The title and the button that explains it, on one baseline. The button is
+   ghosted so it reads as an affordance rather than as a second heading. */
+.page-title-row { display: flex; align-items: center; gap: .375rem; }
+.metrix-help-open { --tblr-btn-size: 1.75rem; flex: none; }
+
+/* The page explanation. Sized to read rather than to fill: past about 70
+   characters a line of prose stops being scannable, and this is prose. */
+.metrix-help {
+  width: min(46rem, calc(100vw - 3rem));
+  max-height: min(40rem, calc(100vh - 4rem));
+  padding: 0;
+  border: 0;
+  border-radius: var(--tblr-border-radius);
+  box-shadow: var(--tblr-box-shadow-lg, 0 1rem 3rem rgba(0, 0, 0, .18));
+  color: var(--tblr-body-color);
+  background: var(--tblr-bg-surface, #fff);
+}
+.metrix-help::backdrop { background: rgba(24, 36, 51, .35); }
+.metrix-help-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem .75rem;
+  border-bottom: 1px solid var(--tblr-border-color);
+}
+.metrix-help-title { margin: 0; font-size: 1rem; font-weight: 600; }
+.metrix-help-body {
+  padding: 1rem 1.25rem 1.25rem;
+  overflow-y: auto;
+  font-size: .875rem;
+}
+/* Spacing is set on the children rather than left to each element's own margins,
+   which otherwise collapse against each other differently per tag. Reset first, so
+   the rules below are the only ones deciding the rhythm. */
+.metrix-help-body > * { margin: 0; max-width: 70ch; }
+.metrix-help-body > * + * { margin-top: .75rem; }
+/* A heading needs more air above it than between two paragraphs -- it is the break
+   in the argument, and without the gap the section title reads as another line. */
+.metrix-help-body > h4 {
+  margin-top: 1.5rem;
+  font-size: .8125rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--tblr-secondary);
+}
+.metrix-help-body > h4:first-child { margin-top: 0; }
+.metrix-help-body > ul { padding-left: 1.1rem; }
+.metrix-help-body li + li { margin-top: .375rem; }
+
 /* A line of explanation with the action it explains at the far end. */
 .metrix-toolbar {
   display: flex;
