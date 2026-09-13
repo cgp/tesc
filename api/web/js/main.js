@@ -11,6 +11,7 @@ import * as config from "./config.js";
 import { escape } from "./format.js";
 import * as profiles from "./profiles.js";
 import * as recordings from "./recordings.js";
+import * as series from "./series.js";
 import { get, set, subscribe } from "./state.js";
 import * as stream from "./stream.js";
 import * as table from "./table.js";
@@ -48,6 +49,12 @@ const ROUTES = {
     subtitle: "Everything captured, whether or not a load run was attached.",
     view: recordings,
   },
+  series: {
+    section: "Archive",
+    title: "Series",
+    subtitle: "The same setup over time, against the band its own runs measure.",
+    view: series,
+  },
 };
 
 const DEFAULT_ROUTE = "recordings";
@@ -62,7 +69,12 @@ function activeEntry(state) {
 
 function selectView(state) {
   const route = activeRoute(state);
-  return [route.name, route.recordingId, ...activeEntry(state).view.selectState(state)];
+  return [
+    route.name,
+    route.recordingId,
+    route.seriesKey,
+    ...activeEntry(state).view.selectState(state),
+  ];
 }
 
 function parseHash() {
@@ -77,6 +89,11 @@ function parseHash() {
   if (parts[0] === "recordings") {
     return { name: "recordings", recordingId: parts[1] ?? null };
   }
+  if (parts[0] === "series") {
+    // The key carries pipes and an `=`; the hash holds it encoded and it is decoded
+    // once, here, so nothing downstream has to know it was ever escaped.
+    return { name: "series", seriesKey: parts[1] ? decodeURIComponent(parts[1]) : null };
+  }
   return { name: DEFAULT_ROUTE };
 }
 
@@ -87,6 +104,11 @@ async function load(route) {
 
     if (route.name === "profiles") {
       await loadProfiles();
+      return;
+    }
+
+    if (route.name === "series") {
+      await loadSeries(route.seriesKey);
       return;
     }
 
@@ -121,6 +143,22 @@ async function load(route) {
   } catch (error) {
     set({ error: error.message });
   }
+}
+
+/**
+ * The list of series, or one of them with every metric's trend.
+ *
+ * One request for the whole series rather than one per chart: the page draws a chart
+ * per metric over the same set of runs, and fetching them separately would be a
+ * round trip each for data that comes out of a single pass.
+ */
+async function loadSeries(key) {
+  if (!key) {
+    const page = await api.seriesList();
+    set({ series: page.series, seriesFloor: page.min_runs_for_band, selectedSeries: null });
+    return;
+  }
+  set({ selectedSeries: await api.seriesTrend(key) });
 }
 
 // The last value of every metric, read out of the series already fetched. A live
@@ -208,6 +246,7 @@ function renderView(state) {
   // containers exist rather than returned as markup. Feeding an existing chart new
   // data costs an array; rebuilding one costs its crosshair and its zoom.
   if (activeRoute(state).name === "charts") charts.draw(state);
+  if (activeRoute(state).name === "series") series.draw(state);
 }
 
 function renderError(state) {
@@ -559,7 +598,9 @@ window.addEventListener("hashchange", onRouteChange);
 // A canvas does not reflow. Charts are told their new width, and only while the page
 // showing them is the one on screen.
 window.addEventListener("resize", () => {
-  if (activeRoute(get()).name === "charts") charts.resize();
+  const route = activeRoute(get()).name;
+  if (route === "charts") charts.resize();
+  if (route === "series") series.resize();
 });
 
 await pollHealth();

@@ -1,6 +1,6 @@
 """Reading a recording back as answers rather than as rows.
 
-Three questions, all of them comparisons, because a host number on its own answers
+Four questions, all of them comparisons, because a host number on its own answers
 almost nothing. *68% CPU* means one thing on a box that idles at 60 and another on a
 box that idles at 5.
 
@@ -12,6 +12,8 @@ box that idles at 5.
   observation-only recording is *for*.
 * **recovery** -- did it come back after the traffic stopped, and if not, which way
   did it drift (design-api 9.7)?
+* **across the series** -- is this getting better or worse than it was (design-api
+  17.3)? The only one of the four that a single recording cannot answer at all.
 
 `stats/` holds the arithmetic and knows nothing about SQLite; this module reads the
 store and hands it windows. The sample-count rule lives there, once, so nothing here
@@ -24,6 +26,7 @@ import sqlite3
 from dataclasses import dataclass, field
 
 from metrix_api.stats import Delta, Recovery, Summary, compare, recovery, summarize
+from metrix_api.stats.trend import BAND_WINDOW, Run, Trend, trend
 from metrix_api.store import recordings as store
 
 #: The two windows a recovery measurement needs. Named here because the pairing is
@@ -213,3 +216,90 @@ def leaks(conn: sqlite3.Connection, recording_id: str) -> list[tuple[str, Recove
         for r in by_metric.values()
         if r.leaked
     ]
+
+
+#: How many runs of one series a trend reads. Everything is kept and nothing rolls
+#: up (design-api 17.1), so this is a cap on one request rather than on the history:
+#: a series with two hundred runs draws its most recent hundred, and the older ones
+#: are still there under their own ids.
+TREND_RUNS = 100
+
+
+@dataclass(frozen=True, slots=True)
+class SeriesTrends:
+    """One series' history: the runs in it, and what each metric did across them."""
+
+    key: str
+    runs: list[store.RecordingRow] = field(default_factory=list)
+    trends: dict[str, Trend] = field(default_factory=dict)
+    #: True when any run in the series recorded a distinct baseline phase, which is
+    #: what the environment-drift line is drawn from. False for a series of
+    #: observation-only recordings, where baseline and settle collapse into one
+    #: window and there is no separate "before anything happened" to trend.
+    has_baseline_phase: bool = False
+
+    @property
+    def metrics(self) -> list[str]:
+        return sorted(self.trends)
+
+
+def series_trends(
+    conn: sqlite3.Connection,
+    key: str,
+    *,
+    window: int = BAND_WINDOW,
+    limit: int = TREND_RUNS,
+) -> SeriesTrends:
+    """Every metric in one series, oldest run first, with its measured band.
+
+    A run contributes one point per metric: the pooled median across its boxes. Not
+    per box, because a discovered environment replaces its tasks on every deployment
+    -- a per-box trend would start a fresh line each release and answer nothing
+    (design-api 10.2).
+
+    Runs are read in time order and never filtered by status. A run that was aborted
+    measured a real, shorter window; its median is a real median and its sample count
+    travels with it, so dropping it would hide a fortnight of short runs rather than
+    explain them. What *is* held out of the band is any run carrying an `invalid`
+    note, because those are the numbers already known not to be trusted.
+    """
+    runs = sorted(
+        store.list_recordings(conn, series=key, limit=limit),
+        key=lambda r: (r.started_at, r.id),
+    )
+    if not runs:
+        return SeriesTrends(key=key)
+
+    ids = [r.id for r in runs]
+    whole = store.pooled_values(conn, ids)
+    at_rest = store.pooled_values(conn, ids, phase=BASELINE_PHASE)
+
+    metrics = sorted({metric for by_metric in whole.values() for metric in by_metric})
+    trends = {}
+    for metric in metrics:
+        trends[metric] = trend(
+            metric,
+            [
+                Run(
+                    recording_id=run.id,
+                    at=run.started_at,
+                    summary=summarize(metric, whole.get(run.id, {}).get(metric, [])),
+                    baseline=(
+                        summarize(metric, resting)
+                        if (resting := at_rest.get(run.id, {}).get(metric))
+                        else None
+                    ),
+                    invalid=bool(run.annotations.get("invalid")),
+                    status=run.status,
+                )
+                for run in runs
+            ],
+            window=window,
+        )
+
+    return SeriesTrends(
+        key=key,
+        runs=runs,
+        trends=trends,
+        has_baseline_phase=bool(at_rest),
+    )

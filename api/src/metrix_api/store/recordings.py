@@ -512,6 +512,116 @@ def list_recordings(
     return found
 
 
+@dataclass(slots=True)
+class SeriesRow:
+    """One setup, and the runs made against it.
+
+    The identity is the readable key itself (design-api 17.2) plus the parts it was
+    built from, so a list can show *what changed* rather than making anyone diff two
+    pipe-separated strings by eye.
+    """
+
+    key: str
+    kind: str
+    profile: str | None
+    addressing_mode: str
+    api_version: str
+    runs: int
+    first_at: str
+    last_at: str
+    baseline_id: str | None = None
+    #: How many of those runs carry an `invalid` note. Shown because they are the
+    #: runs the noise band is measured without, and a series that is half invalid is
+    #: a series whose band rests on far less than its run count suggests.
+    invalid_runs: int = 0
+
+
+def series_list(conn: sqlite3.Connection) -> list[SeriesRow]:
+    """Every series, most recently run first.
+
+    Grouped by the identity tuple rather than by anything anyone tags: manual
+    grouping gets skipped exactly when it matters, and comparing across a changed
+    setup is the most expensive mistake this view can make (design-api 17.2).
+    """
+    rows = conn.execute(
+        """
+        SELECT series_key, kind, profile, addressing_mode, api_version,
+               COUNT(*) AS runs,
+               MIN(started_at) AS first_at,
+               MAX(started_at) AS last_at,
+               MAX(CASE WHEN is_baseline = 1 THEN id END) AS baseline_id,
+               SUM(CASE WHEN EXISTS (
+                     SELECT 1 FROM annotation a
+                     WHERE a.recording_id = recording.id AND a.severity = 'invalid'
+                   ) THEN 1 ELSE 0 END) AS invalid_runs
+        FROM recording
+        GROUP BY series_key
+        ORDER BY last_at DESC, series_key
+        """
+    ).fetchall()
+    return [
+        SeriesRow(
+            key=row["series_key"],
+            kind=row["kind"],
+            profile=row["profile"],
+            addressing_mode=row["addressing_mode"],
+            api_version=row["api_version"],
+            runs=row["runs"],
+            first_at=row["first_at"],
+            last_at=row["last_at"],
+            baseline_id=row["baseline_id"],
+            invalid_runs=row["invalid_runs"],
+        )
+        for row in rows
+    ]
+
+
+def pooled_values(
+    conn: sqlite3.Connection,
+    recording_ids: list[str],
+    *,
+    phase: str | None = None,
+) -> dict[str, dict[str, list[float]]]:
+    """Every box's readings, per recording and per metric, in one query.
+
+    One query rather than one per recording because a trend reads a whole series at
+    once, and a request that fans out per run gets slower exactly as the history
+    becomes worth looking at.
+
+    Pooled across targets: a discovered environment replaces its tasks on every
+    deployment, so a per-box trend would start a new line each time and answer
+    nothing (design-api 10.2). Naming a `phase` restricts the window to that phase
+    on each target, which is how baseline-phase drift is read.
+    """
+    if not recording_ids:
+        return {}
+
+    placeholders = ",".join("?" * len(recording_ids))
+    if phase is None:
+        sql = (
+            f"SELECT recording_id, metric, value FROM host_sample"
+            f" WHERE recording_id IN ({placeholders})"
+        )
+        params: list[object] = [*recording_ids]
+    else:
+        sql = (
+            f"SELECT s.recording_id AS recording_id, s.metric AS metric, s.value AS value"
+            f" FROM host_sample s"
+            f" JOIN phase p ON p.recording_id = s.recording_id"
+            f"   AND p.target_id = s.target_id AND p.phase = ?"
+            f"   AND s.t_ms >= p.from_ms AND (p.to_ms IS NULL OR s.t_ms <= p.to_ms)"
+            f" WHERE s.recording_id IN ({placeholders})"
+        )
+        params = [phase, *recording_ids]
+
+    gathered: dict[str, dict[str, list[float]]] = {}
+    for row in conn.execute(sql, params):
+        gathered.setdefault(row["recording_id"], {}).setdefault(row["metric"], []).append(
+            row["value"]
+        )
+    return gathered
+
+
 def facets(conn: sqlite3.Connection) -> dict[str, list[str]]:
     """What there is to filter by, across the whole archive.
 

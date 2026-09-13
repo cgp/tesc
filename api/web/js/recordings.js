@@ -597,7 +597,14 @@ function detail(recording) {
               .join(", ") || "—"
           )}
           ${field("Metrics", String(recording.metrics.length))}
-          ${field("Series", `<code>${escape(recording.series_key)}</code>`)}
+          ${field(
+            "Series",
+            // The identity is also the way into the history: what this run did is
+            // half the question, and whether it is better or worse than the last
+            // ten is the other half.
+            `<a href="#/series/${encodeURIComponent(recording.series_key)}"
+               ><code>${escape(recording.series_key)}</code></a>`
+          )}
         </div>
       </div>
     </div>

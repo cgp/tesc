@@ -34,6 +34,14 @@ const state = {
   //: them, because a filtered page cannot say how much it is hiding on its own.
   archive: { filters: {}, facets: {}, total: 0 },
   selectedRecording: null,
+  //: Every setup that has been recorded against, and the one being read. A series
+  //: is not a thing anyone creates -- runs group themselves by identity -- so this
+  //: is derived from the archive rather than stored beside it.
+  series: [],
+  selectedSeries: null,
+  //: How many usable runs a series needs before it has a band. Sent by the API so
+  //: the list can say which series are long enough to be worth opening.
+  seriesFloor: 0,
   live: null,
   error: null,
   //: A short confirmation of something that worked, in the same slot as the error.

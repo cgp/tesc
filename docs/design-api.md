@@ -43,7 +43,8 @@ Three sections, per the discussion:
 | **Profiles** | The environments a run can be pointed at: create, edit and delete them, endpoint by endpoint, plus **hostname discovery and the resolved inventory (§3)**. The editor submits a whole document and the server runs the same validation a hand-written file goes through, so a form cannot save what the loader would reject. A profile's name is fixed after creation — it is part of a recording's series identity (§17.2), so renaming one through the editor would split its history in two. |
 | **Performance › Stats** | **The numbers, as a table** (§14). Per chain and per step: start, finish, median, standard deviation, counts, errors. Updates once per second during a run. No charts on this page. |
 | **Performance › Charts** | The same run drawn (§15) — load and observation on one shared time axis, current-vs-target RPS, host stats, error feed, generator-health strip, phase indicator, stop/abort. No tables on this page. |
-| **Recordings** | Archive of everything captured, load runs and observation-only recordings alike. Grouped into **series** by setup identity (§17.2) with trend charts and regression flags; filter by plan/target/tag/mode, mark a recording as **baseline**, overlay N runs, inspect retained error samples, export (JSON / CSV / static HTML report). |
+| **Archive › Recordings** | Everything captured, load runs and observation-only recordings alike: filter by kind/profile/status/severity/baseline, mark a recording as **baseline**, overlay N runs, inspect retained error samples, export (JSON / CSV / static HTML report). |
+| **Archive › Series** | The same list grouped by setup identity (§17.2), with the trend view (§17.3) and regression flags (§17.4). Its own page rather than a section of a recording, because it is the only view that is not about one recording: a run's own page answers *what happened*, and this answers *is that better or worse than the last ten*. Each recording links to its series and back. |
 
 "Recordings" covers both modes deliberately — an observation-only recording and a load run are the same object with different sections populated, so they compare against each other with the same machinery.
 
@@ -392,11 +393,21 @@ For any metric, a point per run against time, with:
 - **Annotation markers** on any run carrying warnings, and `invalid` runs excluded from the band by default (shown as hollow points, since knowing a run failed validity is itself part of the history).
 - **Environment drift, from the baseline phase.** Baseline-phase host stats trended across runs answer a question no single run can: is the test environment itself changing under us? A p95 that has crept up 30% alongside a baseline CPU that crept up 30% is not an application regression.
 
+**The band is measured from the runs *before* each point, never from a window containing it.** A window that includes the point it is judging widens to swallow exactly the movement it exists to detect: a jump twice the size of normal noise drags the median and the IQR up with it and lands comfortably inside its own band. Trailing also makes the band a claim with a date on it — *this is what normal was before this run* — which is the claim anyone reading a trend is making anyway. It is drawn as a step, holding from each run until the next one re-measures it, because a smooth ribbon would show a band that was never in force at any moment on the chart.
+
+**A band the run count cannot support is not drawn**, the sample-count rule of §12.1 applied to runs instead of samples. Below five usable runs there is no band, and the list of series says how many more each one needs rather than making that discoverable one click at a time. The floor on band width is wider between runs than within one — 5% against 2% — because the two floor different distances: how far a sample strays from its window's median, and how far one run's median strays from the last one's. Two runs of the same setup differ by more than two percent as a matter of course, and a floor that denies it turns an ordinary Tuesday into a finding.
+
+**A run with no supported median is a break in the line, and an invalid run breaks it too.** The first because a withheld number must not be drawn as a zero; the second because a line drawn through a run whose numbers cannot be trusted is a claim the data does not support. The invalid run still gets a hollow point — it happened, and that it failed validity is part of the history.
+
+**The x axis is real time, not run index.** Runs are not evenly spaced, and a chart that pretended they were would hide the fortnight nobody recorded anything in — which is often the explanation for the step everyone is staring at.
+
 Trendable metrics include p50/p95/p99 with intervals, error rate, achieved vs target RPS, chain completion rate, connection reuse, per-phase host stats, recovery time from settle, and — for breakpoint runs — **knee, cliff, and max sustained rate**. That last set is the most valuable longitudinal output the tool produces: capacity over time, one point per run.
 
 ### 17.4 Regression detection
 
 A metric is flagged when it moves beyond a configured multiple of the series' noise floor (default 2× IQR), **and** its sample count supports the claim, **and** the run carries no `invalid` annotation. All three conditions, because any one alone produces false positives at a rate that trains people to ignore the flag.
+
+The three are kept apart in the code. §17.3 computes only the geometry — *this point sits outside the band* — and the trend view says exactly that and no more; the word *regression* is not used until all three conditions are assembled here. A view that called the first condition by the name of the verdict would be wrong on precisely the runs the other two exist to catch.
 
 Flags are advisory in the UI and available as a machine-readable verdict for the same CI path as §16, so a pipeline can fail on "outside the historical band" as well as on a fixed SLO threshold. The historical check is usually the more useful of the two — fixed thresholds are guesses made before the data existed.
 

@@ -54,6 +54,11 @@ export const api = {
     return request(`/api/recordings${suffix}`);
   },
   recording: (id) => request(`/api/recordings/${encodeURIComponent(id)}`),
+  seriesList: () => request("/api/series"),
+  // The key is a query parameter, not a path segment: it is a readable tuple with
+  // pipes in it, and burying that in a path hides the very thing it is readable for.
+  seriesTrend: (key) =>
+    request(`/api/series/trend?${new URLSearchParams({ key })}`),
   startRecording: (body) => request("/api/recordings", json("POST", body)),
   stopRecording: (id) =>
     request(`/api/recordings/${encodeURIComponent(id)}/stop`, { method: "POST" }),
