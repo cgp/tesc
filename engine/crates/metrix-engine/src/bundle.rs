@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 use crate::schedule::Schedule;
 
 pub struct Plan {
+    root: std::path::PathBuf,
     pub(crate) name: String,
     pub(crate) hash: String,
     pub(crate) chain: String,
@@ -36,6 +37,10 @@ pub struct Plan {
     pub(crate) connections: usize,
     pub worker_threads: usize,
     pub detector_config: crate::DetectorConfig,
+    pub(crate) calibration_shape: crate::calibration::Shape,
+    pub(crate) machine_profile: Option<crate::MachineProfile>,
+    pub(crate) headroom_ratio: Option<f64>,
+    pub(crate) allow_generator_limited: bool,
 }
 
 pub(crate) struct RequestTemplate {
@@ -47,7 +52,21 @@ pub(crate) struct RequestTemplate {
 }
 
 impl Plan {
+    pub fn bundle_root(&self) -> &Path {
+        &self.root
+    }
+
     pub fn load(root: &Path) -> Result<Self, String> {
+        Self::load_inner(root, true)
+    }
+
+    /// Calibration replaces a stale local profile, so it deliberately ignores one while
+    /// compiling the plan shape.
+    pub fn load_for_calibration(root: &Path) -> Result<Self, String> {
+        Self::load_inner(root, false)
+    }
+
+    fn load_inner(root: &Path, load_machine_profile: bool) -> Result<Self, String> {
         let root = root
             .canonicalize()
             .map_err(|_| "--plan: cannot open bundle directory")?;
@@ -264,7 +283,27 @@ impl Plan {
                 .is_some(),
             "mix.json/phases: timeline duration including drain is not representable",
         )?;
+        let calibration_shape = crate::calibration::Shape {
+            request_body_bytes: body.len(),
+            tls: target.tls.enabled,
+            chain_depth: 1,
+            generation: "static".into(),
+        };
+        let machine_profile = if load_machine_profile {
+            crate::MachineProfile::load(&root, &calibration_shape, worker_threads)?
+        } else {
+            None
+        };
+        let headroom_ratio = machine_profile
+            .as_ref()
+            .map(|profile| rate / profile.ceiling(worker_threads));
+        let allow_generator_limited = mix.engine.allow_generator_limited.unwrap_or(false);
+        require(
+            headroom_ratio.is_none_or(|ratio| ratio <= 0.9 || allow_generator_limited),
+            "mix.json/load/rate: exceeds 90% of the calibrated generator ceiling; set engine/allow_generator_limited to true to run with an invalid annotation",
+        )?;
         Ok(Self {
+            root,
             name: mix.name.clone(),
             hash: bundle_hash(&documents),
             chain: chain.name.clone(),
@@ -287,6 +326,10 @@ impl Plan {
             connections,
             worker_threads,
             detector_config,
+            calibration_shape,
+            machine_profile,
+            headroom_ratio,
+            allow_generator_limited,
         })
     }
 }

@@ -1,6 +1,7 @@
 //! Fixed-rate load execution independent of the control plane.
 
 mod bundle;
+mod calibration;
 mod detectors;
 pub use detectors::{DetectorConfig, Diagnostics, Health as PhaseHealth};
 mod execution;
@@ -11,6 +12,7 @@ mod timeline;
 mod wake_clock;
 
 pub use bundle::Plan;
+pub use calibration::{MachineProfile, calibrate, write_profile};
 pub use http::Failure;
 use metrix_metrics::events::Phase;
 pub use output::{Output, OutputReport};

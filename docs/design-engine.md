@@ -826,20 +826,20 @@ runs. These warnings do not change exit codes; SLO verdicts remain B4.6.
 
 The generator is measuring instrument and load source at once, so its capability has to be a known quantity rather than an assumption.
 
-**Calibration.** `metrix-engine --calibrate` (a mode of the same binary, so a load box calibrates itself) ramps against a built-in in-process null target to find this machine's ceiling, and against a loopback echo server to find the ceiling including the real socket and TLS path. The difference between the two is itself informative. Calibration is per plan *shape*, not per plan — body size, TLS on/off, chain depth, and body-generation mode are what move the number, so a small matrix is measured and stored as a **machine profile** with the hardware it was measured on.
+**Calibration.** `metrix-engine --plan bundle/ --calibrate` is a mode of the same binary, so a load box calibrates itself without a target or control plane. It measures an in-process null loop and a persistent-connection loopback echo; TLS-shaped plans run the echo through a locally generated TLS server and client. The profile records both rates, using 90% of observed loopback throughput as the ceiling. It samples one worker and the configured worker count, stores `machine-profile.json` beside the three plan documents, and binds it to architecture, logical and physical core counts, request-body bytes, TLS, chain depth, and generation mode. A changed machine or shape must be calibrated again rather than silently reusing a stale ceiling.
 
 **Worker threads.** `engine.worker_threads` (default: physical cores − 1) sets the Tokio runtime's thread count, with `connections_per_host` and optional core pinning alongside. Raising it is the first lever for generator headroom, and calibration is per thread count — so the machine profile records a ceiling curve across thread counts rather than a single number, and the headroom check below knows what raising it would buy.
 
 Worth stating plainly: **the services in scope are expected to cap out well below the generator's ceiling**, which is the comfortable case — it means the measurement is of the target throughout. The threading knob exists for the exception, and the calibration curve is what tells you which case you are in *before* the run rather than after. If a target genuinely outruns a tuned single box, the honest output is the `generator_limited` annotation, not a bigger number.
 
-**Headroom check, before the run starts.** Demanded RPS (accounting for chain multiplication — §5) is compared against the calibrated ceiling:
+**Headroom check, before the run starts.** Demanded RPS (accounting for chain multiplication — §5) is compared against the calibrated loopback ceiling. No profile means no check; a matching bundle-local profile makes the ratio available in `generator.headroom_ratio` and the run-start record:
 
 | Headroom | Behavior |
 |---|---|
 | < 50% of ceiling | Proceed |
 | 50–70% | Proceed, `info` annotation recording the ratio |
 | 70–90% | Warn before start; run carries a `warn` annotation |
-| > 90% | Refuse by default; requires explicit override, and the run is annotated `invalid` |
+| > 90% | Refuse by default; `engine.allow_generator_limited: true` permits it and emits an `invalid` annotation |
 
 In breakpoint mode this is also what caps `max_rate` by default (§11.3) — the search stops at the point where the tool would begin measuring itself.
 
@@ -857,8 +857,7 @@ Both gauges are sampled at each snapshot and return to zero on drain/cancellatio
 in the interval, including timer resolution and executor delay, rather than an
 estimate from target latency. Missed ticks coalesce into one observed sample.
 Final partial windows carry the interval's samples; zero samples means unavailable,
-as stated by the companion annotation. Calibration remains
-B2.5. OS resource probes do not run on the request path.
+as stated by the companion annotation. OS resource probes do not run on the request path.
 
 **In run metadata,** the calibrated ceiling, the machine profile id, and the observed peak headroom are recorded (§9.8). Without this, a comparison across a generator hardware change silently attributes a generator improvement to the target.
 

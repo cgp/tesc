@@ -359,6 +359,9 @@ pub struct EngineTuning {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1, max = 3600000))]
     pub send_drift_threshold_ms: Option<u64>,
+    /// Permit a run above the calibrated generator ceiling. The run is marked invalid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_generator_limited: Option<bool>,
 }
 
 /// What to keep from failed calls.

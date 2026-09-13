@@ -448,3 +448,10 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - Added validated bundle settings for rate tolerance and send-drift thresholds, and regenerated the compatible mix schema. Annotation generation stays on the bounded output writer and preserves the frozen NDJSON contract.
 - Completed B2.4; B2.5 calibration and headroom is next.
 - Validation: full `bash scripts/check.sh` passed, including Rust checks and tests, standalone execution, 384 API tests (5 skipped), 67 frontend tests, generated schemas, and emitted NDJSON validation.
+
+## 2026-09-13 — Engine B2.5
+
+- Added `metrix-engine --plan bundle/ --calibrate`, which stores a hardware- and shape-bound `machine-profile.json` in the bundle. It measures null-executor and loopback echo ceilings at one and configured worker counts, including a local TLS path for TLS-shaped plans.
+- Added bundle-local headroom preflight. Matching profiles populate run metadata and summary health; demand above 90% of the conservative loopback ceiling is refused before output or target setup unless `engine.allow_generator_limited` explicitly permits an invalid annotated run.
+- Completed B2.5; B2.6 run metadata is next.
+- Validation: full `bash scripts/check.sh` passed, including Rust checks and tests, standalone execution, API and frontend tests, generated schemas, and emitted NDJSON validation.

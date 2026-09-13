@@ -41,6 +41,7 @@ struct Identity {
     step: String,
     call: String,
     rate: f64,
+    headroom_ratio: Option<f64>,
 }
 
 struct RequestData {
@@ -150,6 +151,7 @@ impl Output {
             step: plan.step.clone(),
             call: plan.call.clone(),
             rate: plan.rate,
+            headroom_ratio: plan.headroom_ratio,
         });
         let losses = Arc::new(Losses::default());
         let start = Instant::now();
@@ -194,7 +196,10 @@ impl Output {
             plan_hash: plan.hash.clone(),
             plan_name: plan.name.clone(),
             seed,
-            machine_profile: None,
+            machine_profile: plan
+                .machine_profile
+                .as_ref()
+                .map(|profile| profile.id.clone()),
             targets: vec![plan.target.id.clone()],
             histogram_encoding: HISTOGRAM_ENCODING.into(),
         }));
@@ -217,6 +222,40 @@ impl Output {
                 phase: Some(Phase::Measure), from_ms: 0, to_ms: None,
                 message: "Planned measured volume is below 2250 requests; actual histogram counts determine percentile support.".into(),
                 detail: Some(serde_json::json!({"planned_samples": planned, "minimum_samples": metrix_plan::MIN_SAMPLES})),
+            }));
+        }
+        if let (Some(ratio), Some(profile)) = (plan.headroom_ratio, plan.machine_profile.as_ref()) {
+            let severity = if ratio > 0.9 {
+                Severity::Invalid
+            } else if ratio > 0.7 {
+                Severity::Warn
+            } else {
+                Severity::Info
+            };
+            output.lifecycle(Record::Annotation(Annotation {
+                t_ms: 0,
+                target_id: Some(plan.target.id.clone()),
+                code: "generator_headroom".into(),
+                severity,
+                phase: None,
+                from_ms: 0,
+                to_ms: None,
+                message: if ratio > 0.9 {
+                    "Demand exceeds 90% of the calibrated generator ceiling; this overridden run is invalid for target capacity claims."
+                } else if ratio > 0.7 {
+                    "Demand uses more than 70% of the calibrated generator ceiling."
+                } else if ratio >= 0.5 {
+                    "Demand uses at least half of the calibrated generator ceiling."
+                } else {
+                    "Demand is below half of the calibrated generator ceiling."
+                }.into(),
+                detail: Some(serde_json::json!({
+                    "demand_rps": plan.rate,
+                    "ceiling_rps": profile.ceiling(plan.worker_threads),
+                    "headroom_ratio": ratio,
+                    "machine_profile": profile.id,
+                    "overridden": plan.allow_generator_limited,
+                })),
             }));
         }
         Ok(output)
@@ -821,7 +860,7 @@ fn summary_record(
             rss_bytes: 0,
             open_fds: 0,
             scheduler_lag_ms: window.scheduler_lag.as_secs_f64() * 1000.0,
-            headroom_ratio: None,
+            headroom_ratio: identity.headroom_ratio,
             events_dropped: dropped,
         },
     })
