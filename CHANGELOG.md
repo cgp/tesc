@@ -396,3 +396,11 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - Add examples/plans/mock-fixed, end-of-run count/drift diagnostics, and tests for validation, request construction, scheduling, faults, TLS and cancellation. Run a copied binary at 75 RPS for 30 seconds from a temporary directory containing only the binary and bundle; require at least 98% of offered arrivals and report every skip.
 - Mark B1.2 complete; B1.3 aggregation is next. No NDJSON, percentile, phase or SLO implementation is claimed by this step.
 - Validation: bash scripts/check.sh passes, including 20 new engine tests, the standalone 75 RPS/30s acceptance, 384 API tests, 67 front-end tests and schema drift checks (5 live-host tests skipped).
+
+## 2026-09-13 — B1.3: worker metrics and interval aggregation
+
+- Add exclusive logical worker partitions with preallocated, non-resizing HDR histograms and fixed-index counters. Round-robin admissions retain their partition through terminal completion, using the existing scheduler owner without per-request locks or maps.
+- Record chain duration, sent-to-terminal request total, TTFB and finished-send drift with individual sample counts; track statuses, transport causes, payload bytes, connection creation/reuse and cancellation separately. Preserve exact extrema/means alongside HDR V2 base64 serialization, and explicitly count samples above the one-hour range without clipping.
+- Merge/reset partitions every 250ms into interval and cumulative accumulators; flush the final partial window after drain or cancellation. Retain bounded report state and provide optional bounded snapshot delivery with try_send and dropped-window accounting.
+- Add tests for uneven-population merging, serialization, empty/zero/overflow samples, failure/cancellation populations, interval conservation, final drain and stalled/closed consumers. Extend existing load tests to reconcile metrics with execution counts. Mark B1.3 complete; B1.4 NDJSON output is next.
+- Validation: bash scripts/check.sh passes, including six new aggregation/snapshot tests and the existing standalone 75 RPS/30s acceptance; 384 API tests and 67 front-end tests pass (5 live-host tests skipped). Shared schemas are unchanged.

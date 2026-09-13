@@ -8,12 +8,14 @@ mod wake_clock;
 pub use bundle::Plan;
 pub use http::Failure;
 
+use metrix_metrics::aggregation::{Accumulator, Cause, Sample, Window};
 use std::{
     future::{Future, poll_fn},
     sync::Arc,
     task::Poll,
     time::Duration,
 };
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio_util::sync::ReusableBoxFuture;
 
@@ -37,15 +39,29 @@ pub struct Report {
     pub peak_in_flight: usize,
     pub max_send_drift: Duration,
     pub interrupted: bool,
+    pub metrics: Accumulator,
+    pub last_window: Option<Window>,
+    pub windows: u64,
+    pub windows_dropped: u64,
 }
 
 struct Slot {
     active: bool,
+    worker: usize,
     future: ReusableBoxFuture<'static, Completion>,
 }
 
 /// The scheduler never writes to stdout/stderr or waits for an output consumer.
 pub async fn run(plan: Plan, shutdown: impl Future<Output = ()>) -> Result<Report, String> {
+    run_with_snapshots(plan, shutdown, None).await
+}
+
+/// Snapshot delivery never blocks on a full or closed consumer channel.
+pub async fn run_with_snapshots(
+    plan: Plan,
+    shutdown: impl Future<Output = ()>,
+    snapshots: Option<mpsc::Sender<Window>>,
+) -> Result<Report, String> {
     tokio::pin!(shutdown);
     let mut report = Report::default();
     let mut pool = tokio::select! {
@@ -60,10 +76,22 @@ pub async fn run(plan: Plan, shutdown: impl Future<Output = ()>) -> Result<Repor
     for _ in 0..plan.concurrency {
         slots.push(Slot {
             active: false,
+            worker: 0,
             future: ReusableBoxFuture::new(execute(None)),
         });
     }
+    let mut workers: Vec<_> = (0..plan.worker_threads.min(plan.concurrency))
+        .map(|_| Accumulator::default())
+        .collect();
+    workers[0].counters.connections_opened = 1;
+    let mut interval_metrics = Accumulator::default();
     let start = Instant::now();
+    let mut last_snapshot = Duration::ZERO;
+    let mut snapshot_tick = tokio::time::interval_at(
+        start + Duration::from_millis(250),
+        Duration::from_millis(250),
+    );
+    snapshot_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut schedule = Schedule::new(start, plan.rate, plan.duration);
     let clock = WakeClock::start(start, plan.rate, plan.duration)?;
     let mut clock_tick = 0;
@@ -76,7 +104,11 @@ pub async fn run(plan: Plan, shutdown: impl Future<Output = ()>) -> Result<Repor
             _ = &mut shutdown => {
                 report.interrupted = true;
                 report.cancelled = active as u64;
+                for slot in &slots { if slot.active { workers[slot.worker].cancel(); } }
                 break;
+            }
+            _ = snapshot_tick.tick() => {
+                flush(&mut workers, &mut interval_metrics, &mut report, &mut last_snapshot, start.elapsed(), active, snapshots.as_ref());
             }
             // Reap completed requests before deciding whether a due arrival hits a cap.
             (index, completion) = poll_fn(|cx| {
@@ -90,6 +122,14 @@ pub async fn run(plan: Plan, shutdown: impl Future<Output = ()>) -> Result<Repor
                 slots[index].active = false;
                 active -= 1;
                 let observation = completion.observation;
+                workers[slots[index].worker].finish(Sample {
+                    chain_duration: observation.total, request_duration: observation.request_duration,
+                    ttfb: observation.ttfb, drift: observation.sent.map(|_| observation.drift),
+                    status: observation.status, error: observation.error.map(cause),
+                    bytes_sent: if observation.sent.is_some() { plan.request.body.len() as u64 } else { 0 },
+                    bytes_received: observation.bytes_received,
+                    connections_opened: observation.connections_opened, connection_reused: observation.connection_reused,
+                });
                 if observation.sent.is_some() {
                     report.sent_finished += 1;
                     report.max_send_drift = report.max_send_drift.max(observation.drift);
@@ -111,6 +151,8 @@ pub async fn run(plan: Plan, shutdown: impl Future<Output = ()>) -> Result<Repor
                             // Same execute() future layout for every use; never reallocates.
                             assert!(slot.future.try_set(future).is_ok(), "request future layout changed");
                             slot.active = true;
+                            slot.worker = report.admitted as usize % workers.len();
+                            workers[slot.worker].start();
                             active += 1;
                             report.admitted += 1;
                             report.peak_in_flight = report.peak_in_flight.max(active);
@@ -120,6 +162,54 @@ pub async fn run(plan: Plan, shutdown: impl Future<Output = ()>) -> Result<Repor
             }
         }
     }
+    flush(
+        &mut workers,
+        &mut interval_metrics,
+        &mut report,
+        &mut last_snapshot,
+        start.elapsed(),
+        0,
+        snapshots.as_ref(),
+    );
     // Dropping slots cancels pending body reads; dropping the pool aborts its drivers.
     Ok(report)
+}
+
+fn flush(
+    workers: &mut [Accumulator],
+    interval: &mut Accumulator,
+    report: &mut Report,
+    last: &mut Duration,
+    now: Duration,
+    active: usize,
+    consumer: Option<&mpsc::Sender<Window>>,
+) {
+    interval.merge_and_reset(workers);
+    report.metrics.merge(interval);
+    let window = Window {
+        from: *last,
+        to: now,
+        in_flight: active,
+        metrics: interval.clone(),
+    };
+    if let Some(consumer) = consumer {
+        if consumer.try_send(window.clone()).is_err() {
+            report.windows_dropped += 1;
+        }
+    }
+    report.windows += 1;
+    report.last_window = Some(window);
+    *last = now;
+}
+
+fn cause(failure: Failure) -> Cause {
+    match failure {
+        Failure::Dns => Cause::Dns,
+        Failure::Connect => Cause::Connect,
+        Failure::Tls => Cause::Tls,
+        Failure::Protocol => Cause::Protocol,
+        Failure::Send => Cause::Send,
+        Failure::Body => Cause::Body,
+        Failure::Timeout => Cause::Timeout,
+    }
 }

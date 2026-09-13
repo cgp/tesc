@@ -486,6 +486,35 @@ Content negotiation per request, XPath and JSONPath extractors, optional schema 
 
 Organized by the question each answers. Time series are bucketed at 250ms internally and rolled up for display.
 
+**B1.3 aggregation.** Preallocated logical worker partitions own counters and HDR
+histograms exclusively; the B1.2 scheduler polls them in one task, so they are not
+thread-local Tokio data (tasks can migrate). Admissions select partitions round
+robin and retain that owner through completion. Each partition records without
+locks, dynamic maps or resizing. Histograms use microseconds, three significant
+digits, and an explicit one-hour ceiling; larger samples increment an overflow
+count and are not clipped. Sub-microsecond durations record zero. Serialized
+histograms use HDR V2 binary encoded as base64; empty distributions omit extrema,
+mean and bytes. Exact extrema and mean are retained alongside the bucketed HDR.
+
+Admissions increment attempted/started; terminal success increments completed;
+transport failure increments failed/aborted. Cancellation is counted separately
+and contributes no latency sample. HTTP statuses are counted even when body drain
+fails; HTTP errors remain transport successes until assertions land. Chain duration
+runs from admission to terminal result (including setup); request total runs from
+send to terminal result, and TTFB is sampled only when response headers arrive.
+Drift samples describe finished sends. Payload bytes and opened/reused connections
+are accounted at completion; the initial setup connection is counted once. Pending
+cancelled attempts therefore contribute no terminal send/byte/connection samples.
+
+On each 250ms tick, merge and reset partitions into an interval accumulator and
+add it to cumulative totals. Windows use actual monotonic elapsed time; missed
+ticks coalesce rather than inventing empty historical windows. Final drain or
+cancellation flushes a partial window. The report retains totals and the last
+window only. An optional bounded channel receives window copies via `try_send`;
+full or closed channels increment a dropped-window count and never delay traffic.
+Snapshot allocation/serialization occurs only off the per-request recording path.
+NDJSON wiring and percentile support rules remain B1.4 and B2.2.
+
 ### 9.1 Throughput & volume
 - Requests attempted / completed / failed — overall, per chain, per step
 - **Achieved RPS vs target RPS** over time (the gap is the headline number)
