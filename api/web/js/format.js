@@ -57,8 +57,21 @@ export function targetLabel(id) {
   return `${match[1]}/${match[2].slice(0, 8)}…${match[3] ?? ""}`;
 }
 
+/**
+ * Escape a string for interpolation into markup, attribute values included.
+ *
+ * This used to hand the string to `textContent` and read `innerHTML` back, which
+ * escapes `&`, `<` and `>` and *not* quotes -- so anything containing a `"` broke
+ * out of the attribute it was written into. Every id, profile name, target name,
+ * annotation message and search term on this page goes through here, and most of
+ * them land in an attribute. Written out rather than delegated to the DOM for that
+ * reason, and because a formatter that needs a document cannot be tested without one.
+ */
 export function escape(text) {
-  const div = document.createElement("div");
-  div.textContent = text ?? "";
-  return div.innerHTML;
+  return String(text ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }

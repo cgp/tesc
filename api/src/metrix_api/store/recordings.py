@@ -62,6 +62,17 @@ class RecordingRow:
     is_baseline: bool = False
     note: str | None = None
     targets: list[str] = field(default_factory=list)
+    #: Annotation counts by severity. The archive needs to say which recordings have
+    #: something wrong with them without opening each one, and `invalid` is the
+    #: difference between a recording worth comparing and one that is not.
+    annotations: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def worst(self) -> str | None:
+        for severity in ("invalid", "warn", "info"):
+            if self.annotations.get(severity):
+                return severity
+        return None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> RecordingRow:
@@ -428,14 +439,43 @@ def list_recordings(
     kind: str | None = None,
     profile: str | None = None,
     series: str | None = None,
+    status: str | None = None,
+    baseline: bool | None = None,
+    severity: str | None = None,
+    query: str | None = None,
     limit: int = 100,
 ) -> list[RecordingRow]:
-    """Newest first, which is the order anyone opening the archive wants."""
+    """Newest first, which is the order anyone opening the archive wants.
+
+    Filtering happens here rather than in the browser. The list is capped, so a page
+    that filtered the rows it happened to be given would answer "no matches" for a
+    recording that exists two pages down -- which is worse than not offering filters.
+    """
     clauses, params = [], []
-    for column, value in (("kind", kind), ("profile", profile), ("series_key", series)):
+    for column, value in (
+        ("kind", kind),
+        ("profile", profile),
+        ("series_key", series),
+        ("status", status),
+    ):
         if value is not None:
             clauses.append(f"{column} = ?")
             params.append(value)
+    if baseline is not None:
+        clauses.append("is_baseline = ?")
+        params.append(1 if baseline else 0)
+    if severity is not None:
+        clauses.append(
+            "EXISTS (SELECT 1 FROM annotation a"
+            " WHERE a.recording_id = recording.id AND a.severity = ?)"
+        )
+        params.append(severity)
+    if query:
+        # Id, profile and the note a person typed: the three things anyone would
+        # search an archive by, and all of them are short.
+        clauses.append("(id LIKE ? OR IFNULL(profile, '') LIKE ? OR IFNULL(note, '') LIKE ?)")
+        params.extend([f"%{query}%"] * 3)
+
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     params.append(limit)
     rows = conn.execute(
@@ -445,19 +485,50 @@ def list_recordings(
     if not found:
         return found
 
-    # Targets in one query rather than one per recording: the archive lists a
-    # target count, and a list view should not fan out.
+    # Targets and annotation counts in one query each rather than one per recording:
+    # the archive shows both, and a list view should not fan out.
     placeholders = ",".join("?" * len(found))
+    ids = [r.id for r in found]
+
     by_recording: dict[str, list[str]] = {}
     for row in conn.execute(
         f"SELECT recording_id, target_id FROM recording_target"
         f" WHERE recording_id IN ({placeholders}) ORDER BY position",
-        [r.id for r in found],
+        ids,
     ):
         by_recording.setdefault(row["recording_id"], []).append(row["target_id"])
+
+    notes: dict[str, dict[str, int]] = {}
+    for row in conn.execute(
+        f"SELECT recording_id, severity, COUNT(*) AS n FROM annotation"
+        f" WHERE recording_id IN ({placeholders}) GROUP BY recording_id, severity",
+        ids,
+    ):
+        notes.setdefault(row["recording_id"], {})[row["severity"]] = row["n"]
+
     for recording in found:
         recording.targets = by_recording.get(recording.id, [])
+        recording.annotations = notes.get(recording.id, {})
     return found
+
+
+def facets(conn: sqlite3.Connection) -> dict[str, list[str]]:
+    """What there is to filter by, across the whole archive.
+
+    Taken from every recording rather than from the filtered page, so the choices do
+    not disappear as they are used -- a filter list that empties itself as you narrow
+    is a filter list you cannot get back out of.
+    """
+    return {
+        name: [
+            row[0]
+            for row in conn.execute(
+                f"SELECT DISTINCT {name} FROM recording WHERE {name} IS NOT NULL"
+                f" ORDER BY {name}"
+            )
+        ]
+        for name in ("kind", "profile", "status")
+    }
 
 
 def samples(

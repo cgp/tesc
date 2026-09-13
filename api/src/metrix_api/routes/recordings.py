@@ -29,6 +29,8 @@ def _row(recording: store.RecordingRow) -> dict[str, Any]:
         "finished_at": recording.finished_at,
         "duration_ms": recording.duration_ms,
         "is_baseline": recording.is_baseline,
+        "annotations_by_severity": recording.annotations,
+        "worst": recording.worst,
         "note": recording.note,
         "targets": recording.targets,
     }
@@ -39,11 +41,37 @@ def list_recordings(
     kind: str | None = None,
     profile: str | None = None,
     series: str | None = None,
+    status: str | None = None,
+    baseline: bool | None = None,
+    severity: str | None = None,
+    q: str | None = None,
     limit: int = Query(default=100, ge=1, le=1000),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, Any]:
-    rows = store.list_recordings(conn, kind=kind, profile=profile, series=series, limit=limit)
-    return {"recordings": [_row(r) for r in rows]}
+    """The archive, newest first, filtered server-side.
+
+    `total` is the size of the whole archive rather than of this page, so the list
+    can say what it is hiding. A count of what you can see answers nothing.
+    """
+    rows = store.list_recordings(
+        conn,
+        kind=kind,
+        profile=profile,
+        series=series,
+        status=status,
+        baseline=baseline,
+        severity=severity,
+        query=q,
+        limit=limit,
+    )
+    total = conn.execute("SELECT COUNT(*) AS n FROM recording").fetchone()["n"]
+    return {
+        "recordings": [_row(r) for r in rows],
+        "total": total,
+        "limit": limit,
+        # Offered even when a filter is active, so narrowing never removes the way back.
+        "facets": store.facets(conn),
+    }
 
 
 @router.get("/{recording_id}")

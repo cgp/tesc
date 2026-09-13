@@ -120,7 +120,7 @@ Nothing here requires the engine. Through A3 the product is a host-observation t
 
 - [x] **A3.1** — Stats table (§14): rows, columns, live update, TSV/CSV export
 - [x] **A3.2** — Charts page (§15): phase bands, host overlays, gaps drawn as gaps
-- [ ] **A3.3** — Recordings archive, filters, baseline marking with `invalid` gating
+- [x] **A3.3** — Recordings archive, filters, baseline marking with `invalid` gating
 - [ ] **A3.4** — Run series by setup identity; trends with measured noise bands (§17.3)
 - [ ] **A3.5** — Regression flagging: outside band **and** sample-supported **and** not invalid (§17.4)
 - [ ] **A3.6** — Comparison mode (§14.4), multi-run overlay, histogram merging (§17.5)

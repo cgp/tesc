@@ -477,3 +477,71 @@ def test_a_span_counts_moments_rather_than_rows(db) -> None:
     )
     span = store.spans(db, recording)["box-a"]
     assert span == {"first_ms": 0, "last_ms": 9000, "n": 10}
+
+
+# ------------------------------------------------------------------- the archive
+
+
+class TestArchive:
+    def seed(self, db):
+        """Three recordings: a clean baseline, a warned one, and an invalid one."""
+        clean = record(db, values={"box-a": flat("cpu.busy", 5.0)})
+        store.mark_baseline(db, clean)
+
+        warned = record(db, values={"box-a": flat("cpu.busy", 6.0)})
+        store.add_annotation(
+            db,
+            warned,
+            Annotation(code="collection_gap", severity="warn", from_ms=0, message="1s lost"),
+        )
+
+        broken = record(db, values={"box-a": flat("cpu.busy", 7.0)})
+        store.add_annotation(
+            db,
+            broken,
+            Annotation(
+                code="target_unreachable", severity="invalid", from_ms=0, message="never answered"
+            ),
+        )
+        return clean, warned, broken
+
+    def test_every_row_says_whether_something_is_wrong_with_it(self, db) -> None:
+        """Without this the archive cannot be scanned; every row needs opening."""
+        clean, warned, broken = self.seed(db)
+        found = {r.id: r for r in store.list_recordings(db)}
+
+        assert found[clean].worst is None
+        assert found[warned].worst == "warn"
+        assert found[broken].worst == "invalid"
+        assert found[broken].annotations == {"invalid": 1}
+
+    def test_filtering_by_severity_finds_what_cannot_be_trusted(self, db) -> None:
+        _, _, broken = self.seed(db)
+        assert [r.id for r in store.list_recordings(db, severity="invalid")] == [broken]
+
+    def test_filtering_by_baseline_finds_what_everything_is_measured_against(self, db) -> None:
+        clean, _, _ = self.seed(db)
+        assert [r.id for r in store.list_recordings(db, baseline=True)] == [clean]
+        assert clean not in [r.id for r in store.list_recordings(db, baseline=False)]
+
+    def test_searching_covers_the_id_the_profile_and_the_note(self, db) -> None:
+        clean, _, _ = self.seed(db)
+        assert clean in [r.id for r in store.list_recordings(db, query=clean[:13])]
+        assert len(store.list_recordings(db, query="staging")) == 3, "the profile"
+        assert store.list_recordings(db, query="nothing-like-this") == []
+
+    def test_filters_combine(self, db) -> None:
+        _, warned, _ = self.seed(db)
+        assert [
+            r.id
+            for r in store.list_recordings(db, kind="observation", severity="warn", baseline=False)
+        ] == [warned]
+
+    def test_the_choices_come_from_the_whole_archive_not_the_filtered_page(self, db) -> None:
+        """A filter list that empties as you narrow is one you cannot get back out of."""
+        self.seed(db)
+        assert store.facets(db) == {
+            "kind": ["observation"],
+            "profile": ["staging"],
+            "status": ["finished"],
+        }

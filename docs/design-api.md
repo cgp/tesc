@@ -363,6 +363,10 @@ The charts page carries no tables; exact figures live in §14. Principles: every
 - **Everything is kept by default, and nothing rolls up.** Summaries, histograms, inventories, and annotations are small — a full series loads into memory comfortably — so there is no retention tiering, no aged rollup, and no reduced-fidelity historical points. Trend charts read the real numbers at every age.
 - **Underlying call data is purged by a button, not by a policy.** Per-request event records and retained error-sample bodies (§9.3) are the only bulky things stored; a single action drops them for a run, a sweep, or a whole series, leaving the summaries, histograms, and annotations intact. Manual and explicit beats a retention policy that quietly deletes the evidence for the one run somebody needed.
 
+**Filtering is server-side, and the list says what it is hiding.** The archive is capped per page, so filtering the rows a page happens to hold would answer “nothing matches” for a recording two pages down — a filter that lies is worse than no filter. The header states the count against the size of the whole archive, and states it as a *match* whenever a filter is set, because “12 captured” under an active filter reads as though nothing were filtered. The choices offered come from every recording rather than from the filtered page, so narrowing never removes the way back out.
+
+**Every row says whether it can be trusted before it is opened**: the worst annotation severity it carries, or *clean*. Scanning an archive for the run that went wrong is the thing this list is for, and a row that looks identical to a good one until you open it makes that impossible.
+
 ### 17.2 Run series — comparing across runs of the same setup
 
 The primary comparison unit is not "this run vs that run" but **the series**: every run sharing the same setup, ordered in time. This is the view that answers the question actually worth asking — *is this getting better or worse?* — and a two-run diff cannot answer it, because a two-run diff has no idea what normal variation looks like.

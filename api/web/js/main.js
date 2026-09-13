@@ -91,8 +91,13 @@ async function load(route) {
     }
 
     if (route.name === "recordings" && !route.recordingId) {
-      const { recordings: rows } = await api.recordings();
-      set({ recordings: rows, selectedRecording: null });
+      const filters = get().archive?.filters ?? {};
+      const page = await api.recordings(filters);
+      set({
+        recordings: page.recordings,
+        archive: { filters, facets: page.facets, total: page.total, limit: page.limit },
+        selectedRecording: null,
+      });
       return;
     }
 
@@ -452,6 +457,23 @@ function downloadTable() {
   URL.revokeObjectURL(url);
 }
 
+/**
+ * Narrow the archive. Applied by the server, so the answer covers every recording
+ * rather than the page that happened to be loaded.
+ */
+async function filterArchive(name, value) {
+  const filters = { ...(get().archive?.filters ?? {}) };
+  if (value) filters[name] = value;
+  else delete filters[name];
+  set({ archive: { ...get().archive, filters } });
+  await onRouteChange();
+}
+
+async function clearArchiveFilters() {
+  set({ archive: { ...get().archive, filters: {} } });
+  await onRouteChange();
+}
+
 async function deleteProfile(name) {
   const message =
     `Delete the profile "${name}"?
@@ -487,6 +509,7 @@ document.addEventListener("click", (event) => {
   if (action === "profile-reload") reloadProfiles();
   if (action === "profile-resolve") resolveProfile(profile);
   if (action === "profile-verify") verifyProfile(profile);
+  if (action === "archive-clear") clearArchiveFilters();
   if (action === "table-sort") sortTable(button.dataset.column);
   if (action === "table-copy") copyTable();
   if (action === "table-csv") downloadTable();
@@ -512,6 +535,8 @@ document.addEventListener("click", (event) => {
 // be read on change, and preventing its click would stop the dropdown opening.
 document.addEventListener("change", (event) => {
   if (event.target.closest('[data-change-action="draft-reload"]')) syncDraft();
+  const filter = event.target.closest('[data-change-action="archive-filter"]');
+  if (filter) filterArchive(filter.dataset.filter, filter.value.trim());
 });
 
 // A form with no submit button still submits on Enter, which would reload the page

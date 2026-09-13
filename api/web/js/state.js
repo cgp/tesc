@@ -29,6 +29,10 @@ const state = {
   //: watch the points, and they arrive on the same tick.
   chartTick: 0,
   recordings: [],
+  //: The archive around the rows: which filters are set, how many recordings exist
+  //: in total, and what there is to filter by. Kept beside the rows rather than in
+  //: them, because a filtered page cannot say how much it is hiding on its own.
+  archive: { filters: {}, facets: {}, total: 0 },
   selectedRecording: null,
   live: null,
   error: null,

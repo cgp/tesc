@@ -7,22 +7,39 @@ import { empty, field, icon } from "./ui.js";
 export function selectState(state) {
   return state.selectedRecording
     ? [state.selectedRecording]
-    : [state.selectedRecording, state.recordings];
+    : [state.selectedRecording, state.recordings, state.archive];
 }
 
 export function render(state) {
   if (state.selectedRecording) return detail(state.selectedRecording);
 
+  const archive = state.archive ?? {};
+  const filtered = Object.values(archive.filters ?? {}).some(Boolean);
+
   if (!state.recordings.length) {
-    return empty({
-      icon: "archive",
-      title: "No recordings yet",
-      body: `An observation-only recording needs no engine — it is the whole product
-        until one exists.`,
-      action: `<a href="#/config" class="btn btn-primary">
-                 ${icon("player-play")} Start observing
-               </a>`,
-    });
+    // Two different empty states. "Nothing here yet" and "nothing matches what you
+    // asked for" need different words and different ways out, and showing the first
+    // to someone who has just typed a filter reads as data loss.
+    return filtered
+      ? filterBar(state) +
+          empty({
+            icon: "archive",
+            title: "Nothing matches",
+            body: `No recording in the archive of ${archive.total ?? 0} fits those
+              filters.`,
+            action: `<button class="btn" data-action="archive-clear">
+                       ${icon("refresh")} Clear the filters
+                     </button>`,
+          })
+      : empty({
+          icon: "archive",
+          title: "No recordings yet",
+          body: `An observation-only recording needs no engine — it is the whole
+            product until one exists.`,
+          action: `<a href="#/profiles" class="btn btn-primary">
+                     ${icon("player-play")} Start observing
+                   </a>`,
+        });
   }
 
   const rows = state.recordings
@@ -41,6 +58,7 @@ export function render(state) {
         </td>
         <td class="text-secondary">${escape(r.kind)}</td>
         <td>${statusBadge(r.status)}</td>
+        <td>${noteBadge(r)}</td>
         <td>${escape(r.profile ?? "—")}</td>
         <td class="num">${duration(r.duration_ms)}</td>
         <td class="num">${r.targets.length}</td>
@@ -49,25 +67,122 @@ export function render(state) {
     )
     .join("");
 
-  return `<div class="card">
-    <div class="card-header">
-      <h3 class="card-title">Recordings
-        <span class="card-subtitle">${state.recordings.length} captured</span>
-      </h3>
+  return `<div class="metrix-stack">
+    ${filterBar(state)}
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Recordings
+          <span class="card-subtitle">${showing(state)}</span>
+        </h3>
+      </div>
+      <div class="table-responsive">
+        <table class="table card-table table-vcenter metrix-table">
+          <thead><tr>
+            <th style="width:22%">Recording</th>
+            <th style="width:10%">Kind</th>
+            <th style="width:9%">Status</th>
+            <th style="width:12%">Notes</th>
+            <th style="width:13%">Profile</th>
+            <th class="num" style="width:8%">Length</th>
+            <th class="num" style="width:7%">Targets</th>
+            <th style="width:19%">Started</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
     </div>
-    <div class="table-responsive">
-      <table class="table card-table table-vcenter metrix-table">
-        <thead><tr>
-          <th style="width:22%">Recording</th>
-          <th style="width:12%">Kind</th>
-          <th style="width:10%">Status</th>
-          <th style="width:14%">Profile</th>
-          <th class="num" style="width:9%">Length</th>
-          <th class="num" style="width:8%">Targets</th>
-          <th style="width:25%">Started</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
+  </div>`;
+}
+
+/** What a row says about itself before anyone opens it. */
+function noteBadge(recording) {
+  const counts = recording.annotations_by_severity ?? {};
+  if (!recording.worst) return `<span class="text-secondary">clean</span>`;
+  const tone = { invalid: "red", warn: "orange", info: "blue" }[recording.worst];
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  const title =
+    recording.worst === "invalid"
+      ? "Carries an invalid note: its numbers cannot be trusted, and it cannot become a baseline"
+      : "Carries notes worth reading before quoting anything from it";
+  return `<span class="badge bg-${tone}-lt" title="${escape(title)}"
+    >${escape(recording.worst)}${total > 1 ? ` ×${total}` : ""}</span>`;
+}
+
+function showing(state) {
+  const archive = state.archive ?? {};
+  const total = archive.total ?? state.recordings.length;
+  const shown = state.recordings.length;
+  // Whenever a filter is set the count is stated as a match, even when everything
+  // matched: "2 captured" under an active filter reads as though nothing were
+  // filtered, and the next thing that gets doubted is the filter.
+  if (Object.values(archive.filters ?? {}).some(Boolean)) {
+    return `${shown} of ${total} match`;
+  }
+  // Otherwise the only reason to see fewer than all of them is the page cap.
+  return shown === total ? `${total} captured` : `${shown} of ${total} shown`;
+}
+
+/**
+ * The filters, applied by the server.
+ *
+ * Server-side because the list is capped: filtering the rows the page happens to
+ * hold would answer "nothing matches" for a recording that exists further down, and
+ * a filter that lies is worse than no filter at all.
+ */
+function filterBar(state) {
+  const archive = state.archive ?? {};
+  const filters = archive.filters ?? {};
+  const facets = archive.facets ?? {};
+  const active = Object.values(filters).some(Boolean);
+
+  const choose = (name, label, options) => `
+    <div>
+      <label class="form-label">${escape(label)}</label>
+      <select class="form-select" data-change-action="archive-filter" data-filter="${name}">
+        <option value=""${filters[name] ? "" : " selected"}>Any</option>
+        ${(options ?? [])
+          .map(
+            (value) =>
+              `<option value="${escape(value)}"${
+                filters[name] === value ? " selected" : ""
+              }>${escape(value)}</option>`
+          )
+          .join("")}
+      </select>
+    </div>`;
+
+  return `<div class="card">
+    <div class="card-body">
+      <div class="metrix-filters">
+        <div>
+          <label class="form-label">Search</label>
+          <input class="form-control" type="search" placeholder="id, profile or note"
+                 data-change-action="archive-filter" data-filter="q"
+                 value="${escape(filters.q ?? "")}">
+        </div>
+        ${choose("kind", "Kind", facets.kind)}
+        ${choose("profile", "Profile", facets.profile)}
+        ${choose("status", "Status", facets.status)}
+        ${choose("severity", "Notes", ["invalid", "warn", "info"])}
+        <div>
+          <label class="form-label">Baseline</label>
+          <select class="form-select" data-change-action="archive-filter"
+                  data-filter="baseline">
+            <option value=""${filters.baseline ? "" : " selected"}>Any</option>
+            <option value="true"${
+              filters.baseline === "true" ? " selected" : ""
+            }>Baselines only</option>
+            <option value="false"${
+              filters.baseline === "false" ? " selected" : ""
+            }>Everything else</option>
+          </select>
+        </div>
+        <div class="metrix-filter-actions">
+          <button class="btn" data-action="archive-clear"${active ? "" : " disabled"}>
+            ${icon("refresh")} Clear
+          </button>
+        </div>
+      </div>
     </div>
   </div>`;
 }
