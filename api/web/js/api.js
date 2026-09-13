@@ -29,6 +29,27 @@ async function request(path, options = {}) {
   return response.json();
 }
 
+/**
+ * The bundle as a file, rather than as JSON.
+ *
+ * Kept apart from `request` because the body is a zip and the plan hash is on a
+ * header. Fetched rather than linked: a plan with errors in it is refused with a 422
+ * naming them, and an `<a download>` would navigate the page to that message.
+ */
+async function archive(path) {
+  const response = await fetch(path, { headers: { Accept: "application/zip" } });
+  if (!response.ok) {
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      detail = (await response.json()).detail ?? detail;
+    } catch {
+      // A zip endpoint that failed without JSON still has its status line.
+    }
+    throw new Error(detail);
+  }
+  return { blob: await response.blob(), hash: response.headers.get("X-Metrix-Plan-Hash") };
+}
+
 export const api = {
   health: () => request("/api/health"),
   profiles: () => request("/api/profiles"),
@@ -46,6 +67,26 @@ export const api = {
     request(`/api/profiles/${encodeURIComponent(name)}/targets`),
   deleteProfile: (name) =>
     request(`/api/profiles/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  plans: () => request("/api/plans"),
+  plan: (name) => request(`/api/plans/${encodeURIComponent(name)}`),
+  planDocument: (name) => request(`/api/plans/${encodeURIComponent(name)}/document`),
+  // The whole mixture, not a patch, and not saved: the server answers with what it
+  // would say about the same document on disk.
+  validatePlan: (name, mix) =>
+    request(`/api/plans/${encodeURIComponent(name)}/validate`, json("POST", mix)),
+  replacePlan: (name, mix) =>
+    request(`/api/plans/${encodeURIComponent(name)}`, json("PUT", mix)),
+  bundle: (name, profile) =>
+    request(
+      `/api/plans/${encodeURIComponent(name)}/bundle?${new URLSearchParams({
+        profile,
+        format: "json",
+      })}`
+    ),
+  bundleArchive: (name, profile) =>
+    archive(
+      `/api/plans/${encodeURIComponent(name)}/bundle?${new URLSearchParams({ profile })}`
+    ),
   recordings: (params = {}) => {
     const query = new URLSearchParams(
       Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== "")

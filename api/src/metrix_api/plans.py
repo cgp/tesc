@@ -38,7 +38,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from metrix_api.config import Config
+from metrix_api.config import Config, ConfigError, parse_duration
 from metrix_api.profiles import Profile, to_targets
 
 MIX = "mix.json"
@@ -149,6 +149,16 @@ def load_plan(config: Config, name: str) -> Plan:
         raise PlanError(f"no plan {name!r}")
 
     mix = _read_json(root / MIX, where=MIX)
+    return _plan_from(root, name, mix)
+
+
+def _plan_from(root: Path, name: str, mix: dict[str, Any]) -> Plan:
+    """One mixture, its calls read off disk beside it, checked as a whole.
+
+    Shared by the loader and by the editor's save path, so a document submitted from
+    a form goes through exactly what a hand-written file goes through -- including
+    the reference check, which the schema cannot express.
+    """
     _check(mix, "mix.schema.json", MIX)
 
     notes = []
@@ -293,3 +303,487 @@ def assemble(plan: Plan, profile: Profile, *, only: list[str] | None = None) -> 
     files.update(plan.extras)
 
     return Bundle(files=files, hashed=(MIX, TARGETS, *plan.calls))
+
+
+# --------------------------------------------------------- what a mixture implies
+
+#: The statistical floor, matching the engine's `metrix_plan::MIN_SAMPLES`: 30s at
+#: 75 RPS. Below it a p99 is an order statistic with a 95% CI spanning p98.6-p99.4,
+#: and p99.9 is not measurable at all (§12.1). The engine warns rather than refuses,
+#: and so does this: a short run is a legitimate smoke test, it just cannot carry a
+#: tail percentile.
+MIN_SAMPLES = 2250
+
+#: Chain percentages must total this, within `PERCENT_EPSILON` -- so `16.67 x 6` is
+#: not a validation failure. Both match `metrix_plan`.
+PERCENT_TOTAL = 100.0
+PERCENT_EPSILON = 0.01
+
+
+@dataclass(frozen=True, slots=True)
+class Problem:
+    """One thing wrong with a mixture, or one thing worth knowing about it.
+
+    `severity` separates the two, and they are not the same question. An **error**
+    stops the plan being assembled into a bundle, because the run it describes is not
+    the run somebody means. A **warning** is a run that will happen and will produce
+    numbers that cannot be quoted -- which is worse than a failure if it is not said
+    out loud beforehand.
+    """
+
+    severity: str
+    #: A path into `mix.json`, so the editor can point at the field rather than at
+    #: the document.
+    where: str
+    message: str
+
+    def to_document(self) -> dict[str, str]:
+        return {"severity": self.severity, "where": self.where, "message": self.message}
+
+
+def _seconds(value: Any) -> float | None:
+    """A duration string as seconds, or None when it is not one.
+
+    Never raises: this runs over documents that have passed the schema and over
+    drafts on their way to it. A field that cannot be read is withheld, not guessed.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return parse_duration(value).total_seconds()
+    except ConfigError:
+        return None
+
+
+def _rate(load: dict[str, Any]) -> float | None:
+    rate = load.get("rate")
+    return float(rate) if isinstance(rate, (int, float)) and rate > 0 else None
+
+
+def figures(plan: Plan) -> dict[str, Any]:
+    """The arithmetic behind the mixture: what each percentage actually buys.
+
+    A percentage is not a quantity anybody can judge. 20% of a run is a number of
+    requests, and whether that number supports a p99 is the question the editor
+    exists to answer before the run rather than after it. So the conversion is done
+    here, once, and the browser displays the answer -- the same rule every percentile
+    in this product follows (§12.1): the figure and the sample count behind it are
+    computed in one place.
+
+    **A percentage buys chain iterations, not requests.** A two-step chain at 20% of
+    150/s is 30 iterations a second and 60 requests a second, and conflating the two
+    under-counts the load by the length of the chain.
+
+    Everything rate-derived is withheld when there is no rate to derive it from. A
+    breakpoint run searches for its rate, so no honest number exists here before it
+    runs; `withheld` says which case this is rather than showing zeros.
+    """
+    load = plan.mix.get("load", {})
+    mode = load.get("mode", "fixed")
+    duration_s = _seconds(load.get("duration"))
+    warmup_s = _seconds(load.get("warmup")) or 0.0
+    phases = plan.mix.get("phases", {})
+
+    rate = _rate(load)
+    withheld = None
+    if mode == "breakpoint":
+        # The rate is the thing the run is looking for. Any figure here would be an
+        # invention, and an invented sample count is the one number this tool must
+        # never print.
+        rate, withheld = None, "a breakpoint run searches for its rate"
+    elif mode == "stages":
+        stages = [s for s in load.get("stages", []) if _seconds(s.get("duration"))]
+        served = sum(float(s.get("rate", 0)) * (_seconds(s["duration"]) or 0) for s in stages)
+        staged = sum(_seconds(s["duration"]) or 0 for s in stages)
+        duration_s = staged or duration_s
+        # A ramp has no single rate, and its average is what the sample count rests
+        # on. Stated as an average rather than passed off as the rate.
+        rate = (served / staged) if staged else None
+        withheld = None if rate else "the stages carry no duration"
+    elif rate is None:
+        withheld = "the mixture sets no rate"
+
+    measured_s = None if duration_s is None else max(duration_s - warmup_s, 0.0)
+    percent_total = sum(
+        float(c["percent"]) for c in plan.chains if isinstance(c.get("percent"), (int, float))
+    )
+
+    chains = []
+    for chain in plan.chains:
+        percent = chain.get("percent")
+        steps = len(chain.get("steps", []))
+        share = None
+        if rate is not None and isinstance(percent, (int, float)):
+            share = rate * float(percent) / 100.0
+        requests_per_s = None if share is None else share * steps
+        requests = (
+            None
+            if requests_per_s is None or measured_s is None
+            else int(round(requests_per_s * measured_s))
+        )
+        chains.append(
+            {
+                "name": chain.get("name"),
+                "percent": percent,
+                "session": chain.get("session", "reuse"),
+                "steps": steps,
+                "iterations_per_s": share,
+                "requests_per_s": requests_per_s,
+                "requests": requests,
+                # Whether this chain's own percentiles will mean anything, which is a
+                # different question from whether the run is long enough overall.
+                "supported": None if requests is None else requests >= MIN_SAMPLES,
+            }
+        )
+
+    total_requests = (
+        None
+        if not chains or any(c["requests"] is None for c in chains)
+        else sum(c["requests"] for c in chains)
+    )
+    return {
+        "mode": mode,
+        "model": load.get("model", "open"),
+        "rate": rate,
+        "duration_s": duration_s,
+        "warmup_s": warmup_s,
+        "measured_s": measured_s,
+        "baseline_s": _seconds(phases.get("baseline")),
+        "settle_s": _seconds(phases.get("settle")),
+        "percent_total": percent_total,
+        "floor": MIN_SAMPLES,
+        "iterations": (
+            None if rate is None or measured_s is None else int(round(rate * measured_s))
+        ),
+        "requests": total_requests,
+        "supported": None if total_requests is None else total_requests >= MIN_SAMPLES,
+        "withheld": withheld,
+        "chains": chains,
+    }
+
+
+def check(plan: Plan) -> list[Problem]:
+    """Everything that stops this mixture running, and everything worth knowing.
+
+    The schema has already had its say by the time this runs; these are the rules a
+    schema cannot express -- ones about the document as a whole, or about what the
+    numbers in it will produce. This is the only place they are written: the browser
+    renders the list and computes none of it, so a form cannot save what a
+    hand-written file would be rejected for.
+    """
+    problems: list[Problem] = []
+    load = plan.mix.get("load", {})
+    numbers = figures(plan)
+
+    if not plan.chains:
+        problems.append(Problem("error", "chains", "a mixture with no chains sends no traffic"))
+
+    total = numbers["percent_total"]
+    if plan.chains and abs(total - PERCENT_TOTAL) > PERCENT_EPSILON:
+        # Named as a shortfall or an excess, never renormalized. Renormalizing would
+        # silently change every other chain's share to accommodate a typo in one of
+        # them, and the run would measure a mixture nobody chose.
+        gap = PERCENT_TOTAL - total
+        direction = f"{gap:.4g} short of" if gap > 0 else f"{-gap:.4g} over"
+        problems.append(
+            Problem(
+                "error",
+                "chains",
+                f"the chain percentages total {total:.4g}, which is {direction} 100",
+            )
+        )
+
+    seen: set[str] = set()
+    for index, chain in enumerate(plan.chains):
+        name = chain.get("name", "")
+        at = f"chains/{index}"
+        if name in seen:
+            problems.append(
+                Problem(
+                    "error",
+                    f"{at}/name",
+                    f"two chains are named {name!r}; the name keys every chart series, "
+                    "error report and SLO, so it has to pick one of them out",
+                )
+            )
+        seen.add(name)
+
+        steps = chain.get("steps", [])
+        if not steps:
+            problems.append(Problem("error", f"{at}/steps", f"chain {name!r} has no steps to send"))
+        ids: set[str] = set()
+        for step_index, step in enumerate(steps):
+            step_id = step.get("id", "")
+            if step_id in ids:
+                problems.append(
+                    Problem(
+                        "error",
+                        f"{at}/steps/{step_index}/id",
+                        f"chain {name!r} uses the step id {step_id!r} twice; a step id is "
+                        "how one step's own latency is reported",
+                    )
+                )
+            ids.add(step_id)
+
+        session = chain.get("session", "reuse")
+        if session == "pool" and not chain.get("pool_size"):
+            problems.append(
+                Problem(
+                    "error",
+                    f"{at}/pool_size",
+                    f"chain {name!r} cycles a pool of sessions but does not say how many",
+                )
+            )
+        if session != "pool" and chain.get("pool_size"):
+            problems.append(
+                Problem(
+                    "warning",
+                    f"{at}/pool_size",
+                    f"chain {name!r} sets a pool size but its session policy is "
+                    f"{session!r}, so it is ignored",
+                )
+            )
+
+    mode = load.get("mode", "fixed")
+    if mode == "fixed" and _rate(load) is None:
+        problems.append(Problem("error", "load/rate", "a fixed-rate run needs a rate"))
+    if mode == "stages" and not load.get("stages"):
+        problems.append(Problem("error", "load/stages", "a staged run needs its stages"))
+    if mode == "breakpoint" and not load.get("breakpoint"):
+        problems.append(
+            Problem("error", "load/breakpoint", "a breakpoint run needs its search parameters")
+        )
+    if _seconds(load.get("duration")) is None:
+        problems.append(
+            Problem("error", "load/duration", 'a duration with units, like "60s" or "5m"')
+        )
+    elif numbers["measured_s"] == 0:
+        problems.append(
+            Problem(
+                "error",
+                "load/warmup",
+                "the warmup is as long as the run, so nothing would be measured",
+            )
+        )
+
+    problems.extend(_sample_count_problems(numbers))
+    problems.extend(_unbound_problems(plan))
+
+    used = {step.get("call") for chain in plan.chains for step in chain.get("steps", [])}
+    for unused in sorted(set(plan.call_names) - used):
+        problems.append(
+            Problem("warning", "calls", f"the call {unused!r} is defined but no chain invokes it")
+        )
+    return problems
+
+
+def _sample_count_problems(numbers: dict[str, Any]) -> list[Problem]:
+    """The §12.1 floor, said before the run instead of after it.
+
+    Two separate statements, because they fail independently: a run can be long
+    enough overall while a 5% chain inside it is nowhere near -- and it is the
+    chain's percentiles that get quoted, not the run's.
+    """
+    problems = []
+    if numbers["supported"] is False:
+        problems.append(
+            Problem(
+                "warning",
+                "load/duration",
+                f"this run makes about {numbers['requests']} requests, below the "
+                f"{MIN_SAMPLES} a tail percentile needs: a p99 measured here has a "
+                "confidence interval wide enough to hide a regression",
+            )
+        )
+    thin = [c for c in numbers["chains"] if c["supported"] is False]
+    # Only when the run as a whole clears the floor. Otherwise this repeats the line
+    # above once per chain, and a warning said six times is a warning nobody reads.
+    if thin and numbers["supported"]:
+        named = ", ".join(f"{c['name']} ({c['requests']})" for c in thin)
+        problems.append(
+            Problem(
+                "warning",
+                "chains",
+                f"these chains stay below {MIN_SAMPLES} requests, so their percentiles "
+                f"will be withheld: {named}",
+            )
+        )
+    return problems
+
+
+def ready(problems: list[Problem]) -> bool:
+    """Whether this plan can be run. Errors stop it; warnings do not."""
+    return not any(problem.severity == "error" for problem in problems)
+
+
+# ------------------------------------------------------------ reading the calls
+
+#: A template reference in a call: `{{ users.email }}`, `{{ pid }}`, `{{ rand(1,20) }}`.
+TEMPLATE = re.compile(r"\{\{\s*(.+?)\s*\}\}")
+
+#: Prefixes that resolve outside the chain. `env` and `secret` come from the
+#: environment the engine runs in, `token` from the auth block.
+AMBIENT = ("env.", "secret.")
+
+
+def _references(value: Any) -> list[str]:
+    """Every `{{ ... }}` in a call, wherever it is written.
+
+    A call's variables are spread across its path, query, headers and body, and a
+    reader trying to work out what a step depends on should not have to find them.
+    """
+    found: list[str] = []
+    if isinstance(value, str):
+        found.extend(match.group(1) for match in TEMPLATE.finditer(value))
+    elif isinstance(value, dict):
+        for item in value.values():
+            found.extend(_references(item))
+    elif isinstance(value, list):
+        for item in value:
+            found.extend(_references(item))
+    return found
+
+
+def _body_kind(call: dict[str, Any]) -> str:
+    """How the request body is produced (§7.2), in the words the plan uses."""
+    body = call.get("body")
+    if body is None:
+        return "none"
+    if isinstance(body, dict):
+        if "generator" in body:
+            return f"generator {body['generator']}"
+        if "dataset" in body:
+            return f"dataset {body['dataset']}"
+        if "file" in body:
+            return f"file {body['file']}"
+    return "inline template"
+
+
+def call_details(plan: Plan) -> list[dict[str, Any]]:
+    """Every call the plan defines, as much as is needed to read a chain.
+
+    Calls are read-only in the UI on purpose (§20.3): they are authored from the
+    codebase or generated from a schema, and hand-editing a request definition in a
+    browser is how a plan drifts from the service it describes. What a reader needs
+    instead is what each one does and what it depends on -- so the variables it
+    consumes and the ones it extracts are pulled out here rather than left for
+    someone to find by reading JSON.
+    """
+    details = []
+    for reference, document in sorted(plan.calls.items()):
+        for name, call in sorted(document.items()):
+            uses = sorted(set(_references(call)))
+            details.append(
+                {
+                    "name": name,
+                    "file": reference,
+                    "description": call.get("description"),
+                    "method": call.get("method", "GET"),
+                    "path": call.get("path", ""),
+                    "headers": dict(sorted((call.get("headers") or {}).items())),
+                    "query": sorted(call.get("query") or {}),
+                    "body": _body_kind(call),
+                    "uses": uses,
+                    "extracts": sorted(call.get("extract") or {}),
+                    "assert": call.get("assert") or [],
+                }
+            )
+    return details
+
+
+def _bindings(plan: Plan) -> set[str]:
+    """Names that resolve without an earlier step having produced them."""
+    provided = {f"{name}." for name in plan.mix.get("datasets", {})}
+    provided.update(f"{name}." for name in plan.mix.get("generators", {}))
+    provided.update(AMBIENT)
+    return provided
+
+
+def _unbound_problems(plan: Plan) -> list[Problem]:
+    """Steps that read a variable nothing before them writes.
+
+    The most common way a hand-edited chain breaks, and the least visible: reordering
+    two steps or deleting one leaves a `{{ order_id }}` that resolves to nothing, and
+    the run reports it as an assertion failure against the service -- a bug hunt in
+    the wrong codebase.
+
+    A warning rather than an error, because this reads templates rather than
+    evaluating them: an expression is skipped, an ambient prefix is trusted, and
+    anything left is reported as a question rather than a verdict.
+    """
+    by_name = {detail["name"]: detail for detail in call_details(plan)}
+    ambient = _bindings(plan)
+    problems = []
+    for index, chain in enumerate(plan.chains):
+        available: set[str] = set()
+        if plan.mix.get("auth"):
+            available.add("token")
+        for step_index, step in enumerate(chain.get("steps", [])):
+            detail = by_name.get(step.get("call"))
+            if detail is None:  # an undefined call is already a load error
+                continue
+            for used in detail["uses"]:
+                if "(" in used or used in available:
+                    continue
+                if any(used.startswith(prefix) for prefix in ambient):
+                    continue
+                problems.append(
+                    Problem(
+                        "warning",
+                        f"chains/{index}/steps/{step_index}",
+                        f"step {step.get('id')!r} of chain {chain.get('name')!r} uses "
+                        f"{{{{ {used} }}}}, which no earlier step extracts and no dataset "
+                        "provides",
+                    )
+                )
+            available.update(detail["extracts"])
+    return problems
+
+
+# --------------------------------------------------------------- writing one back
+
+
+def plan_path(config: Config, name: str) -> Path:
+    return config.plans_dir / name
+
+
+def parse_mix(config: Config, name: str, mix: dict[str, Any]) -> Plan:
+    """A submitted mixture read as if it had been the file, without writing it.
+
+    The editor validates against this while it is being typed in, so what the form
+    is told is what the loader would say about the same document saved.
+    """
+    root = plan_path(config, name)
+    if not root.is_dir():
+        raise PlanError(f"no plan {name!r}")
+    return _plan_from(root, name, mix)
+
+
+def save_mix(config: Config, name: str, mix: dict[str, Any]) -> Plan:
+    """Replace one plan's mixture with a submitted document.
+
+    The whole document, never a patch, and validated by the loader's own path: the
+    editor cannot save something a hand-written file would be rejected for, and there
+    is no second opinion about the format living in JavaScript.
+
+    Written with `document_bytes`, the rule the bundle is hashed under. A save that
+    reformatted the file -- a different indent, a different key order -- would move
+    the plan hash and start a fresh series with no history, for a plan nobody had
+    actually changed.
+    """
+    if not NAME.match(name):
+        raise PlanError(f"plan {name!r}: names are letters, digits, dot, dash, underscore")
+    root = plan_path(config, name)
+    if not root.is_dir():
+        raise PlanError(f"no plan {name!r}")
+    if mix.get("name") != name:
+        # The name is inside the bytes the plan hash covers, so renaming a plan
+        # renames the series every run of it belongs to. That is a deliberate act,
+        # not a side effect of editing a percentage.
+        raise PlanError(
+            f"{MIX}/name: a plan's name is fixed at {name!r}; it is part of what a run is "
+            "identified by, so renaming one would split its history in two"
+        )
+    plan = _plan_from(root, name, mix)
+    (root / MIX).write_bytes(document_bytes(mix))
+    return plan

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
 
 from metrix_api import plans
 from metrix_api.config import Config
@@ -23,7 +23,14 @@ def _config(request: Request) -> Config:
 
 
 def _summary(plan: plans.Plan) -> dict[str, Any]:
+    """One plan as the list and the editor see it: what it is, and whether it runs.
+
+    The verdict travels with the plan rather than behind a second request. A list
+    that shows six plans and says nothing about which of them are runnable is a list
+    that has to be clicked through one at a time to find out.
+    """
     load = plan.mix.get("load", {})
+    problems = plans.check(plan)
     return {
         "name": plan.name,
         "description": plan.mix.get("description"),
@@ -41,6 +48,11 @@ def _summary(plan: plans.Plan) -> dict[str, Any]:
             "duration": load.get("duration"),
         },
         "notes": plan.notes,
+        # The arithmetic behind the percentages, and everything wrong with them.
+        # Computed here so the browser renders an answer rather than reaching one.
+        "figures": plans.figures(plan),
+        "problems": [problem.to_document() for problem in problems],
+        "ready": plans.ready(problems),
     }
 
 
@@ -57,7 +69,64 @@ def list_plans(request: Request) -> dict[str, Any]:
 
 @router.get("/{name}")
 def get_plan(name: str, request: Request) -> dict[str, Any]:
-    return _summary(_load(request, name))
+    """One plan, with the calls it invokes spelled out.
+
+    The call details ride along because the page that opens a plan is the page that
+    reads its chains, and a chain is unreadable without knowing what its steps do.
+    """
+    plan = _load(request, name)
+    return {**_summary(plan), "call_details": plans.call_details(plan)}
+
+
+@router.get("/{name}/document")
+def get_plan_document(name: str, request: Request) -> dict[str, Any]:
+    """The mixture exactly as it is written on disk.
+
+    What the editor loads, and what a person gets if they would rather keep the plan
+    in version control than click through a form. The summary is not enough to edit
+    from: it drops every field the form does not draw, and a round trip through it
+    would quietly delete an auth block.
+    """
+    return _load(request, name).mix
+
+
+@router.post("/{name}/validate")
+def validate_plan(name: str, request: Request, mix: Any = Body(...)) -> dict[str, Any]:
+    """What would be wrong with this mixture, without saving it.
+
+    The editor asks this as fields are committed, so the sample-count consequence of
+    a duration and a rate is visible while they are being chosen rather than after a
+    run has already been made at them. It is the same function the save path and the
+    bundle gate call: the browser has no rules of its own to drift from these.
+
+    A document that does not even parse is a 422 with the field named -- that is the
+    schema talking, and it is the same message a hand-written file would get.
+    """
+    plan = _parse(request, name, mix)
+    problems = plans.check(plan)
+    return {
+        "name": name,
+        "figures": plans.figures(plan),
+        "problems": [problem.to_document() for problem in problems],
+        "ready": plans.ready(problems),
+    }
+
+
+@router.put("/{name}")
+def replace_plan(name: str, request: Request, mix: Any = Body(...)) -> dict[str, Any]:
+    """Write a submitted mixture back over the stored one.
+
+    Saved even when it has errors in it. A half-finished mixture is a normal state to
+    leave an afternoon's work in, and an editor that refuses to save until the
+    percentages total 100 is an editor that loses work. What errors stop is running:
+    the bundle refuses to assemble, and this response says so.
+    """
+    try:
+        plan = plans.save_mix(_config(request), name, mix)
+    except plans.PlanError as exc:
+        status = 404 if str(exc).startswith("no plan ") else 422
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    return {**_summary(plan), "call_details": plans.call_details(plan)}
 
 
 @router.get("/{name}/bundle")
@@ -109,6 +178,20 @@ def get_bundle(
     )
 
 
+def _parse(request: Request, name: str, mix: Any) -> plans.Plan:
+    """A submitted mixture, checked against the plan's own calls on disk.
+
+    Not saved: this is the document as it stands in the form, read back through the
+    loader so that a reference to a call that does not exist is caught by the same
+    code that catches it in a file.
+    """
+    try:
+        return plans.parse_mix(_config(request), name, mix)
+    except plans.PlanError as exc:
+        status = 404 if str(exc).startswith("no plan ") else 422
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+
 def _load(request: Request, name: str) -> plans.Plan:
     try:
         return plans.load_plan(_config(request), name)
@@ -121,7 +204,22 @@ def _load(request: Request, name: str) -> plans.Plan:
 
 
 def _assemble(request: Request, name: str, profile_name: str, only: list[str]) -> plans.Bundle:
+    """The gate between editing a plan and running one.
+
+    A plan with errors in it does not become a bundle. The engine would reject the
+    same document a moment later, and handing someone a zip that cannot run -- named
+    after their plan, with a plan hash on it -- is worse than refusing: it looks like
+    an artifact. The reasons are listed rather than counted, since the point is to
+    fix them.
+    """
     plan = _load(request, name)
+    problems = plans.check(plan)
+    if not plans.ready(problems):
+        raise HTTPException(
+            status_code=422,
+            detail="this plan cannot run yet: "
+            + "; ".join(f"{p.where}: {p.message}" for p in problems if p.severity == "error"),
+        )
     try:
         profile = load_profile(_config(request), profile_name)
     except (ProfileError, FileNotFoundError) as exc:

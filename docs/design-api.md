@@ -39,7 +39,8 @@ Three sections, per the discussion:
 
 | Section | Purpose |
 |---|---|
-| **Config** | What this process is and where it keeps things: the resolved `$METRIX_HOME`, which rule chose it, the database. Plan library with editor (form + raw JSON view), **plan generation from OpenAPI/WSDL/HAR (§8)**, inline validation, auth blocks, mixture weights showing live "this implies N RPS on /foo"; phase durations (§10), engine threading, and SLO thresholds. |
+| **Config** | What this process is and where it keeps things: the resolved `$METRIX_HOME`, which rule chose it, the database. |
+| **Plans** | The plan library and the mixture editor (§20): chains and their shares, each one shown as the iterations and requests it actually buys, phase durations (§10), engine threading and SLO thresholds. Validation is displayed, never decided here — the same server-side check gates the bundle. **Plan generation from OpenAPI/WSDL/HAR (§8)** lands here too. |
 | **Profiles** | The environments a run can be pointed at: create, edit and delete them, endpoint by endpoint, plus **hostname discovery and the resolved inventory (§3)**. The editor submits a whole document and the server runs the same validation a hand-written file goes through, so a form cannot save what the loader would reject. A profile's name is fixed after creation — it is part of a recording's series identity (§17.2), so renaming one through the editor would split its history in two. |
 | **Performance › Stats** | **The numbers, as a table** (§14). Per chain and per step: start, finish, median, standard deviation, counts, errors. Updates once per second during a run. No charts on this page. |
 | **Performance › Charts** | The same run drawn (§15) — load and observation on one shared time axis, current-vs-target RPS, host stats, error feed, generator-health strip, phase indicator, stop/abort. No tables on this page. |
@@ -471,9 +472,17 @@ The front end is the expected authoring surface (§4), but the three documents a
 
 ### 20.1 Editing the mix
 
-The mixture editor is the primary screen. Chains listed with their percentages, edited either as a percentage or as a target RPS (converted and both shown), with a **live total that must reach 100** before the plan can run — the error names the shortfall or excess rather than silently renormalizing.
+The mixture editor is the primary screen. Chains listed with their percentages, edited either as a percentage or as a target rate (converted and both shown, either one moving the other), with a **live total that must reach 100** before the plan can run — the error names the shortfall or excess rather than silently renormalizing, because adjusting five chains to accommodate a typo in the sixth measures a mixture nobody chose.
 
-Alongside each chain: implied iterations/s, implied req/s given its step count, session policy, and the calls it invokes. Adding a chain means selecting from the calls already defined; reordering steps and setting `repeat_until` are in scope. Everything in `load` — rate, duration, warmup, model, concurrency cap, breakpoint parameters — is editable here, with the §12.1 sample-count consequence shown live: a duration and rate that fall below the 2250 floor say so before the run, not after.
+Alongside each chain: implied iterations/s, implied req/s given its step count, session policy, and the calls it invokes. Adding a chain means selecting from the calls already defined; reordering steps and setting `repeat_until` are in scope. `load` — rate, duration, warmup, model, concurrency cap — and the phase durations are editable here, with the §12.1 sample-count consequence shown live: a duration and rate that fall below the 2250 floor say so before the run, not after, and so does a 5% chain inside a run that clears the floor comfortably. A `stages` ramp and a `breakpoint` search carry their own shape and are shown rather than edited; they belong with the sweep that runs them (§17.6).
+
+**Every figure on the page is computed server-side.** The percentages, the implied rates, the request counts and the verdict all come from one function, which is also the one the save path and the bundle gate call. The browser converts a typed rate into the share the document stores — the document has to be built before it can be submitted — and renders what it is told about everything else. A second rulebook in JavaScript would be a rulebook to drift from the first.
+
+**Errors stop a run; warnings do not, and both are shown.** An error means the bundle will not assemble: a shortfall in the percentages, a chain with no steps, a pooled session with no pool size, a duplicate chain name or step id. A warning means the run will happen and will produce a number that should not be quoted: below the sample floor, a pool size on a chain that does not pool, a call no chain invokes, or a step reading a variable no earlier step extracts — the last of which is how reordering two steps silently breaks a chain.
+
+**Saving and running are separate.** A mixture with errors still saves, because half-finished is a normal state to leave an afternoon's work in and an editor that refuses to save loses it. What errors stop is assembly: `GET /api/plans/{name}/bundle` refuses and names them, since the engine would reject the same document a moment later and a zip that cannot run still looks like an artifact. A bundle is assembled from the plan **on disk**, so the page says when the form has moved on from it.
+
+**A save cannot move the plan hash.** The editor writes back the document it loaded with only the fields the form owns replaced — auth, datasets, generators, capture, SLOs and engine tuning survive a save they were never shown in, and are listed as carried so that "preserved" does not look like "gone". The bytes are written by the same rule the bundle is hashed under, so re-saving an unchanged plan is a no-op at the byte level rather than a rename of its whole series (§17.2).
 
 ### 20.2 Editing targets
 

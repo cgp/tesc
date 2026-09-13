@@ -10,6 +10,7 @@ import * as charts from "./charts.js";
 import * as compare from "./compare.js";
 import * as config from "./config.js";
 import { bytes as formatBytes, count, escape } from "./format.js";
+import * as plans from "./plans.js";
 import * as profiles from "./profiles.js";
 import * as recordings from "./recordings.js";
 import * as series from "./series.js";
@@ -31,6 +32,12 @@ const ROUTES = {
     title: "Profiles",
     subtitle: "The environments a run can be pointed at, and what to watch on each.",
     view: profiles,
+  },
+  plans: {
+    section: "Setup",
+    title: "Plans",
+    subtitle: "What a run sends: chains of calls, and each one's share of the load.",
+    view: plans,
   },
   stats: {
     section: "Performance",
@@ -102,6 +109,9 @@ function parseHash() {
 
   if (parts[0] === "config") return { name: "config" };
   if (parts[0] === "profiles") return { name: "profiles" };
+  // The plan being edited is in the hash, so an editor can be linked to and reopened
+  // where it was. What is typed into it is not -- that is work in progress.
+  if (parts[0] === "plans") return { name: "plans", plan: parts[1] ?? null };
   if (parts[0] === "performance") {
     return { name: parts[1] === "charts" ? "charts" : "stats" };
   }
@@ -132,6 +142,13 @@ async function load(route) {
 
     if (route.name === "profiles") {
       await loadProfiles();
+      return;
+    }
+
+    if (route.name === "plans") {
+      await loadPlans();
+      if (route.plan) await openPlan(route.plan);
+      else set({ planDraft: null, planCheck: null });
       return;
     }
 
@@ -264,6 +281,182 @@ async function loadProfiles() {
   set({ profiles: rows, brokenProfiles: broken, profilesReadAt: Date.now() });
 }
 
+/**
+ * The plan directory, and the profiles a bundle could be assembled against.
+ *
+ * Both, because the plan page cannot offer a bundle without somewhere to point it:
+ * a plan says what to send and a profile says where, and neither is a run on its own.
+ */
+async function loadPlans() {
+  const [listed, profileList] = await Promise.all([api.plans(), api.profiles()]);
+  set({
+    plans: listed.plans,
+    brokenPlans: listed.broken,
+    plansReadAt: Date.now(),
+    profiles: profileList.profiles,
+    brokenProfiles: profileList.broken,
+  });
+}
+
+/**
+ * Open one plan for editing.
+ *
+ * The document as written on disk, not the summary: the summary drops every field
+ * the form does not draw, and saving a round trip through it would quietly delete an
+ * auth block. The call details come with it because a chain is unreadable without
+ * knowing what its steps do.
+ */
+async function openPlan(name) {
+  try {
+    const [doc, detail] = await Promise.all([api.planDocument(name), api.plan(name)]);
+    set({
+      planDraft: {
+        name,
+        doc,
+        // What is on disk, kept beside what is being typed: a bundle is assembled
+        // from the stored plan, and the page has to be able to say when the two have
+        // come apart.
+        saved: doc,
+        detail: { calls: detail.call_details, notes: detail.notes },
+        profile: get().profiles[0]?.name ?? null,
+        preview: null,
+        error: null,
+      },
+      planCheck: { ready: detail.ready, problems: detail.problems, figures: detail.figures },
+    });
+  } catch (error) {
+    set({ error: error.message });
+  }
+}
+
+// Read typing back into the draft. Every committed field goes through here before it
+// is checked, so what the server judges is what is on the screen.
+function syncPlan() {
+  const draft = get().planDraft;
+  const form = document.querySelector("[data-plan-form]");
+  if (!draft || !form) return draft;
+  const synced = { ...draft, doc: plans.readForm(form, draft.doc) };
+  set({ planDraft: synced });
+  return synced;
+}
+
+function editPlanDraft(change) {
+  const draft = syncPlan();
+  if (draft) set({ planDraft: { ...draft, ...change(draft) } });
+}
+
+/**
+ * Ask the server what is wrong with the draft as it stands.
+ *
+ * On every committed field rather than on save, because the whole point of the
+ * figures is to be read while the duration and the rate are being chosen. The
+ * browser computes none of this: one validator, server-side, and the same one the
+ * bundle is gated on.
+ */
+async function checkPlan() {
+  const draft = get().planDraft;
+  if (!draft) return;
+  try {
+    set({ planCheck: await api.validatePlan(draft.name, draft.doc) });
+  } catch (error) {
+    // A document the schema rejects has no figures to show. Saying so is better than
+    // leaving the last ones up, which would be numbers for a document that is no
+    // longer on the screen.
+    set({
+      planCheck: {
+        ready: false,
+        figures: null,
+        problems: [{ severity: "error", where: "mix.json", message: error.message }],
+      },
+    });
+  }
+}
+
+async function savePlan() {
+  const draft = syncPlan();
+  if (!draft) return;
+  try {
+    const saved = await api.replacePlan(draft.name, draft.doc);
+    set({
+      planDraft: { ...get().planDraft, saved: draft.doc, error: null },
+      planCheck: { ready: saved.ready, problems: saved.problems, figures: saved.figures },
+    });
+    notify(
+      saved.ready
+        ? "Saved. This mixture assembles into a bundle."
+        : "Saved with errors — it will not run until they are fixed."
+    );
+    await loadPlans();
+  } catch (error) {
+    // Back into the form with the server's message, which already names the field.
+    // Nothing typed is lost.
+    set({ planDraft: { ...get().planDraft, error: error.message } });
+  }
+}
+
+async function reloadPlans() {
+  try {
+    set({ error: null });
+    await loadPlans();
+  } catch (error) {
+    set({ error: error.message });
+  }
+}
+
+/**
+ * A percentage typed as a rate.
+ *
+ * The document stores shares, so an iterations/s has to become one before it can be
+ * submitted. Written into the percentage box first and read back from the form with
+ * everything else, so there is one path from the form to the document.
+ */
+function shareFromRate(input) {
+  const form = input.form;
+  const index = input.name.split(".")[1];
+  const percent = form.elements[`chains.${index}.percent`];
+  const rate = Number(form.elements["load.rate"]?.value);
+  const share = plans.shareFromRate(Number(input.value), rate);
+  if (percent && share != null) percent.value = String(share);
+}
+
+/** Show what the bundle holds, without downloading it. */
+async function previewBundle() {
+  const draft = syncPlan();
+  if (!draft?.profile) return;
+  try {
+    set({ error: null });
+    const preview = await api.bundle(draft.name, draft.profile);
+    set({ planDraft: { ...get().planDraft, preview } });
+  } catch (error) {
+    set({ error: error.message, planDraft: { ...get().planDraft, preview: null } });
+  }
+}
+
+/**
+ * Download the bundle as a zip.
+ *
+ * Through fetch rather than a link, because a plan with errors in it is refused with
+ * a message naming them, and a link would navigate the page to that message instead
+ * of showing it beside the plan.
+ */
+async function downloadBundle() {
+  const draft = syncPlan();
+  if (!draft?.profile) return;
+  try {
+    set({ error: null });
+    const { blob } = await api.bundleArchive(draft.name, draft.profile);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${draft.name}-${draft.profile}.zip`;
+    link.click();
+    URL.revokeObjectURL(url);
+    notify("Bundle downloaded. It unpacks to the directory the engine takes.");
+  } catch (error) {
+    set({ error: error.message });
+  }
+}
+
 async function startObserving(profileName) {
   try {
     const { recording_id: id } = await api.startRecording({ profile: profileName });
@@ -351,6 +544,10 @@ function renderView(state) {
   // unclickable under the cursor.
   if (activeRoute(state).name === "stats" && table.patch(state)) return;
   if (activeRoute(state).name === "charts" && charts.patch(state)) return;
+  // The plan editor patches its own figures: every committed field re-checks the
+  // mixture, and rebuilding the form each time would take the focus out from under
+  // whoever is tabbing through the chains.
+  if (activeRoute(state).name === "plans" && plans.patch(state)) return;
 
   document.getElementById("view").innerHTML = activeEntry(state).view.render(state);
 
@@ -388,7 +585,14 @@ async function onRouteChange() {
   const route = parseHash();
   // Leaving the page abandons the draft. Carrying it would mean the editor
   // reappearing later over a profile the person had stopped thinking about.
-  set({ route, ...(route.name === "profiles" ? {} : { profileDraft: null }) });
+  set({
+    route,
+    ...(route.name === "profiles" ? {} : { profileDraft: null }),
+    // Leaving the page abandons the draft, for the same reason: an editor that
+    // reappears later over a plan somebody had stopped thinking about is worse than
+    // one that closes.
+    ...(route.name === "plans" ? {} : { planDraft: null, planCheck: null }),
+  });
   await load(route);
 }
 
@@ -792,7 +996,7 @@ document.addEventListener("click", (event) => {
   const button = event.target.closest("[data-action]");
   if (!button) return;
   event.preventDefault();
-  const { action, profile, recording, index } = button.dataset;
+  const { action, profile, plan, recording, index } = button.dataset;
 
   if (action === "observe") startObserving(profile);
   if (action === "stop") stopObserving(recording);
@@ -816,6 +1020,70 @@ document.addEventListener("click", (event) => {
   if (action === "baseline-toggle") {
     toggleBaseline(recording, button.dataset.baseline === "1");
   }
+  if (action === "plan-reload") reloadPlans();
+  if (action === "plan-edit") location.hash = `#/plans/${encodeURIComponent(plan)}`;
+  if (action === "plan-cancel") location.hash = "#/plans";
+  if (action === "plan-save") savePlan();
+  if (action === "bundle-preview") previewBundle();
+  if (action === "bundle-download") downloadBundle();
+  if (action === "chain-add") {
+    editPlanDraft((draft) => ({
+      doc: {
+        ...draft.doc,
+        chains: [
+          ...(draft.doc.chains ?? []),
+          plans.blankChain(draft.detail?.calls[0]?.name),
+        ],
+      },
+    }));
+    checkPlan();
+  }
+  if (action === "chain-remove") {
+    const at = Number(index);
+    editPlanDraft((draft) => ({
+      doc: { ...draft.doc, chains: draft.doc.chains.filter((_, i) => i !== at) },
+    }));
+    checkPlan();
+  }
+  if (action === "step-add") {
+    editPlanDraft((draft) => ({
+      doc: {
+        ...draft.doc,
+        chains: draft.doc.chains.map((chain, i) =>
+          i === Number(index)
+            ? { ...chain, steps: [...chain.steps, plans.blankStep(draft.detail?.calls[0]?.name)] }
+            : chain
+        ),
+      },
+    }));
+    checkPlan();
+  }
+  if (action === "step-remove") {
+    editPlanDraft((draft) => ({
+      doc: {
+        ...draft.doc,
+        chains: draft.doc.chains.map((chain, i) =>
+          i === Number(index)
+            ? { ...chain, steps: chain.steps.filter((_, s) => s !== Number(button.dataset.step)) }
+            : chain
+        ),
+      },
+    }));
+    checkPlan();
+  }
+  if (action === "step-move") {
+    editPlanDraft((draft) => ({
+      doc: {
+        ...draft.doc,
+        chains: draft.doc.chains.map((chain, i) =>
+          i === Number(index)
+            ? { ...chain, steps: moved(chain.steps, Number(button.dataset.step), button.dataset.move) }
+            : chain
+        ),
+      },
+    }));
+    checkPlan();
+  }
   if (action === "profile-cancel") set({ profileDraft: null });
   if (action === "profile-save") saveProfile();
   if (action === "endpoint-add") {
@@ -833,8 +1101,36 @@ document.addEventListener("click", (event) => {
 
 // Separate from clicks: a select whose value decides which other fields exist has to
 // be read on change, and preventing its click would stop the dropdown opening.
+/**
+ * Reorder a chain's steps.
+ *
+ * Order is the chain: step two reads what step one extracted, so moving one is a
+ * change to what the run does rather than to how it is displayed. The check that
+ * follows is what says whether the variables still line up.
+ */
+function moved(steps, index, direction) {
+  const to = direction === "up" ? index - 1 : index + 1;
+  if (to < 0 || to >= steps.length) return steps;
+  const next = [...steps];
+  [next[index], next[to]] = [next[to], next[index]];
+  return next;
+}
+
 document.addEventListener("change", (event) => {
   if (event.target.closest('[data-change-action="draft-reload"]')) syncDraft();
+
+  const field = event.target.closest("[data-plan-form] input, [data-plan-form] select");
+  if (field) {
+    if (field.dataset.derives === "percent") shareFromRate(field);
+    if (field.name === "bundle.profile") {
+      // A different profile is a different targets.json, so whatever preview is on
+      // screen is now for a bundle nobody asked about.
+      editPlanDraft(() => ({ profile: field.value, preview: null }));
+    } else {
+      syncPlan();
+    }
+    checkPlan();
+  }
   const filter = event.target.closest('[data-change-action="archive-filter"]');
   if (filter) filterArchive(filter.dataset.filter, filter.value.trim());
   const recording = event.target.closest('[data-change-action="recording-select"]');
@@ -846,9 +1142,14 @@ document.addEventListener("change", (event) => {
 // A form with no submit button still submits on Enter, which would reload the page
 // and lose the draft. Take it as "save".
 document.addEventListener("submit", (event) => {
-  if (!event.target.matches("[data-profile-form]")) return;
-  event.preventDefault();
-  saveProfile();
+  if (event.target.matches("[data-profile-form]")) {
+    event.preventDefault();
+    saveProfile();
+  }
+  if (event.target.matches("[data-plan-form]")) {
+    event.preventDefault();
+    savePlan();
+  }
 });
 
 subscribe((state) => [activeRoute(state).name], renderShell);

@@ -21,6 +21,21 @@ const state = {
   //: yesterday shown as if it were current would be worse than no result.
   verifying: null,
   verified: {},
+  plans: [],
+  brokenPlans: [],
+  //: When the plan directory was last read, shown beside its reload button for the
+  //: same reason the profile list carries one: a reload that found nothing changed
+  //: has to look different from a button that does nothing.
+  plansReadAt: null,
+  //: The plan being edited, if any: the mixture as loaded, the calls it invokes, and
+  //: the bundle preview asked for while it is open. Editor actions read the form
+  //: into it; background updates leave its DOM alone.
+  planDraft: null,
+  //: What the server says about the draft as it stands -- the problems and the
+  //: arithmetic. Never computed here: the browser renders this answer and reaches
+  //: none of it, so a form cannot save what a hand-written file would be rejected
+  //: for.
+  planCheck: null,
   //: Which column the stats table is ordered by, if a person has chosen one.
   //: Null means the default: metric name, alphabetically.
   tableSort: null,
