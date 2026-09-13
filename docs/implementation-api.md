@@ -131,7 +131,7 @@ Nothing here requires the engine. Through A3 the product is a host-observation t
 ### A4 — Integration with the engine
 
 - [x] **A4.1** — Bundle assembly and export (`GET /api/plans/{name}/bundle`)
-- [ ] **A4.2** — Engine supervision, NDJSON ingest, load + host series on one timeline
+- [x] **A4.2** — Engine supervision, NDJSON ingest, load + host series on one timeline
 - [ ] **A4.3** — Plan editor: calls, chains, percentages with implied RPS, validation display
 - [ ] **A4.4** — `POST /api/plans/generate` — calls from OpenAPI/WSDL, starter mix (§8)
 - [ ] **A4.5** — Sweep comparison view (§17.6)

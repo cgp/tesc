@@ -213,6 +213,29 @@ function targetsIn(chart) {
 }
 
 /**
+ * The span every chart on the page is drawn over: the recording, not the metric.
+ *
+ * Host samples start at zero; the engine's first window lands wherever the load was
+ * launched. Left to itself uPlot fits each chart to its own data, so a vertical line
+ * at the same screen position would mean 1.2s on one chart and 3.4s on the next --
+ * and the question this page exists to answer is whether the shape of one explains
+ * the shape of the other.
+ */
+export function extent(chart, targets) {
+  let low = Infinity;
+  let high = -Infinity;
+  for (const metric of chart.metrics) {
+    const [xs] = align(chart, metric, targets);
+    if (!xs.length) continue;
+    low = Math.min(low, xs[0]);
+    high = Math.max(high, xs[xs.length - 1]);
+  }
+  // A recording with a single sample has no span; give it one so uPlot has a scale.
+  if (!Number.isFinite(low)) return [0, 1];
+  return low === high ? [low, low + 1] : [low, high];
+}
+
+/**
  * The x axis, and one y array per target, with `null` wherever nothing was collected.
  *
  * uPlot breaks a line at a null and joins across a missing x, so the nulls are what
@@ -247,13 +270,25 @@ export function align(chart, metric, targets) {
 
 function build(holder, chart, metric, targets) {
   const data = align(chart, metric, targets);
+  const span = extent(chart, targets);
   return new uPlot(
     {
       width: holder.clientWidth || 800,
       height: 200,
       cursor: { sync: { key: SYNC }, drag: { x: true, y: false } },
       legend: { live: true },
-      scales: { x: { time: false } },
+      // Every chart on the page gets the recording's whole span, not its own
+      // metric's. A shared crosshair is not a shared axis: with load starting two
+      // seconds after the observer did, auto-scaled charts put the same moment at
+      // different pixels, and reading one against the other is exactly what this
+      // page is for. `u.scales.x.min` is honoured after a zoom so dragging still
+      // works and still moves every chart together.
+      scales: {
+        x: {
+          time: false,
+          range: (u, min, max) => (u.select?.width ? [min, max] : span),
+        },
+      },
       axes: [
         {
           label: "seconds since the recording started",

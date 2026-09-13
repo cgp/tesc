@@ -314,6 +314,19 @@ def get_series(
     for target_id, t_ms, name, value in rows:
         series.setdefault(name, {}).setdefault(target_id, []).append([t_ms, value])
 
+    # Load metrics join the host ones here rather than in a stream of their own. They
+    # are already on the recording's clock -- ingest resolved that once -- so they
+    # need no new drawing code and no second axis: the question this page exists to
+    # answer is whether the shape of one explains the shape of the other, and that
+    # only works if they are read side by side.
+    for name, by_target in store.load_scalars(conn, recording_id).items():
+        if metric is not None and name != metric:
+            continue
+        for target_id, points in by_target.items():
+            if target is not None and target_id != target:
+                continue
+            series.setdefault(name, {})[target_id] = [[t, v] for t, v in points]
+
     return {
         "recording_id": recording_id,
         "metrics": sorted(series),
@@ -381,6 +394,34 @@ def _require(conn: sqlite3.Connection, recording_id: str) -> store.RecordingRow:
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+
+@router.get("/{recording_id}/load")
+def get_load(
+    recording_id: str, conn: sqlite3.Connection = Depends(get_db)
+) -> dict[str, Any]:
+    """What the engine measured, per chain and per step, for the whole run.
+
+    Counters and extrema are exact sums and extremes across the windows. There are
+    no percentiles here on purpose: a percentile over the run needs the windows'
+    histograms merged, distributions merge and percentiles do not (§17.5), and that
+    merge belongs to `stats/` rather than to a SQL query or to this page.
+
+    `step` is null on a chain's own end-to-end row. It is listed apart from its steps
+    because a chain's duration is not the sum of its step medians (§14.1), and a flat
+    list invites exactly that sum.
+    """
+    _require(conn, recording_id)
+    windows = store.load_windows(conn, recording_id)
+    return {
+        "recording_id": recording_id,
+        # Absent rather than empty when no engine ran: "this recording has no load
+        # side" and "the load side measured nothing" are different facts.
+        "ran": bool(windows),
+        "windows": len(windows),
+        "engine_exit_code": store.get(conn, recording_id).engine_exit_code,
+        "stopped_because": store.get(conn, recording_id).stopped_because,
+        "rows": store.load_totals(conn, recording_id),
+    }
 
 # ------------------------------------------------------------------------ purge
 

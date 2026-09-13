@@ -26,7 +26,7 @@ Object.defineProperty(globalThis, "document", {
 // uPlot is a browser global loaded by index.html; nothing under test here needs it.
 Object.defineProperty(globalThis, "uPlot", { configurable: true, value: undefined });
 
-const { align, phaseSpans, render } = await import("../../web/js/charts.js");
+const { align, extent, phaseSpans, render } = await import("../../web/js/charts.js");
 
 function chart(patch = {}) {
   return {
@@ -170,4 +170,32 @@ test("a live recording is drawn in preference to one being read back", () => {
 test("a recording whose series has not arrived says so rather than looking broken", () => {
   const markup = render({ selectedRecording: { id: "r1" }, live: null });
   assert.match(markup, /Loading the series/);
+});
+
+test("every chart is drawn over the recording, not over its own metric", () => {
+  // Host samples start at zero; the engine's first window lands wherever the load
+  // was launched. Auto-scaled, the same pixel would be a different moment on each
+  // chart — and reading one against the other is the whole point of the page.
+  const span = extent(
+    chart({
+      metrics: ["cpu.busy", "load.achieved_rate"],
+      series: {
+        "cpu.busy": { "box-a": [[0, 10], [11000, 12]] },
+        "load.achieved_rate": { "box-a": [[2300, 60], [10100, 59]] },
+      },
+    }),
+    ["box-a"]
+  );
+  assert.deepEqual(span, [0, 11], "seconds, spanning both");
+});
+
+test("a recording with one sample still has a scale to draw on", () => {
+  assert.deepEqual(
+    extent(chart({ series: { "cpu.busy": { "box-a": [[5000, 1]] } } }), ["box-a"]),
+    [5, 6]
+  );
+});
+
+test("a recording with no samples has a scale rather than an empty one", () => {
+  assert.deepEqual(extent(chart({ metrics: [], series: {} }), []), [0, 1]);
 });

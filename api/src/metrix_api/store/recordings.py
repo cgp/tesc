@@ -65,6 +65,10 @@ class RecordingRow:
     #: having had any: one is a decision somebody made and the other is a run with
     #: no engine attached, and a page that conflates them is lying about evidence.
     purged_at: str | None = None
+    #: How the engine ended, for a load run. None for observation-only: "no engine
+    #: ran" and "the engine exited 0" are different facts.
+    engine_exit_code: int | None = None
+    stopped_because: str | None = None
     targets: list[str] = field(default_factory=list)
     #: Annotation counts by severity. The archive needs to say which recordings have
     #: something wrong with them without opening each one, and `invalid` is the
@@ -94,6 +98,8 @@ class RecordingRow:
             is_baseline=bool(row["is_baseline"]),
             note=row["note"],
             purged_at=row["purged_at"],
+            engine_exit_code=row["engine_exit_code"],
+            stopped_because=row["stopped_because"],
         )
 
 
@@ -772,3 +778,151 @@ def phases(conn: sqlite3.Connection, recording_id: str) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM phase WHERE recording_id = ? ORDER BY from_ms", (recording_id,)
     ).fetchall()
+# ------------------------------------------------------------------ load metrics
+
+
+def load_scalars(
+    conn: sqlite3.Connection, recording_id: str
+) -> dict[str, dict[str, list[tuple[int, float]]]]:
+    """The engine's per-window scalars in the shape a chart already draws.
+
+    Keyed metric -> target -> [(t_ms, value)], which is exactly what `series()`
+    returns for host samples — so load and host lines land on one axis with no new
+    drawing code, and `t_ms` already means the same thing on both because ingest put
+    them on one clock.
+
+    A gauge the engine could not measure is absent rather than zero, so a chart
+    breaks its line there instead of drawing a healthy-looking floor.
+    """
+    columns = {
+        "load.target_rate": "target_rate",
+        "load.achieved_rate": "achieved_rate",
+        "load.in_flight": "in_flight",
+        "load.queue_depth": "queue_depth",
+        "load.drift_ms": "drift_ms",
+    }
+    found: dict[str, dict[str, list[tuple[int, float]]]] = {}
+    for row in conn.execute(
+        "SELECT target_id, t_ms, target_rate, achieved_rate, in_flight, queue_depth,"
+        " drift_ms FROM load_window WHERE recording_id = ? ORDER BY t_ms",
+        (recording_id,),
+    ):
+        for metric, column in columns.items():
+            if row[column] is None:
+                continue
+            found.setdefault(metric, {}).setdefault(row["target_id"], []).append(
+                (row["t_ms"], float(row[column]))
+            )
+    return found
+
+
+def load_windows(conn: sqlite3.Connection, recording_id: str) -> list[sqlite3.Row]:
+    """Every snapshot, in time order."""
+    return conn.execute(
+        "SELECT * FROM load_window WHERE recording_id = ? ORDER BY t_ms, target_id",
+        (recording_id,),
+    ).fetchall()
+
+
+def load_rows(
+    conn: sqlite3.Connection,
+    recording_id: str,
+    *,
+    kind: str | None = None,
+    from_ms: int = 0,
+    to_ms: int | None = None,
+) -> list[sqlite3.Row]:
+    """Per-chain and per-step rows, optionally over one slice of the timeline.
+
+    `step IS NULL` is the chain's own end-to-end row. It is kept apart from its
+    steps because a chain's duration is not the sum of its step medians, and a
+    reader handed one flat list will add them up.
+    """
+    clauses = ["recording_id = ?", "t_ms >= ?"]
+    params: list[object] = [recording_id, from_ms]
+    if to_ms is not None:
+        clauses.append("t_ms <= ?")
+        params.append(to_ms)
+    if kind is not None:
+        clauses.append("kind = ?")
+        params.append(kind)
+    rows = conn.execute(
+        f"SELECT * FROM load_row WHERE {' AND '.join(clauses)}"
+        " ORDER BY chain, step != '', step, t_ms",
+        params,
+    ).fetchall()
+    # Dicts rather than Rows so `step` can come back as None. The empty string is a
+    # STRICT primary key's requirement, not a thing callers should have to know.
+    return [{**dict(row), "step": row["step"] or None} for row in rows]
+
+
+def load_totals(conn: sqlite3.Connection, recording_id: str) -> list[dict[str, object]]:
+    """One row per chain and step for the whole run: counts, extrema, and the
+    histograms to merge.
+
+    The counters add across windows and the extrema take their own min and max --
+    both are exact. What is deliberately *not* done here is deriving a percentile:
+    that needs the histograms merged, distributions merge and percentiles do not,
+    and the rule lives in `stats/` rather than in a SQL query.
+    """
+    rows = conn.execute(
+        """
+        SELECT chain, step, kind,
+               SUM(attempted) AS attempted, SUM(completed) AS completed,
+               SUM(failed) AS failed, SUM(count) AS count,
+               MIN(min_us) AS min_us, MAX(max_us) AS max_us
+        FROM load_row WHERE recording_id = ?
+        GROUP BY chain, step, kind
+        ORDER BY chain, step != '', step, kind
+        """,
+        (recording_id,),
+    ).fetchall()
+
+    statuses: dict[tuple[str, str | None], dict[str, int]] = {}
+    for row in conn.execute(
+        "SELECT chain, step, statuses FROM load_row"
+        " WHERE recording_id = ? AND statuses IS NOT NULL",
+        (recording_id,),
+    ):
+        into = statuses.setdefault((row["chain"], row["step"] or None), {})
+        for code, count in json.loads(row["statuses"]).items():
+            into[code] = into.get(code, 0) + count
+
+    return [
+        {
+            "chain": row["chain"],
+            # Back to None: the empty string is a storage detail of a STRICT table's
+            # primary key, and nothing outside the store should have to know it.
+            "step": row["step"] or None,
+            "kind": row["kind"],
+            "attempted": row["attempted"],
+            "completed": row["completed"],
+            "failed": row["failed"],
+            "count": row["count"],
+            "min_us": row["min_us"],
+            "max_us": row["max_us"],
+            "statuses": statuses.get((row["chain"], row["step"]), {}),
+        }
+        for row in rows
+    ]
+
+
+def load_histograms(
+    conn: sqlite3.Connection,
+    recording_id: str,
+    *,
+    chain: str,
+    step: str | None,
+    kind: str,
+) -> list[str]:
+    """The serialized distributions for one row, in time order.
+
+    Handed out rather than summarised because merging them is what produces a
+    percentile that means anything, and that merge belongs to `stats/`.
+    """
+    rows = conn.execute(
+        "SELECT hdr FROM load_row WHERE recording_id = ? AND chain = ? AND step = ?"
+        " AND kind = ? AND hdr IS NOT NULL ORDER BY t_ms",
+        (recording_id, chain, step or "", kind),
+    ).fetchall()
+    return [row["hdr"] for row in rows]
