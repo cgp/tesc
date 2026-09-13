@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "name": "mock-fixed",
+  "calls": ["calls/ping.json"],
+  "defaults": { "timeout_ms": 1000 },
+  "phases": { "baseline": "0s", "settle": "0s" },
+  "load": { "mode": "fixed", "model": "open", "rate": 75, "duration": "30s", "max_concurrency": 200 },
+  "chains": [{ "name": "ping", "percent": 100, "session": "fresh", "steps": [{ "id": "get", "call": "ping" }] }]
+}

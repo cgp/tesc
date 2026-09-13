@@ -1,0 +1,14 @@
+{
+  "seed": 42,
+  "latency": { "type": "lognormal", "median_ms": 10, "sigma": 0.5 },
+  "max_latency_ms": 60000,
+  "errors": [
+    { "type": "http", "rate": 0.02, "status": 503 },
+    { "type": "disconnect", "rate": 0.005 },
+    { "type": "timeout", "rate": 0.005, "delay_ms": 10000 }
+  ],
+  "slow_start": { "duration_ms": 5000, "extra_latency_ms": 100 },
+  "capacity_rps": 100,
+  "max_in_flight": 50,
+  "max_connections": 100
+}

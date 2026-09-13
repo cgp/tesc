@@ -42,6 +42,10 @@ pub struct Target {
     /// Where to send traffic: `host:port` or `ip:port`.
     pub address: String,
 
+    /// Protocol selection: auto uses ALPN for TLS and HTTP/1.1 for cleartext.
+    #[serde(default)]
+    pub http_version: HttpVersion,
+
     /// Sent as `Host`, and used for TLS SNI and certificate verification when going
     /// direct to a container by IP. Most services route or vhost on it; a raw IP gets
     /// a 404 or a default backend.
@@ -69,4 +73,15 @@ pub struct Tls {
     /// Raises a run annotation when used.
     #[serde(default)]
     pub insecure_skip_verify: bool,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpVersion {
+    #[default]
+    Auto,
+    Http1,
+    Http2,
 }

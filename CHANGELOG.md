@@ -379,6 +379,15 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - Verified in a browser against a ten-run history with one invalid run and a CPU jump: the band appears at exactly the sixth run and nowhere earlier, the invalid run is hollow with both lines broken around it, and a two-run series says why it has no band instead of drawing bare points. No console errors, no horizontal overflow at 1280px.
 - Verified: `scripts/check.sh` all green — 388 passed, 1 skipped, 67 front-end tests.
 
+## 2026-09-13 — B1.1: standalone engine mock target
+
+- Implement metrix-mock as a standalone HTTP/1.1 and HTTP/2 prior-knowledge server with strict JSON configuration and an ephemeral-port option.
+- Add seeded fixed, normal, lognormal, and bimodal latency; HTTP errors, disconnects, and timeouts; linear slow start; a token-bucket capacity ceiling; and independent request/connection limits.
+- Expose planned response delay and outcome headers, cancel active connections on shutdown, and document timing, clipping, burst, and transport-rejection semantics with examples/mock.json.
+- Add distribution, validation, CLI, and real-socket tests covering keep-alive, multiplexing, fault recovery, limit release, and cancellation. Mark B1.1 complete; B1.2 remains next.
+- Restore the existing synthetic NDJSON contract fixture and exempt that exact file from the runtime-data ignore rule, fixing two schema tests in fresh checkouts.
+- Validation: bash scripts/check.sh passes (19 mock tests, 384 API tests, 67 front-end tests; 5 live-host tests skipped). Standalone binary smoke test returns HTTP 200 with the configured default 10ms delay.
+
 ## 2026-09-13 — A page explanation, behind a button.
 
 - **The Series subtitle was confusing** — "the same setup over time, against the band its own runs measure" packed the mechanism into the one line that should carry the question. It now asks it: *is a setup getting better or worse, run by run?*
@@ -402,6 +411,15 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - **A formatting bug the verdict table made obvious: a change in a percentage is not a percentage.** CPU moving from 21% to 57% moved 36 percentage *points*, and the cell read `+35.7% (+167.8%)` — two meanings of one symbol side by side. There is now a `metricChange` formatter that says `+35.7 pts (+167.8% of normal)`, and the baseline comparison card, which had the same cell, uses it too.
 - Verified in a browser against a ten-run history: the regression named two metrics with the count behind each, the third was listed as checked and within band, a run held out for its invalid note said so rather than passing, and a two-run series reported `unknown` with all three of its metrics named as *not enough history yet*. No console errors, nothing clipped, no horizontal overflow at 1280px.
 - Verified: `scripts/check.sh` all green — 414 passed, 1 skipped, 87 front-end tests.
+
+## 2026-09-13 — B1.2: fixed-rate scheduler and HTTP transport
+
+- Make metrix-engine --plan executable for one static call, one target, fixed open load and zero phases; reject unsupported later-step semantics before network I/O and keep bundle file references inside its root.
+- Schedule absolute arrivals with reusable request slots, bounded concurrency and connection admission, explicit late/cap skips, deadline-bounded drain and cancellation. Use a dedicated native-sleep clock with coalesced atomic wake-ups to avoid coarse Windows timers reducing the offered load.
+- Add direct hyper HTTP/1.1 pooling and HTTP/2 multiplexing, verified rustls TLS/ALPN, whole-request timeouts, body draining and connection recovery without retries. Add targets.http_version and regenerate its shared schema.
+- Add examples/plans/mock-fixed, end-of-run count/drift diagnostics, and tests for validation, request construction, scheduling, faults, TLS and cancellation. Run a copied binary at 75 RPS for 30 seconds from a temporary directory containing only the binary and bundle; require at least 98% of offered arrivals and report every skip.
+- Mark B1.2 complete; B1.3 aggregation is next. No NDJSON, percentile, phase or SLO implementation is claimed by this step.
+- Validation: bash scripts/check.sh passes, including 20 new engine tests, the standalone 75 RPS/30s acceptance, 384 API tests, 67 front-end tests and schema drift checks (5 live-host tests skipped).
 
 ## 2026-09-13 — A3.6: comparison mode, and the one arithmetic that makes an aggregate mean anything.
 

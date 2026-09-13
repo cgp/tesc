@@ -19,6 +19,8 @@ api/tests/integration.toml
 /metrix-data/
 *.db
 *.ndjson
+# Synthetic schema-contract input must be present in fresh checkouts.
+!/examples/fixtures/summary.ndjson
 *.ndjson.zst
 
 cgp*

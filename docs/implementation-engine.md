@@ -2,7 +2,7 @@
 
 The load generator. Buildable and testable with nothing but a shell, a bundle, and the mock target — no API, no database, no cloud credentials.
 
-> **Status: not yet started.** Work begins on the API track; this plan stands ready for when the engine track opens.
+> **Status: B1.1–B1.2 complete.** The mock and standalone fixed-rate HTTP load path are implemented. B1.3, per-worker histograms and snapshot aggregation, is next.
 
 Design: [design-engine.md](design-engine.md). Boundary and shared foundation (**F0, do this first**): [design-api-engine-contract.md](design-api-engine-contract.md). The other track: [implementation-api.md](implementation-api.md).
 
@@ -69,8 +69,8 @@ Buildable and testable with nothing but a shell, a bundle, and the mock target.
 
 ### B1 — Core load path
 
-- [ ] **B1.1** — `metrix-mock`: configurable latency distribution, error injection, slow start, capacity ceiling
-- [ ] **B1.2** — Open-model fixed-rate scheduler, HTTP/1.1 + HTTP/2 via `hyper`/`rustls`
+- [x] **B1.1** — `metrix-mock`: configurable latency distribution, error injection, slow start, capacity ceiling
+- [x] **B1.2** — Open-model fixed-rate scheduler, HTTP/1.1 + HTTP/2 via `hyper`/`rustls`
 - [ ] **B1.3** — `metrix-metrics`: per-worker HDR histograms and counters, merged on a 250ms tick
 - [ ] **B1.4** — NDJSON `--summary` and `--events` output per the F0.3 contract
 - [ ] **B1.5** — Self-metrics: send-schedule drift, in-flight, queue depth (§13.2)
@@ -134,7 +134,7 @@ Buildable and testable with nothing but a shell, a bundle, and the mock target.
 
 ## 5. Testing
 
-The mock target (B1.1) is the measurement ground truth: configurable latency distributions (fixed, normal, lognormal, bimodal), injectable error rates and types, connection refusal at a configurable concurrency, slow-start behavior, and a capacity ceiling for breakpoint testing. Because its true distribution is known, reported statistics can be asserted against it — the only way to test a measurement tool.
+The mock target (B1.1) is the measurement ground truth: seeded latency distributions (fixed, normal, lognormal, bimodal), injectable HTTP/disconnect/timeout errors, connection rejection and request-concurrency limits, slow start, and a capacity ceiling for breakpoint testing. Configuration and precise semantics are in [design-engine.md §2.2](design-engine.md#22-mock-target-b11), with a runnable [example](../examples/mock.json). Tests check the injected population separately from socket timing, so operating-system overhead is not mistaken for distribution truth.
 
 - **Unit:** histogram merge, percentile and CI math, scheduler drift under synthetic load, bundle deserialization.
 - **Integration:** engine against mock, asserting achieved rate, percentiles vs. injected truth, phase boundaries, annotation firing, multi-target sequencing.
@@ -156,6 +156,6 @@ The mock target (B1.1) is the measurement ground truth: configurable latency dis
 
 ## 7. Where to start
 
-B1.1 then B1.2–B1.4: the mock with a dial-able latency distribution, then a fixed-rate scheduler holding 75 RPS for 30s and writing NDJSON.
+B1.3 then B1.4: build aggregation and NDJSON on the fixed-rate path. `examples/plans/mock-fixed` runs one static call against the mock; unsupported later-step features fail before sending traffic ([design-engine.md §2.3](design-engine.md#23-fixed-rate-execution-b12)). The Rust tests already run the copied binary at 75 RPS for 30s with only its bundle, requiring at least 98% achieved traffic and explicit skip/drift accounting.
 
 Then compare the reported p50/p95/p99 against the injected distribution by hand. That comparison is the real milestone — everything downstream assumes those numbers are right.

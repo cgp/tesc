@@ -2,7 +2,7 @@
 
 The load generator: what it executes, how it measures, and why the numbers can be trusted. Pairs with [design-api.md](design-api.md); the boundary is in [design-api-engine-contract.md](design-api-engine-contract.md).
 
-> **Status: designed, not yet being implemented.** Work starts on the API and observation side ([implementation-api.md](implementation-api.md)); this document is the standing design for when the engine track begins ([implementation-engine.md](implementation-engine.md)). It is recorded now because several API-side decisions — the NDJSON contract, the bundle format, the statistics the front end must display honestly — only make sense against it.
+> **Status: core load-path implementation.** B1.1 supplies the mock target; B1.2 adds fixed-rate scheduling and HTTP transport. See [implementation-engine.md](implementation-engine.md) for the remaining milestones.
 
 The engine takes one self-contained plan bundle and emits NDJSON. It knows nothing about the API, the database, the UI, or AWS, and nothing in this design may assume otherwise.
 
@@ -28,6 +28,86 @@ A standalone binary that takes **one self-contained plan bundle** — calls, mix
 - Exit code reflects SLO evaluation (§16), so CI can gate on it.
 
 **Why Rust for this specifically:** at a few tens of thousands of RPS from one box, the generator's own GC pauses and scheduler jitter become indistinguishable from the target's latency. A load generator that can't hold its own send schedule produces numbers that describe the generator.
+
+---
+
+### 2.2 Mock target (B1.1)
+
+`cargo run --manifest-path engine/Cargo.toml -p metrix-mock -- --config examples/mock.json`
+starts a standalone cleartext HTTP/1.1 / HTTP/2 (prior knowledge) target. `--listen`
+overrides the default `127.0.0.1:8080`; port zero prints the assigned address.
+With no config it returns JSON 200 responses after a fixed 10ms delay on any route.
+
+The strict JSON config supplies `seed`, `latency`, optional `errors`, `slow_start`,
+`capacity_rps`, `max_in_flight`, and `max_connections`. Latency is `fixed` (`ms`),
+`normal` (`mean_ms`, `stddev_ms`), `lognormal` (`median_ms`, `sigma`, in log space),
+or `bimodal` (`fast_ms`, `slow_ms`, `slow_probability`). Samples are clipped to
+`[0, max_latency_ms]` (default ceiling 60000ms), including slow-start's extra delay,
+which decreases linearly from `extra_latency_ms` to zero over `duration_ms` since
+server start. These are injected delays after the request body is drained, not
+promises about network latency; successful and HTTP-error responses expose the
+planned delay in `x-metrix-mock-delay-ms` so measurements can be checked against it.
+
+Each error has an unconditional `rate`; their sum must not exceed one. Types are
+`http` (400–599 `status`), `disconnect` (no response), and `timeout` (no response
+for `delay_ms`, then disconnect). HTTP/2 transport faults reset the affected stream.
+A seeded RNG makes arrival-ordered decisions repeatable with the locked build;
+concurrent arrival order and operating-system timing are not reproducible. All
+configured milliseconds must be finite and in `[0, 3600000]`; slow-start duration
+and timeout delay must be positive. Lognormal median must be positive and sigma
+finite in `[0, 100]`. Unknown fields and invalid probabilities fail before binding.
+
+`capacity_rps` is a token bucket with one second of burst, initially full; excess
+requests get immediate 503s. `max_in_flight` independently rejects excess active
+requests with 503, including multiplexed HTTP/2 streams. `max_connections` closes
+newly accepted sockets at the limit (transport rejection, not a guaranteed TCP
+ECONNREFUSED). Idle keep-alive sockets count until closed. Rejections do not consume
+random samples. Limits are disabled when omitted; zero is invalid. Ctrl-C stops
+the listener and cancels outstanding connections. The mock may allocate and lock;
+the generator's hot-path constraints do not apply to this test target.
+
+---
+
+### 2.3 Fixed-rate execution (B1.2)
+
+`metrix-engine --plan examples/plans/mock-fixed` executes the initial supported
+subset: one target, one 100% chain, one static call, fixed open load, and explicitly
+zero baseline/warmup/settle. Later-step features (assertions, extraction, generators,
+auth, sessions beyond stateless `fresh`, mixtures, sweeps, SLOs, redirects and target
+Host/SNI overrides) fail before network I/O. This keeps partial execution from
+silently producing a different workload. Bundle files must stay within its root.
+
+Arrival `n` is due at monotonic start + `n / rate`, with start inclusive and end
+exclusive. Responses never move that clock. An occupied request or connection cap
+drops that arrival; a late wake-up skips expired arrivals and admits at most the
+latest due one. There is no catch-up burst or unbounded work queue. Admission uses
+preallocated reusable future slots, with no per-request task spawn or scheduler
+lock. HTTP framing, headers and connection establishment still allocate inside the
+transport; the allocation-free rule applies to scheduling and aggregation state.
+One deadline thread uses native `std::thread::sleep` timers (high-resolution on
+current Windows); an atomic waker coalesces notifications when the scheduler is
+busy. It never waits for admission or request completion, and cancellation stops
+it within its bounded sleep slices. This avoids Tokio's coarse Windows timer
+wake-ups dropping traffic at the 75 RPS acceptance rate.
+The timeout (default 5000ms) covers connection/readiness, send and complete body
+drain. Natural completion drains admitted requests under their original deadlines;
+Ctrl-C cancels them and closes owned connections. Requests are never retried.
+
+Each target's `http_version` is `auto` (default: cleartext HTTP/1.1, TLS ALPN preferring
+HTTP/2), `http1`, or `http2` (cleartext prior knowledge; TLS requires ALPN `h2`).
+TLS verifies the address hostname/IP using compiled-in WebPKI roots. One connection
+is established before the arrival clock starts; HTTP/1.1 grows a reusable pool up
+to `connections_per_host` (default 256), while HTTP/2 multiplexes over one socket.
+Connection and stream failures are counted without logging request/response data.
+`max_concurrency` defaults to 200; worker threads default to physical cores minus
+one, minimum one. DNS resolution happens at setup; reconnects use those addresses.
+
+Until B1.3–B1.5, the binary writes only an end-of-run diagnostic to stderr: offered,
+admitted, sent among finished attempts, response, failure, cancellation and skipped
+counts, peak in-flight, and maximum send drift (with its finished-send count). These answer whether the requested
+traffic was attempted; there are no percentiles or NDJSON promises yet. HTTP status
+codes are responses, not assertion failures. Exit 0 means execution finished, 1
+means setup/internal failure, and 130 means interruption; SLO verdicts land in B4.6.
 
 ---
 
