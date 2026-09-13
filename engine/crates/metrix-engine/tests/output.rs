@@ -28,9 +28,15 @@ fn time(record: &Record) -> u64 {
 }
 
 fn lifecycle(records: &[Record]) {
-    assert!(
-        matches!(records.first(), Some(Record::RunStarted(start)) if start.events_version == 1 && start.plan_hash.starts_with("sha256:") && start.plan_hash.len() == 71)
-    );
+    assert!(matches!(records.first(), Some(Record::RunStarted(start))
+            if start.events_version == 1
+                && !start.run_id.is_empty()
+                && !start.started_at.is_empty()
+                && start.engine_version == env!("CARGO_PKG_VERSION")
+                && start.plan_hash.starts_with("sha256:")
+                && start.plan_hash.len() == 71
+                && start.seed == 0
+                && start.machine_profile.is_none()));
     assert!(matches!(records.last(), Some(Record::RunFinished(end)) if end.exit_code == 0));
     assert!(
         records
@@ -275,6 +281,8 @@ async fn sampling_is_deterministic_and_does_not_change_aggregate_counts() {
             .sum();
         assert_eq!(completed, 10);
         let summary = records(&output.stdout);
+        assert!(matches!(summary.first(), Some(Record::RunStarted(start))
+            if start.seed == 42 && start.engine_version == env!("CARGO_PKG_VERSION")));
         let warning = summary
             .iter()
             .find_map(|r| match r {

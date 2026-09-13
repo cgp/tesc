@@ -455,3 +455,10 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - Added bundle-local headroom preflight. Matching profiles populate run metadata and summary health; demand above 90% of the conservative loopback ceiling is refused before output or target setup unless `engine.allow_generator_limited` explicitly permits an invalid annotated run.
 - Completed B2.5; B2.6 run metadata is next.
 - Validation: full `bash scripts/check.sh` passed, including Rust checks and tests, standalone execution, API and frontend tests, generated schemas, and emitted NDJSON validation.
+
+## 2026-09-13 — Engine B2.6
+
+- Completed standalone run identity: `run_started` now has integration coverage for its plan hash, engine version, explicit CLI seed, and optional calibrated machine-profile id without changing the frozen NDJSON schema.
+- Clarified which reproducibility metadata the engine owns and which remains API recording metadata.
+- Completed B2.6; B3.1 separate call resolution is next.
+- Validation: full `bash scripts/check.sh` passed, including Rust checks and tests, standalone execution, API and frontend tests, generated schemas, and emitted NDJSON validation.

@@ -78,7 +78,7 @@ fn overridden_headroom_is_exposed_in_lifecycle_and_summaries() {
     });
     let plan = Plan::load(dir.path()).unwrap();
     let summary = dir.path().join("headroom.ndjson");
-    Output::open(&plan, &summary, None, 1.0, 0)
+    Output::open(&plan, &summary, None, 1.0, 73)
         .unwrap()
         .finish(0, None);
     let records: Vec<Value> = fs::read_to_string(summary)
@@ -86,7 +86,16 @@ fn overridden_headroom_is_exposed_in_lifecycle_and_summaries() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert_eq!(records[0]["machine_profile"], profile["id"]);
+    let started = &records[0];
+    assert_eq!(started["type"], "run_started");
+    assert_eq!(started["machine_profile"], profile["id"]);
+    assert_eq!(started["seed"], 73);
+    assert_eq!(started["engine_version"], env!("CARGO_PKG_VERSION"));
+    assert!(
+        started["plan_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.starts_with("sha256:") && hash.len() == 71)
+    );
     let annotation = records
         .iter()
         .find(|record| record["type"] == "annotation" && record["code"] == "generator_headroom")

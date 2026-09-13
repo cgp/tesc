@@ -588,7 +588,7 @@ Non-negotiable. Without these a run can't be trusted.
 - **A single green/amber/red "generator healthy" indicator** on the Performance screen, so an invalid run is obvious at a glance rather than after the analysis is written
 
 ### 9.8 Run metadata (reproducibility & comparison)
-Captured every run: plan hash, plan version, engine version, target base URL and profile, target build/commit if discoverable via a health endpoint, start/end timestamps, generator host and hardware, environment tags, free-text note. Without these the Recordings archive becomes a pile of numbers nobody trusts.
+Every `run_started` record carries the plan hash, plan name, engine version, seed, start timestamp, target ids and machine-profile id when calibrated. These fields are the stable standalone identity of a B2 run: the same bundle and seed can be replayed, while the machine profile keeps a generator change from being mistaken for a target change. Later target build data, environment tags and notes are API-owned recording metadata. Without this identity the Recordings archive becomes a pile of numbers nobody trusts.
 
 ---
 
