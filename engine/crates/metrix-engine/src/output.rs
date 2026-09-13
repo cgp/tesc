@@ -192,8 +192,8 @@ impl Output {
         output.lifecycle(Record::Annotation(Annotation {
             t_ms: 0, target_id: None, code: "self_metrics_unavailable".into(), severity: Severity::Info,
             phase: None, from_ms: 0, to_ms: None,
-            message: "Zero in cpu_pct, rss_bytes, open_fds, scheduler_lag_ms and queue_depth means unavailable; self-metric collectors are not implemented yet.".into(),
-            detail: Some(serde_json::json!({"unavailable": ["cpu_pct", "rss_bytes", "open_fds", "scheduler_lag_ms", "queue_depth"]})),
+            message: "Zero in cpu_pct, rss_bytes and open_fds means unavailable; OS resource probes are not implemented yet.".into(),
+            detail: Some(serde_json::json!({"unavailable": ["cpu_pct", "rss_bytes", "open_fds"]})),
         }));
         Ok(output)
     }
@@ -493,7 +493,15 @@ fn write_stream(
                 t_ms,
                 phase,
                 window,
-            } => summary_record(identity, t_ms, phase, &window, current.1),
+            } => {
+                write_record(&mut writer, &mut buffer, &Record::Annotation(Annotation {
+                    t_ms, target_id: Some(identity.target.clone()), code: "generator_self_metrics".into(), severity: Severity::Info,
+                    phase: Some(phase), from_ms: t_ms.saturating_sub(millis(window.to.saturating_sub(window.from))), to_ms: Some(t_ms),
+                    message: "Sample counts for this interval's maximum send drift and summary timer wake lateness; zero samples means no observation.".into(),
+                    detail: Some(serde_json::json!({"drift_samples": window.metrics.drift.count(), "drift_overflow": window.metrics.drift.overflow, "scheduler_lag_samples": window.scheduler_lag_samples})),
+                }))?;
+                summary_record(identity, t_ms, phase, &window, current.1)
+            }
             Packet::Request(data) => Record::Request(RequestEvent {
                 t_ms: data.t_ms,
                 target_id: identity.target.clone(),
@@ -611,8 +619,8 @@ fn summary_record(
             0.0
         },
         in_flight: window.in_flight as u32,
-        queue_depth: 0,
-        drift_ms: metrics.drift.snapshot().max_us.unwrap_or(0) as f64 / 1000.0,
+        queue_depth: window.queue_depth as u32,
+        drift_ms: metrics.drift.max_us().unwrap_or(0) as f64 / 1000.0,
         bytes_sent: counts.bytes_sent,
         bytes_received: counts.bytes_received,
         connections_opened: counts.connections_opened,
@@ -622,7 +630,7 @@ fn summary_record(
             cpu_pct: 0.0,
             rss_bytes: 0,
             open_fds: 0,
-            scheduler_lag_ms: 0.0,
+            scheduler_lag_ms: window.scheduler_lag.as_secs_f64() * 1000.0,
             headroom_ratio: None,
             events_dropped: dropped,
         },

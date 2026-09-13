@@ -51,6 +51,11 @@ impl Distribution {
         self.hdr.len()
     }
 
+    /// Exact observed maximum without allocating or encoding the histogram.
+    pub fn max_us(&self) -> Option<u64> {
+        self.max
+    }
+
     pub fn merge(&mut self, other: &Self) {
         self.hdr
             .add(&other.hdr)
@@ -250,5 +255,8 @@ pub struct Window {
     pub from: Duration,
     pub to: Duration,
     pub in_flight: usize,
+    pub queue_depth: usize,
+    pub scheduler_lag: Duration,
+    pub scheduler_lag_samples: u64,
     pub metrics: Accumulator,
 }

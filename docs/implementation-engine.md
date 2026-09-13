@@ -2,7 +2,7 @@
 
 The load generator. Buildable and testable with nothing but a shell, a bundle, and the mock target — no API, no database, no cloud credentials.
 
-> **Status: B1.1–B1.4 complete.** The mock, fixed-rate HTTP load path, interval aggregation and bounded NDJSON output are implemented. B1.5, self-metrics, is next.
+> **Status: B1 complete.** The standalone load path includes interval histograms, bounded NDJSON and live send-drift, in-flight, pre-send queue and timer-lag measurements. B2.1, the phase timeline, is next.
 
 Design: [design-engine.md](design-engine.md). Boundary and shared foundation (**F0, do this first**): [design-api-engine-contract.md](design-api-engine-contract.md). The other track: [implementation-api.md](implementation-api.md).
 
@@ -73,7 +73,7 @@ Buildable and testable with nothing but a shell, a bundle, and the mock target.
 - [x] **B1.2** — Open-model fixed-rate scheduler, HTTP/1.1 + HTTP/2 via `hyper`/`rustls`
 - [x] **B1.3** — `metrix-metrics`: per-worker HDR histograms and counters, merged on a 250ms tick
 - [x] **B1.4** — NDJSON `--summary` and `--events` output per the F0.3 contract
-- [ ] **B1.5** — Self-metrics: send-schedule drift, in-flight, queue depth (§13.2)
+- [x] **B1.5** — Self-metrics: send-schedule drift, in-flight, queue depth (§13.2)
 
 **Done when:** `metrix-engine --plan dir/` holds 75 RPS for 30s against the mock from a bare shell, with drift reported and no API in existence.
 
@@ -156,6 +156,6 @@ The mock target (B1.1) is the measurement ground truth: seeded latency distribut
 
 ## 7. Where to start
 
-B1.5: collect self-metrics and replace the explicit unavailable sentinels in NDJSON. `examples/plans/mock-fixed` runs one static call against the mock; unsupported later-step features fail before sending traffic ([design-engine.md §2.3](design-engine.md#23-fixed-rate-execution-b12)). Tests run the copied binary at 75 RPS for 30s with only its bundle, requiring at least 98% achieved traffic. Output tests check interval conservation, deterministic sampling, secret exclusion, failures and bounded shutdown with a stalled pipe; the full check validates emitted records against the frozen schema.
+B2.1: implement baseline, warmup, measure, drain and settle. `examples/plans/mock-fixed` runs one static call against the mock; unsupported later-step features fail before sending traffic ([design-engine.md §2.3](design-engine.md#23-fixed-rate-execution-b12)). Tests run the copied binary at 75 RPS for 30s with only its bundle, requiring at least 98% achieved traffic. Self-metric tests cover live drift, cancellation, TLS waits, Hyper's HTTP/2 send boundary and executor stalls. Output tests check conservation, sampling, redaction and stalled pipes; the full check validates emitted records against the frozen schema. CPU/RSS/FD probes remain explicitly unavailable.
 
 Then compare the reported p50/p95/p99 against the injected distribution by hand. That comparison is the real milestone — everything downstream assumes those numbers are right.

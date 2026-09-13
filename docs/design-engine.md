@@ -2,7 +2,7 @@
 
 The load generator: what it executes, how it measures, and why the numbers can be trusted. Pairs with [design-api.md](design-api.md); the boundary is in [design-api-engine-contract.md](design-api-engine-contract.md).
 
-> **Status: B1.1–B1.4 implemented.** Standalone mock and fixed-rate HTTP execution now produce interval histograms and bounded NDJSON streams. See [implementation-engine.md](implementation-engine.md) for the remaining milestones.
+> **Status: B1 complete.** Standalone fixed-rate HTTP execution produces interval histograms, bounded NDJSON and live scheduler self-metrics. See [implementation-engine.md](implementation-engine.md) for the remaining milestones.
 
 The engine takes one self-contained plan bundle and emits NDJSON. It knows nothing about the API, the database, the UI, or AWS, and nothing in this design may assume otherwise.
 
@@ -121,10 +121,11 @@ All timestamps use one monotonic run clock, including setup and final drain.
 Measure and drain windows are split at the admission boundary; full phase execution
 remains B2.1. Required metadata includes a SHA-256 digest of length-framed relative
 paths and the exact bytes of the mix, targets and referenced call files, sorted by
-path. The frozen v1 schema requires numeric health fields: until their collectors
-land, zero is an unavailable sentinel explicitly identified by a
-`self_metrics_unavailable` annotation, never evidence of generator health. Available
-drift and in-flight measurements still carry their underlying interval counts.
+path. The frozen v1 schema requires numeric OS resource fields: until CPU, RSS and
+file-descriptor probes land, zero is an unavailable sentinel explicitly identified
+by a `self_metrics_unavailable` annotation, never evidence of generator health.
+Each summary has a `generator_self_metrics` annotation carrying send-drift and
+scheduler-lag sample counts, so an empty interval is distinguishable from zero lag.
 Stderr retains the final traffic diagnostic. HTTP status codes are responses, not
 assertion failures. Exit 0 means execution finished, 1 setup/internal or output
 failure, and 130 interruption; SLO verdicts land in B4.6.
@@ -522,7 +523,8 @@ and contributes no latency sample. HTTP statuses are counted even when body drai
 fails; HTTP errors remain transport successes until assertions land. Chain duration
 runs from admission to terminal result (including setup); request total runs from
 send to terminal result, and TTFB is sampled only when response headers arrive.
-Drift samples describe finished sends. Payload bytes and opened/reused connections
+Drift samples are recorded once when sends are observed, including requests still
+in flight or subsequently cancelled. Payload bytes and opened/reused connections
 are accounted at completion; the initial setup connection is counted once. Pending
 cancelled attempts therefore contribute no terminal send/byte/connection samples.
 
@@ -794,6 +796,21 @@ Worth stating plainly: **the services in scope are expected to cap out well belo
 In breakpoint mode this is also what caps `max_rate` by default (§11.3) — the search stops at the point where the tool would begin measuring itself.
 
 **During the run,** the §9.6 self-metrics feed the detectors above. The Performance screen's generator-health strip shows current headroom as a live gauge beside the target's numbers, so the two are read together rather than the client's limits being discovered afterwards in a log.
+
+B1.5 measures send drift from the scheduled arrival to the transport send call,
+using preallocated atomic slot state; completion latency never delays that sample.
+The send boundary is the Hyper API call, not a packet timestamp: HTTP/2 stream
+capacity waits internal to Hyper are not exposed by this metric.
+`in_flight` counts admitted attempts awaiting a terminal result. `queue_depth` is
+the subset still waiting to send, including connection establishment and transport
+readiness; skipped arrivals are counted separately and never enter this queue.
+Both gauges are sampled at each snapshot and return to zero on drain/cancellation.
+`scheduler_lag_ms` is the maximum lateness of observed 250ms summary timer wakes
+in the interval, including timer resolution and executor delay, rather than an
+estimate from target latency. Missed ticks coalesce into one observed sample.
+Final partial windows carry the interval's samples; zero samples means unavailable,
+as stated by the companion annotation. Detector thresholds and calibration remain
+B2.4–B2.5. OS resource probes do not run on the request path.
 
 **In run metadata,** the calibrated ceiling, the machine profile id, and the observed peak headroom are recorded (§9.8). Without this, a comparison across a generator hardware change silently attributes a generator improvement to the target.
 

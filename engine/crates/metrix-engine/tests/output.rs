@@ -139,6 +139,44 @@ async fn streams_conserve_counts_identify_requests_and_never_capture_secrets() {
         })
         .sum();
     assert_eq!(completed, requests.len() as u64);
+    let mut drift_samples = 0;
+    let mut lag_samples = 0;
+    let mut annotated_windows = 0;
+    for pair in summaries.windows(2) {
+        if let Record::Annotation(annotation) = &pair[0] {
+            if annotation.code == "generator_self_metrics" {
+                let Record::Summary(summary) = &pair[1] else {
+                    panic!("missing companion summary");
+                };
+                assert_eq!(annotation.t_ms, summary.t_ms);
+                let detail = annotation.detail.as_ref().unwrap();
+                drift_samples += detail["drift_samples"].as_u64().unwrap();
+                lag_samples += detail["scheduler_lag_samples"].as_u64().unwrap();
+                annotated_windows += 1;
+                assert!(summary.queue_depth <= summary.in_flight);
+            }
+        }
+    }
+    assert_eq!(drift_samples, requests.len() as u64);
+    assert!(lag_samples > 0);
+    assert_eq!(
+        annotated_windows,
+        summaries
+            .iter()
+            .filter(|r| matches!(r, Record::Summary(_)))
+            .count()
+    );
+    let unavailable = summaries
+        .iter()
+        .find_map(|r| match r {
+            Record::Annotation(r) if r.code == "self_metrics_unavailable" => r.detail.as_ref(),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        unavailable["unavailable"],
+        json!(["cpu_pct", "rss_bytes", "open_fds"])
+    );
     for record in &summaries {
         if let Record::Summary(summary) = record {
             let chain = &summary.chains["ping"];

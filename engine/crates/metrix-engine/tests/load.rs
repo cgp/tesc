@@ -28,7 +28,8 @@ fn assert_accounting(report: &Report) {
     assert_eq!(report.metrics.counters.failed, report.failed);
     assert_eq!(report.metrics.counters.cancelled, report.cancelled);
     assert_eq!(report.metrics.total.count(), report.sent_finished);
-    assert_eq!(report.metrics.drift.count(), report.sent_finished);
+    assert_eq!(report.metrics.drift.count(), report.sent);
+    assert!(report.sent_finished <= report.sent && report.sent <= report.admitted);
     assert_eq!(
         report.metrics.chain.count(),
         report.responses + report.failed

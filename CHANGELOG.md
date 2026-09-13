@@ -413,3 +413,12 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - Added standalone stream, conservation, sampling, redaction, failure/cancellation, overwrite protection and unread-pipe regressions. scripts/check.sh validates genuinely emitted NDJSON against the frozen event schema in the full suite.
 - B1.4 complete; B1.5 self-metrics is next. Work remains isolated on engine in its worktree.
 - Validation: full bash scripts/check.sh passed, including emitted-stream schema validation, 384 Python tests and 67 front-end tests; scoped engine checks passed again after the final queue/completion adjustments.
+
+## 2026-09-13 — Engine B1.5
+
+- Shipped live send-schedule drift using preallocated atomic request-slot state, including unfinished and cancelled sends. Completion latency no longer delays or duplicates drift samples; final diagnostics distinguish observed sends from finished sends.
+- Added per-snapshot in-flight and pre-send queue gauges, with zero gauges after drain/cancellation. Queue depth covers admitted connection/readiness waits before the Hyper send call; Hyper's internal HTTP/2 peer-capacity queue is explicitly outside that observation boundary.
+- Added observed 250ms timer-wake lateness, interval maxima/sample counts and final scheduler-lag diagnostics. Companion generator_self_metrics annotations distinguish missing observations from measured zero values without changing the frozen schema. CPU/RSS/FD probes remain explicitly unavailable.
+- Added regressions for live drift before slow responses, sample conservation, cancellation, stalled TLS/pre-send timeouts, HTTP/2 peer-capacity limits, executor stalls and emitted metric/sample-count pairing. Reused exact distribution maxima without histogram encoding for scalar drift output.
+- B1.5 and B1 complete; B2.1 phase timeline is next. Changes remain isolated on engine in its worktree.
+- Validation: full bash scripts/check.sh passed, including Rust fmt/clippy/tests, the copied binary 75 RPS/30s acceptance run, emitted NDJSON schema validation, 384 Python tests and 67 front-end regressions.

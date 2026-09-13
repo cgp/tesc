@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio_util::sync::ReusableBoxFuture;
 
-use http::{Completion, Job, Pool, execute};
+use http::{Completion, Job, Pool, SendState, execute};
 use schedule::Schedule;
 use wake_clock::WakeClock;
 
@@ -32,6 +32,8 @@ pub struct Report {
     pub admitted: u64,
     /// Sends among terminal attempts. In-flight cancellations are counted separately.
     pub sent_finished: u64,
+    /// Observed sends, including requests still in flight or subsequently cancelled.
+    pub sent: u64,
     pub responses: u64,
     pub failed: u64,
     pub timed_out: u64,
@@ -41,6 +43,8 @@ pub struct Report {
     pub skipped_connections: u64,
     pub peak_in_flight: usize,
     pub max_send_drift: Duration,
+    pub max_scheduler_lag: Duration,
+    pub scheduler_lag_samples: u64,
     pub interrupted: bool,
     pub metrics: Accumulator,
     pub last_window: Option<Window>,
@@ -53,6 +57,8 @@ struct Slot {
     worker: usize,
     iteration: u64,
     admitted: Instant,
+    send_state: Arc<SendState>,
+    send_recorded: bool,
     future: ReusableBoxFuture<'static, Completion>,
 }
 
@@ -102,6 +108,8 @@ async fn run_internal(
             worker: 0,
             iteration: 0,
             admitted: Instant::now(),
+            send_state: Arc::new(SendState::default()),
+            send_recorded: false,
             future: ReusableBoxFuture::new(execute(None)),
         });
     }
@@ -110,6 +118,7 @@ async fn run_internal(
         .collect();
     workers[0].counters.connections_opened = 1;
     let mut interval_metrics = Accumulator::default();
+    let mut lag = Lag::default();
     let start = Instant::now();
     let mut phase = Phase::Measure;
     if let Some(output) = output {
@@ -132,7 +141,11 @@ async fn run_internal(
             && schedule.next_deadline().is_none()
         {
             flush(
-                &mut workers,
+                Recording {
+                    slots: &mut slots,
+                    workers: &mut workers,
+                    lag: &mut lag,
+                },
                 &mut interval_metrics,
                 &mut report,
                 &mut last_snapshot,
@@ -158,8 +171,13 @@ async fn run_internal(
                 } }
                 break;
             }
-            _ = snapshot_tick.tick() => {
-                flush(&mut workers, &mut interval_metrics, &mut report, &mut last_snapshot, start.elapsed(), active, snapshots.as_ref());
+            deadline = snapshot_tick.tick() => {
+                let late = Instant::now().saturating_duration_since(deadline);
+                lag.max = lag.max.max(late);
+                lag.samples += 1;
+                report.max_scheduler_lag = report.max_scheduler_lag.max(late);
+                report.scheduler_lag_samples += 1;
+                flush(Recording { slots: &mut slots, workers: &mut workers, lag: &mut lag }, &mut interval_metrics, &mut report, &mut last_snapshot, start.elapsed(), active, snapshots.as_ref());
                 if let Some(output) = output { output.summary(report.last_window.as_ref().expect("flushed window"), phase); }
             }
             // Reap completed requests before deciding whether a due arrival hits a cap.
@@ -171,13 +189,14 @@ async fn run_internal(
                 }
                 Poll::Pending
             }), if active > 0 => {
+                record_send(&mut slots[index], &mut workers, &mut report);
                 slots[index].active = false;
                 active -= 1;
                 let observation = completion.observation;
                 if let Some(output) = output { output.request(slots[index].iteration, phase, &observation, plan.request.body.len()); }
                 workers[slots[index].worker].finish(Sample {
                     chain_duration: observation.total, request_duration: observation.request_duration,
-                    ttfb: observation.ttfb, drift: observation.sent.map(|_| observation.drift),
+                    ttfb: observation.ttfb, drift: None,
                     status: observation.status, error: observation.error.map(cause),
                     bytes_sent: if observation.sent.is_some() { plan.request.body.len() as u64 } else { 0 },
                     bytes_received: observation.bytes_received,
@@ -185,7 +204,6 @@ async fn run_internal(
                 });
                 if observation.sent.is_some() {
                     report.sent_finished += 1;
-                    report.max_send_drift = report.max_send_drift.max(observation.drift);
                 }
                 if let Some(error) = observation.error {
                     report.failed += 1;
@@ -200,13 +218,16 @@ async fn run_internal(
                 if let Some(scheduled) = arrival {
                     if let Some(slot) = slots.iter_mut().find(|s| !s.active) {
                         if let Some(lease) = pool.acquire() {
-                            let future = execute(Some(Job { lease, endpoint: Arc::clone(&pool.endpoint), template: Arc::clone(&plan.request), scheduled, admitted: Instant::now() }));
+                            slot.send_state.reset();
+                            slot.send_recorded = false;
+                            let admitted = Instant::now();
+                            let future = execute(Some(Job { lease, endpoint: Arc::clone(&pool.endpoint), template: Arc::clone(&plan.request), scheduled, admitted, send_state: Arc::clone(&slot.send_state) }));
                             // Same execute() future layout for every use; never reallocates.
                             assert!(slot.future.try_set(future).is_ok(), "request future layout changed");
                             slot.active = true;
                             slot.worker = report.admitted as usize % workers.len();
                             slot.iteration = report.admitted;
-                            slot.admitted = Instant::now();
+                            slot.admitted = admitted;
                             workers[slot.worker].start();
                             active += 1;
                             report.admitted += 1;
@@ -218,7 +239,11 @@ async fn run_internal(
         }
     }
     flush(
-        &mut workers,
+        Recording {
+            slots: &mut slots,
+            workers: &mut workers,
+            lag: &mut lag,
+        },
         &mut interval_metrics,
         &mut report,
         &mut last_snapshot,
@@ -236,8 +261,31 @@ async fn run_internal(
     Ok(report)
 }
 
+#[derive(Default)]
+struct Lag {
+    max: Duration,
+    samples: u64,
+}
+
+struct Recording<'a> {
+    slots: &'a mut [Slot],
+    workers: &'a mut [Accumulator],
+    lag: &'a mut Lag,
+}
+
+fn record_send(slot: &mut Slot, workers: &mut [Accumulator], report: &mut Report) {
+    if slot.active && !slot.send_recorded {
+        if let Some(drift) = slot.send_state.drift() {
+            workers[slot.worker].drift.record(drift);
+            report.sent += 1;
+            report.max_send_drift = report.max_send_drift.max(drift);
+            slot.send_recorded = true;
+        }
+    }
+}
+
 fn flush(
-    workers: &mut [Accumulator],
+    recording: Recording<'_>,
     interval: &mut Accumulator,
     report: &mut Report,
     last: &mut Duration,
@@ -245,12 +293,30 @@ fn flush(
     active: usize,
     consumer: Option<&mpsc::Sender<Window>>,
 ) {
+    let Recording {
+        slots,
+        workers,
+        lag,
+    } = recording;
+    for slot in &mut *slots {
+        record_send(slot, workers, report);
+    }
     interval.merge_and_reset(workers);
     report.metrics.merge(interval);
     let window = Window {
         from: *last,
         to: now,
         in_flight: active,
+        queue_depth: if active == 0 {
+            0
+        } else {
+            slots
+                .iter()
+                .filter(|slot| slot.active && slot.send_state.drift().is_none())
+                .count()
+        },
+        scheduler_lag: lag.max,
+        scheduler_lag_samples: lag.samples,
         metrics: interval.clone(),
     };
     if let Some(consumer) = consumer {
@@ -261,6 +327,7 @@ fn flush(
     report.windows += 1;
     report.last_window = Some(window);
     *last = now;
+    *lag = Lag::default();
 }
 
 fn cause(failure: Failure) -> Cause {

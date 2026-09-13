@@ -105,9 +105,12 @@ async fn cancellation_flushes_partial_window_without_fabricating_latencies() {
     assert_eq!(window.from, Duration::ZERO);
     assert!(window.to < Duration::from_millis(250));
     assert_eq!(window.in_flight, 0);
+    assert_eq!(window.queue_depth, 0);
     assert_eq!(window.metrics.counters.started, report.admitted);
     assert_eq!(window.metrics.counters.cancelled, report.cancelled);
     assert_eq!(report.metrics.total.count(), 0);
     assert_eq!(report.metrics.chain.count(), 0);
+    assert!(report.sent > 0);
+    assert_eq!(report.metrics.drift.count(), report.sent);
     assert!(receiver.recv().await.is_none());
 }

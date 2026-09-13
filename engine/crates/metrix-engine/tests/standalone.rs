@@ -93,5 +93,8 @@ async fn standalone_binary_holds_75_rps_for_30_seconds_without_the_api() {
     assert_eq!(number("skipped_connections"), 0);
     assert!(values.contains_key("max_send_drift_ms"));
     assert_eq!(number("drift_samples"), number("sent_finished"));
+    assert_eq!(number("sent"), number("sent_finished"));
+    assert!(number("scheduler_lag_samples") > 0);
+    assert!(values.contains_key("max_scheduler_lag_ms"));
     assert!(elapsed >= Duration::from_secs(30) && elapsed < Duration::from_secs(35));
 }

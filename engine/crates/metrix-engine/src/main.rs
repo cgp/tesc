@@ -130,9 +130,10 @@ fn execute(args: Args) -> Result<ExitCode, String> {
     );
     let report = result?;
     eprintln!(
-        "offered={} admitted={} sent_finished={} responses={} failed={} timed_out={} cancelled={} skipped_late={} skipped_concurrency={} skipped_connections={} peak_in_flight={} max_send_drift_ms={:.3} drift_samples={} interrupted={}",
+        "offered={} admitted={} sent={} sent_finished={} responses={} failed={} timed_out={} cancelled={} skipped_late={} skipped_concurrency={} skipped_connections={} peak_in_flight={} max_send_drift_ms={:.3} drift_samples={} max_scheduler_lag_ms={:.3} scheduler_lag_samples={} interrupted={}",
         report.offered,
         report.admitted,
+        report.sent,
         report.sent_finished,
         report.responses,
         report.failed,
@@ -143,7 +144,9 @@ fn execute(args: Args) -> Result<ExitCode, String> {
         report.skipped_connections,
         report.peak_in_flight,
         report.max_send_drift.as_secs_f64() * 1000.0,
-        report.sent_finished,
+        report.metrics.drift.count(),
+        report.max_scheduler_lag.as_secs_f64() * 1000.0,
+        report.scheduler_lag_samples,
         report.interrupted
     );
     Ok(if report.interrupted {

@@ -1,6 +1,7 @@
 use super::*;
 use hyper::{Response, service::service_fn};
 use hyper_util::server::conn::auto::Builder;
+use metrix_metrics::aggregation::Accumulator;
 use rustls::{ServerConfig, pki_types::PrivatePkcs8KeyDer};
 use std::future::pending;
 use tokio::{
@@ -9,6 +10,7 @@ use tokio::{
     task::JoinSet,
 };
 use tokio_rustls::TlsAcceptor;
+use tokio_util::sync::ReusableBoxFuture;
 
 struct TlsTarget {
     address: SocketAddr,
@@ -103,6 +105,99 @@ fn template(uri: &str, timeout: Duration) -> Arc<RequestTemplate> {
 }
 
 #[tokio::test]
+async fn tls_handshake_wait_is_queued_until_a_pre_send_timeout() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut hello = [0; 1024];
+        assert!(socket.read(&mut hello).await.unwrap() > 0);
+        pending::<()>().await;
+        drop(socket);
+    });
+    let endpoint = Arc::new(Endpoint {
+        addresses: vec![address],
+        name: ServerName::try_from("localhost").unwrap(),
+        tls: Some(Arc::new(tls_config(
+            RootCertStore::empty(),
+            HttpVersion::Http1,
+        ))),
+        version: HttpVersion::Http1,
+    });
+    let now = Instant::now();
+    let state = Arc::new(SendState::default());
+    let mut slots = vec![crate::Slot {
+        active: true,
+        worker: 0,
+        iteration: 0,
+        admitted: now,
+        send_state: Arc::clone(&state),
+        send_recorded: false,
+        future: ReusableBoxFuture::new(execute(Some(Job {
+            lease: Lease {
+                connection: None,
+                replacement: false,
+            },
+            endpoint,
+            template: template(
+                &format!("https://{address}/echo"),
+                Duration::from_millis(500),
+            ),
+            scheduled: now,
+            admitted: now,
+            send_state: state,
+        }))),
+    }];
+    assert!(
+        timeout(Duration::from_millis(30), slots[0].future.get_pin())
+            .await
+            .is_err()
+    );
+    let mut workers = vec![Accumulator::default()];
+    let mut interval = Accumulator::default();
+    let mut report = crate::Report::default();
+    let mut lag = crate::Lag::default();
+    let mut last = Duration::ZERO;
+    crate::flush(
+        crate::Recording {
+            slots: &mut slots,
+            workers: &mut workers,
+            lag: &mut lag,
+        },
+        &mut interval,
+        &mut report,
+        &mut last,
+        now.elapsed(),
+        1,
+        None,
+    );
+    let window = report.last_window.as_ref().unwrap();
+    assert_eq!(window.in_flight, 1);
+    assert_eq!(window.queue_depth, 1);
+    assert_eq!(window.metrics.drift.count(), 0);
+    let completion = slots[0].future.get_pin().await;
+    assert_eq!(completion.observation.error, Some(Failure::Timeout));
+    assert!(completion.observation.sent.is_none());
+    slots[0].active = false;
+    crate::flush(
+        crate::Recording {
+            slots: &mut slots,
+            workers: &mut workers,
+            lag: &mut lag,
+        },
+        &mut interval,
+        &mut report,
+        &mut last,
+        now.elapsed(),
+        0,
+        None,
+    );
+    assert_eq!(report.last_window.unwrap().queue_depth, 0);
+    assert_eq!(report.sent, 0);
+    server.abort();
+}
+
+#[tokio::test]
 async fn verified_tls_negotiates_both_protocols_and_reuses_connections() {
     let server = TlsTarget::start(&[b"h2", b"http/1.1"]).await;
     for (version, expected) in [
@@ -124,6 +219,7 @@ async fn verified_tls_negotiates_both_protocols_and_reuses_connections() {
                     &mut connection,
                     &template("https://localhost/echo", Duration::from_secs(1)),
                     Instant::now(),
+                    &SendState::default(),
                     &mut observation,
                 ),
             )
@@ -211,6 +307,7 @@ async fn truncated_and_stalled_response_bodies_are_failures_and_close_http1() {
             template: template(&format!("http://{address}/"), Duration::from_millis(100)),
             scheduled: now,
             admitted: now,
+            send_state: Arc::new(SendState::default()),
         }))
         .await;
         assert_eq!(
