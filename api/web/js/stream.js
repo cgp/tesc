@@ -53,6 +53,21 @@ export function connect(recordingId) {
       }
     }
 
+    // The charts read points, the table reads summaries, and both arrive on this
+    // tick. Appending here keeps the charts a function of state like everything else.
+    const chart = live.chart ?? { metrics: [], series: {}, phases: [], gaps: [],
+                                  annotations: [], baseline: {} };
+    for (const sample of payload.samples) {
+      for (const [metric, value] of Object.entries(sample.metrics)) {
+        const byTarget = (chart.series[metric] ??= {});
+        (byTarget[sample.target_id] ??= []).push([sample.t_ms, value]);
+      }
+    }
+    chart.metrics = Object.keys(chart.series).sort();
+    chart.phases = [{ target_id: "*", phase: live.phase ?? "measure", from_ms: 0, to_ms: null }];
+    chart.gaps = live.gaps ?? [];
+    live.chart = chart;
+
     live.latest = latest;
     live.metrics = Object.keys(latest).sort();
     live.elapsedMs = payload.elapsed_ms;

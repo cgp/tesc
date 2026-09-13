@@ -8,12 +8,14 @@
   One static page. Tabler for the shell, our own CSS for density, ES modules for
   behaviour. No build step and no framework: everything here is loaded as written.
 
-  Nothing on this page reaches the network. Tabler is vendored under /vendor/tabler
-  and the icons are inline Tabler Icons rather than a font or a sprite sheet, which
-  is also why the menu has no blank frame before the modules load. A tool that
-  observes a private network must not need the public one to draw itself.
+  Nothing on this page reaches the network. Tabler is vendored under /vendor/tabler,
+  uPlot under /vendor/uplot, and the icons are inline Tabler Icons rather than a font
+  or a sprite sheet, which is also why the menu has no blank frame before the modules
+  load. A tool that observes a private network must not need the public one to draw
+  itself.
 -->
 <link rel="stylesheet" href="/vendor/tabler/tabler.min.css">
+<link rel="stylesheet" href="/vendor/uplot/uPlot.min.css">
 <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
@@ -137,6 +139,12 @@
   dropdowns and tooltips its markup assumes work without a network round trip.
 -->
 <script src="/vendor/tabler/tabler.min.js" defer></script>
+<!--
+  uPlot. Not deferred: the charts module reads `window.uPlot` when it first draws, and
+  a module that has to wait for a script to arrive is a module that has to grow a
+  ready-check. Both files are small and local.
+-->
+<script src="/vendor/uplot/uPlot.iife.min.js"></script>
 <script type="module" src="/js/main.js"></script>
 </body>
 </html>

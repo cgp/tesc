@@ -12,6 +12,11 @@
 # files, and the shell scripts are bash.
 * text=auto eol=lf
 
+# Vendored third-party files are kept byte-for-byte as published, which is a claim
+# their READMEs make and normalisation would quietly break. Nothing under here is ours
+# to reformat, and everything under here is checked against an upstream URL.
+api/web/vendor/** -text
+
 # Safety net for asset types that would be corrupted if the detection above ever
 # guessed wrong. Nothing here yet; vendored fonts and images are the likely arrivals.
 *.png binary

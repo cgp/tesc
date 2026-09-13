@@ -319,6 +319,10 @@ The same table with a second run's values alongside and a delta column — used 
 
 The charts page carries no tables; exact figures live in §14. Principles: every axis labeled with units; every series named as it appears in the plan; shared x-axis and synchronized crosshair across all time series, load and host alike; log scale available on latency; **phase boundaries and ramp-stage boundaries drawn as vertical annotations with shaded phase bands on every chart**; gaps in collection drawn as gaps, never interpolated; **run annotations (§13.1) drawn as shaded regions on the charts they affect**; and no chart ships without a one-line caption stating what it answers.
 
+**With no engine, the page draws the host charts of this table**: one per metric, every target overlaid, sharing one x-axis and one crosshair. The load-side charts arrive with the engine and slot in beside them.
+
+**A gap is a break in the line, and that needs nulls in the data rather than absent points** — a plotting library joins across a missing x and draws a straight segment through the window nothing was collected in, which is a picture of data that does not exist, indistinguishable from a flat healthy stretch. So the x-axis is the union of every target's sample times, a target missing one gets a null there, and each recorded gap contributes an x of its own for the case where every target stopped at once. Under the crosshair such a point reads as a dash, not a number.
+
 | Chart | Answers |
 |---|---|
 | Target vs achieved RPS over time, stacked by chain | Did we apply the load we asked for? |

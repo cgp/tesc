@@ -68,9 +68,12 @@ export const api = {
     ),
   clearBaseline: (id) =>
     request(`/api/recordings/${encodeURIComponent(id)}/baseline`, { method: "DELETE" }),
-  series: (id, metric, target) =>
-    request(
-      `/api/recordings/${encodeURIComponent(id)}/series?` +
-        new URLSearchParams({ metric, ...(target ? { target } : {}) })
-    ),
+  series: (id, metric, target) => {
+    const query = new URLSearchParams({
+      ...(metric ? { metric } : {}),
+      ...(target ? { target } : {}),
+    });
+    const suffix = query.toString() ? `?${query}` : "";
+    return request(`/api/recordings/${encodeURIComponent(id)}/series${suffix}`);
+  },
 };

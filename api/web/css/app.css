@@ -157,6 +157,29 @@
    doubles up and reads as a section break where the table simply continues. */
 .metrix-stats tbody + tbody { border-top: 0; }
 
+/* ------------------------------------------------------------------ the charts */
+
+/* uPlot measures its container, so the holder needs a size before the chart exists;
+   without this the first draw comes out zero-width and stays that way. */
+.metrix-chart { min-height: 200px; padding: .5rem .25rem 0; }
+.metrix-chart .uplot { width: 100%; }
+
+/* uPlot ships its own light palette. These map it onto Tabler's variables so the
+   charts follow the shell rather than sitting on it. */
+.uplot .u-legend { font-size: .8125rem; color: var(--tblr-secondary); }
+.uplot .u-legend .u-marker { width: .75rem; height: .75rem; }
+.uplot .u-title { display: none; }
+
+/* The phase key in the page note above the charts. */
+.metrix-swatch {
+  display: inline-block;
+  width: .9rem;
+  height: .9rem;
+  vertical-align: -.1rem;
+  border: 1px solid var(--tblr-border-color);
+  border-radius: 2px;
+}
+
 /* ------------------------------------------------------------------- the rest */
 
 /* A value the sample count cannot support is shown, but never as a bare number. */

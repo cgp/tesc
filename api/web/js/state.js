@@ -24,6 +24,10 @@ const state = {
   //: Which column the stats table is ordered by, if a person has chosen one.
   //: Null means the default: metric name, alphabetically.
   tableSort: null,
+  //: Bumped when live samples arrive, so the charts redraw without the whole live
+  //: object becoming a chart dependency. The table watches the summaries; the charts
+  //: watch the points, and they arrive on the same tick.
+  chartTick: 0,
   recordings: [],
   selectedRecording: null,
   live: null,

@@ -287,14 +287,28 @@ class TestRecordings:
         assert body["annotations"][0]["detail"]["reason"] == "host went away"
 
     def test_series_is_shaped_for_a_chart(self, client, recording) -> None:
+        """Keyed by metric then target: the charts page draws one chart per metric."""
         body = client.get(f"/api/recordings/{recording}/series?metric=cpu.busy").json()
-        assert body["series"]["task-a"] == [[1000, 11.0], [2000, 12.5]]
+        assert body["series"]["cpu.busy"]["task-a"] == [[1000, 11.0], [2000, 12.5]]
+
+    def test_every_metric_comes_back_when_none_is_named(self, client, recording) -> None:
+        body = client.get(f"/api/recordings/{recording}/series").json()
+        assert "cpu.busy" in body["metrics"]
+        assert set(body["series"]) == set(body["metrics"])
+
+    def test_series_carries_what_a_chart_draws_behind_the_lines(self, client, recording) -> None:
+        body = client.get(f"/api/recordings/{recording}/series").json()
+        # Phases to shade, gaps to leave as holes, annotations to mark.
+        assert [p["phase"] for p in body["phases"]] == ["measure"]
+        assert body["gaps"] and body["gaps"][0]["reason"]
+        assert body["annotations"]
+        assert body["baseline"] == {}, "no baseline is set for this series"
 
     def test_series_can_be_narrowed_to_one_target(self, client, recording) -> None:
         body = client.get(
             f"/api/recordings/{recording}/series?metric=cpu.busy&target=task-a"
         ).json()
-        assert list(body["series"]) == ["task-a"]
+        assert list(body["series"]["cpu.busy"]) == ["task-a"]
 
     def test_a_missing_recording_is_a_404(self, client) -> None:
         assert client.get("/api/recordings/nope").status_code == 404

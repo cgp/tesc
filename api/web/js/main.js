@@ -101,7 +101,10 @@ async function load(route) {
     const id = route.recordingId ?? get().selectedRecording?.id;
     if (id) {
       const recording = await api.recording(id);
-      recording.latest = await latestValues(recording);
+      // One request for every metric, which also carries what the charts draw behind
+      // the lines. It used to be a request per metric for the last value alone.
+      recording.chart = await api.series(id);
+      recording.latest = latestValues(recording.chart);
       // Fetched with the recording rather than on demand: it is the first question
       // asked of a finished one, and a card that appears a second later reads as a
       // page still loading.
@@ -115,16 +118,11 @@ async function load(route) {
   }
 }
 
-// The last value of every metric for a finished recording. A live one gets these
-// from the stream instead; this is only for reading history back.
-async function latestValues(recording) {
+// The last value of every metric, read out of the series already fetched. A live
+// recording gets these from the stream instead; this is only for reading back.
+function latestValues(chart) {
   const latest = {};
-  const results = await Promise.all(
-    recording.metrics.map((metric) =>
-      api.series(recording.id, metric).then((payload) => [metric, payload.series])
-    )
-  );
-  for (const [metric, byTarget] of results) {
+  for (const [metric, byTarget] of Object.entries(chart.series)) {
     latest[metric] = {};
     for (const [target, points] of Object.entries(byTarget)) {
       if (points.length) latest[metric][target] = points[points.length - 1][1];
@@ -197,8 +195,14 @@ function renderView(state) {
   // replacing the markup would destroy text selection and make the Stop button
   // unclickable under the cursor.
   if (activeRoute(state).name === "stats" && table.patch(state)) return;
+  if (activeRoute(state).name === "charts" && charts.patch(state)) return;
 
   document.getElementById("view").innerHTML = activeEntry(state).view.render(state);
+
+  // uPlot measures the element it draws into, so the charts are built after their
+  // containers exist rather than returned as markup. Feeding an existing chart new
+  // data costs an array; rebuilding one costs its crosshair and its zoom.
+  if (activeRoute(state).name === "charts") charts.draw(state);
 }
 
 function renderError(state) {
@@ -527,6 +531,11 @@ renderHealth(get());
 renderError(get());
 render(get());
 window.addEventListener("hashchange", onRouteChange);
+// A canvas does not reflow. Charts are told their new width, and only while the page
+// showing them is the one on screen.
+window.addEventListener("resize", () => {
+  if (activeRoute(get()).name === "charts") charts.resize();
+});
 
 await pollHealth();
 await rejoinLive();

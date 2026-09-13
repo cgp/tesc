@@ -266,13 +266,75 @@ def unset_baseline(
 @router.get("/{recording_id}/series")
 def get_series(
     recording_id: str,
-    metric: str,
+    metric: str | None = None,
     target: str | None = None,
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, Any]:
-    """One metric over time, per target: the shape a chart consumes."""
+    """Metrics over time, per target: the shape a chart consumes.
+
+    Every metric at once unless one is named. The charts page draws one chart per
+    metric on a shared axis, and fetching them one at a time would be a request per
+    chart for data that comes out of a single table scan.
+    """
     rows = store.samples(conn, recording_id, target_id=target, metric=metric)
-    by_target: dict[str, list[list[float]]] = {}
-    for target_id, t_ms, _, value in rows:
-        by_target.setdefault(target_id, []).append([t_ms, value])
-    return {"metric": metric, "series": by_target}
+    series: dict[str, dict[str, list[list[float]]]] = {}
+    for target_id, t_ms, name, value in rows:
+        series.setdefault(name, {}).setdefault(target_id, []).append([t_ms, value])
+
+    return {
+        "recording_id": recording_id,
+        "metrics": sorted(series),
+        "series": series,
+        # What a chart needs behind the lines: the bands to shade, the holes to leave,
+        # and the line to draw across for "normal". All of it is per recording, so
+        # sending it here saves the page three more round trips.
+        "phases": [
+            {
+                "target_id": p["target_id"],
+                "phase": p["phase"],
+                "from_ms": p["from_ms"],
+                "to_ms": p["to_ms"],
+            }
+            for p in store.phases(conn, recording_id)
+        ],
+        "gaps": [
+            {
+                "target_id": g["target_id"],
+                "from_ms": g["from_ms"],
+                "to_ms": g["to_ms"],
+                "reason": g["reason"],
+            }
+            for g in store.gaps(conn, recording_id)
+        ],
+        "annotations": [
+            {
+                "code": a["code"],
+                "severity": a["severity"],
+                "target_id": a["target_id"],
+                "from_ms": a["from_ms"],
+                "to_ms": a["to_ms"],
+                "message": a["message"],
+            }
+            for a in store.annotations(conn, recording_id)
+        ],
+        # The reference line: what this environment normally sits at, per metric.
+        "baseline": _baseline_medians(conn, recording_id),
+    }
+
+
+def _baseline_medians(conn: sqlite3.Connection, recording_id: str) -> dict[str, float]:
+    """The pooled median of each metric in this series' baseline recording.
+
+    Pooled across boxes rather than per box, because it is drawn as one horizontal
+    line across a chart that overlays every target -- and because a discovered
+    environment's boxes are replaced between recordings anyway (design-api 10.2).
+    """
+    try:
+        recording = store.get(conn, recording_id)
+    except LookupError:
+        return {}
+    baseline = store.baseline_for(conn, recording.series_key)
+    if baseline is None or baseline.id == recording_id:
+        return {}
+    pooled = analysis.summaries(conn, baseline.id).get(analysis.ENVIRONMENT, {})
+    return {metric: s.p50 for metric, s in pooled.items() if s.p50 is not None}
