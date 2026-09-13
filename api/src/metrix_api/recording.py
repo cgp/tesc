@@ -20,7 +20,13 @@ from metrix_api import __version__
 from metrix_api.discovery.resolve import Resolver, compare
 from metrix_api.observer import transport_for
 from metrix_api.observer.collector import Clock, collect_all
-from metrix_api.observer.metrics import HOST_COUNT_CHANGED, Annotation, Gap, Sample
+from metrix_api.observer.metrics import (
+    HOST_COUNT_CHANGED,
+    TARGET_UNREACHABLE,
+    Annotation,
+    Gap,
+    Sample,
+)
 from metrix_api.profiles import Profile, ProfileError
 from metrix_api.store import inventories
 from metrix_api.store import recordings as store
@@ -149,6 +155,45 @@ class Recorder:
             ),
         )
 
+    def _note_unreachable(self, ended: int) -> None:
+        """Flag any target that produced nothing at all.
+
+        A box that answered intermittently has gaps, which are drawn as gaps and are
+        a warning. A box that never answered once is a different fact: it was named
+        in the profile, so a reader counts it among what was measured, and an average
+        over "the environment" that quietly omits one of its machines is worse than
+        no average. Hence `invalid` -- such a recording should not become a baseline
+        without someone saying so out loud.
+        """
+        counts = store.sample_counts(self.conn, self.recording_id)
+        for endpoint in self.profile.observed:
+            if counts.get(endpoint.id):
+                continue
+            store.add_annotation(
+                self.conn,
+                self.recording_id,
+                Annotation(
+                    code=TARGET_UNREACHABLE,
+                    severity="invalid",
+                    from_ms=0,
+                    to_ms=ended,
+                    target_id=endpoint.id,
+                    phase=store.OBSERVATION_PHASE,
+                    message=(
+                        f"{endpoint.id} produced no samples at all; it was collected "
+                        f"from at {self._describe(endpoint)} and never answered"
+                    ),
+                ),
+            )
+
+    @staticmethod
+    def _describe(endpoint) -> str:
+        """Where collection was attempted, in the spelling the Profiles page shows."""
+        try:
+            return transport_for(endpoint).describe()
+        except Exception:  # noqa: BLE001 - naming the place is a courtesy, not the point
+            return "an address that could not be built"
+
     def _start_task(self) -> None:
         endpoints = self.profile.observed
         for endpoint in endpoints:
@@ -191,6 +236,7 @@ class Recorder:
         # The closing phase boundary. An observation-only recording has exactly two,
         # and a phased load run (A4) will call this at each of its own.
         self.refresh(at_ms=ended)
+        self._note_unreachable(ended)
         for endpoint in self.profile.observed:
             store.end_phase(
                 self.conn, self.recording_id, endpoint.id, store.OBSERVATION_PHASE, ended

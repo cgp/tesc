@@ -106,6 +106,11 @@ class Endpoint:
     #: most services vhost on it, and a raw IP gets a 404 or a default backend.
     host_header: str | None = None
     tls: Tls = field(default_factory=Tls)
+    #: Whether traffic is sent here. False for a box that is observed but not
+    #: addressed -- the tasks behind a load balancer, when the balancer is what the
+    #: run points at. Every endpoint still carries an address, because that is where
+    #: the box *is*; this says whether it is also where the load goes.
+    load: bool = True
     #: Inventory detail -- instance type, AZ, image digest. Opaque; it is what
     #: explains an outlier in a sweep.
     attributes: dict[str, str] = field(default_factory=dict)
@@ -156,6 +161,16 @@ class Profile:
         """Endpoints the observer can actually collect from."""
         return [e for e in self.endpoints if e.collect.transport != "none"]
 
+    @property
+    def targets(self) -> list[Endpoint]:
+        """Endpoints traffic is sent to: the default selection for `targets.json`.
+
+        Not the same list as `observed`, and usually not overlapping it. Under
+        load-balancer addressing the run points at the balancer and watches the boxes
+        behind it; the two roles are what `load` and `collect.transport` say.
+        """
+        return [e for e in self.endpoints if e.load]
+
     def endpoint(self, endpoint_id: str) -> Endpoint:
         for candidate in self.endpoints:
             if candidate.id == endpoint_id:
@@ -180,9 +195,22 @@ def to_targets(profile: Profile, *, only: list[str] | None = None) -> dict[str, 
     profile becomes something the engine understands, and the engine knows nothing
     about profiles.
     """
-    chosen = profile.endpoints if only is None else [profile.endpoint(i) for i in only]
-    if not chosen:
+    # By default the endpoints that take traffic; an explicit selection overrides
+    # that, including with an endpoint marked observation-only -- the caller asked
+    # for it by name, which is a decision, not an accident.
+    chosen = profile.targets if only is None else [profile.endpoint(i) for i in only]
+    if only is not None and not chosen:
         raise ProfileError(f"profile {profile.name!r}: no targets selected")
+    if not chosen:
+        raise ProfileError(
+            f"profile {profile.name!r}: no targets selected"
+            + (
+                " -- every endpoint is marked observation-only, so there is nowhere "
+                "to send traffic"
+                if profile.endpoints
+                else " -- it has no endpoints yet"
+            )
+        )
 
     targets: dict[str, Any] = {"order": profile.order, "list": []}
     if profile.gap is not None:
@@ -275,6 +303,8 @@ def to_document(profile: Profile) -> dict[str, Any]:
         entry: dict[str, Any] = {"id": endpoint.id, "address": endpoint.address}
         if endpoint.host_header:
             entry["host_header"] = endpoint.host_header
+        if not endpoint.load:
+            entry["load"] = False
         if endpoint.tls != Tls():
             entry["tls"] = {
                 "enabled": endpoint.tls.enabled,
@@ -446,7 +476,7 @@ def _endpoint(raw: Any, addressing: str, where: str) -> Endpoint:
     if not isinstance(raw, dict):
         raise ProfileError(f"{where}: must be an object")
     _reject_unknown(
-        raw, {"id", "address", "host_header", "tls", "attributes", "collect"}, where
+        raw, {"id", "address", "host_header", "load", "tls", "attributes", "collect"}, where
     )
 
     for required in ("id", "address"):
@@ -472,6 +502,7 @@ def _endpoint(raw: Any, addressing: str, where: str) -> Endpoint:
         id=str(raw["id"]),
         address=address,
         host_header=str(host_header) if host_header else None,
+        load=bool(raw.get("load", True)),
         tls=_tls(raw.get("tls", {}), f"{where}: tls"),
         attributes={str(k): str(v) for k, v in raw.get("attributes", {}).items()},
         collect=_collect(raw.get("collect", {}), f"{where}: collect"),

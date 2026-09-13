@@ -154,6 +154,27 @@ The inventory serves both subsystems: it is the engine's endpoint list *and* the
 
 Task definition revision and image digest earn their place in cross-run comparison: they are what lets a later analysis say *this is a different build*, which is the difference between a regression and a deployment.
 
+### 3.4 Addressing, and the two roles an endpoint plays
+
+An endpoint is a machine, and a machine can play either of two parts in a run: **traffic goes there**, or **statistics come from there**. They are separate flags (`load`, and a `collect` block) because they are usually not the same set. Under `load_balancer` addressing the run points at the balancer and watches the tasks behind it; under `direct` it points at each task and watches the same ones. The balancer is a target that cannot be observed — nothing to log into — and a task behind one is observed without being addressed.
+
+Every endpoint carries an address regardless, because that is where the box *is*; `load` says whether it is also where the load goes. This is what makes `targets.json` derivable: the default selection is the endpoints that take traffic, and the observer's list is the ones with a collector.
+
+**Addressing mode is part of series identity** (§17.2). Through-the-balancer and direct-to-container measure different network paths — one includes the balancer's own latency, connection reuse and health checks — so the two are never compared against each other, and changing it starts a new history rather than continuing one.
+
+### 3.5 Verifying a profile
+
+A profile is a set of claims, and every one of them fails silently: a security group that admits the balancer and not this machine, an exporter that is not running, a key that works for one box and not its replacement. Left unchecked, the first evidence is a recording full of gaps.
+
+Verification asks both questions of every endpoint, on demand, and reports them separately because they are fixed by different people:
+
+- **the load target** — open a connection, complete the TLS handshake when TLS is on. Nothing is sent: this asks whether the socket accepts, not what is listening on it.
+- **the collector** — one real probe over the transport a recording would use. Not a port check, because an SSH login that succeeds and then cannot run the stats script, and an exporter answering 404 on the configured path, are exactly the failures a port check passes and a recording then hits.
+
+Never automatic. It is several seconds of timeouts against someone else's network, so it happens when someone asks, and the result is held for that sitting rather than stored — reachability is true of a moment, and a green tick from yesterday presented as current is worse than no tick.
+
+The run-time counterpart is the `target_unreachable` annotation: a target that produced *no* samples at all for a whole recording. It is `invalid` rather than `warn` because the box was named in the profile, so a reader counts it among what was measured, and an average over "the environment" that quietly omits one of its machines is worse than no average.
+
 ---
 
 ## 8. Plan generation from an endpoint

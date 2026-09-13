@@ -32,7 +32,15 @@ export function blankEndpoint() {
 export function selectState(state) {
   return state.profileDraft
     ? [state.profileDraft]
-    : [state.profileDraft, state.profiles, state.brokenProfiles, state.profilesReadAt, state.resolving];
+    : [
+        state.profileDraft,
+        state.profiles,
+        state.brokenProfiles,
+        state.profilesReadAt,
+        state.resolving,
+        state.verifying,
+        state.verified,
+      ];
 }
 
 export function render(state) {
@@ -84,7 +92,7 @@ export function render(state) {
         </button>
       </div>
     </div>
-    ${state.profiles.map((p) => profileCard(p, state.resolving)).join("")}
+    ${state.profiles.map((p) => profileCard(p, state)).join("")}
   </div>`;
 }
 
@@ -194,7 +202,92 @@ function when(stamp) {
   return today ? at.toLocaleTimeString() : at.toLocaleString();
 }
 
-function profileCard(profile, resolving) {
+/**
+ * What a reachability check found, per endpoint.
+ *
+ * Two answers per box, side by side, because they fail for different reasons and are
+ * fixed by different people: a load target that will not accept a connection is a
+ * routing or firewall question, and a collector that will not answer is a key, an
+ * agent, or a path. A check that was never attempted is drawn as neither — an
+ * endpoint with no collector is not broken.
+ */
+function verification(profile, state) {
+  const report = state.verified[profile.name];
+  if (state.verifying === profile.name) {
+    return `<div class="card-body py-2 border-bottom text-secondary">
+      <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+      Checking every endpoint — connecting to each load target and probing each
+      collector, in parallel.
+    </div>`;
+  }
+  if (!report) return "";
+
+  const rows = profile.endpoints
+    .map((endpoint) => {
+      const cells = ["load", "collect"]
+        .map((kind) => {
+          const check = report.checks.find(
+            (c) => c.endpoint === endpoint.id && c.kind === kind
+          );
+          return `<td>${outcome(check)}</td>`;
+        })
+        .join("");
+      return `<tr><td class="name" title="${escape(endpoint.id)}">${escape(
+        targetLabel(endpoint.id)
+      )}</td>${cells}</tr>`;
+    })
+    .join("");
+
+  return `<div class="card-body py-0 border-bottom">
+    <div class="d-flex align-items-baseline gap-2 pt-2">
+      <strong>Reachability</strong>
+      <span class="badge ${report.ok ? "bg-green-lt" : "bg-red-lt"}">${escape(
+        report.summary
+      )}</span>
+      <span class="text-secondary">checked ${escape(when(report.checked_at))} — a
+        moment ago, not a standing fact</span>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-sm table-vcenter metrix-table mb-2">
+        <thead><tr>
+          <th style="width:20%">Endpoint</th>
+          <th style="width:40%">Load target</th>
+          <th style="width:40%">Collector</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function verifyButton(profile, state) {
+  if (!profile.endpoints.length) return "";
+  if (state.verifying === profile.name) {
+    return `<button class="btn btn-sm" disabled>
+      <span class="spinner-border spinner-border-sm me-2" role="status"></span>Checking…
+    </button>`;
+  }
+  return `<button class="btn btn-sm" data-action="profile-verify"
+                  data-profile="${escape(profile.name)}"
+                  title="Connect to every load target and probe every collector">
+    ${icon("plug-connected")} Verify
+  </button>`;
+}
+
+function outcome(check) {
+  if (!check) return '<span class="text-secondary">—</span>';
+  if (check.result === "skipped") {
+    return `<span class="text-secondary">${escape(check.detail)}</span>`;
+  }
+  const ok = check.result === "ok";
+  const took = check.ms == null ? "" : ` <span class="text-secondary">${check.ms}ms</span>`;
+  return `<span class="badge ${ok ? "bg-green-lt" : "bg-red-lt"}">${
+    ok ? "reachable" : "unreachable"
+  }</span> ${escape(check.detail)}${took}`;
+}
+
+function profileCard(profile, state) {
+  const resolving = state.resolving;
   const rows = profile.endpoints
     .map((endpoint) => {
       const observed = profile.observed.includes(endpoint.id);
@@ -204,9 +297,17 @@ function profileCard(profile, resolving) {
         ? `<span class="badge bg-green-lt">${escape(endpoint.transport)}</span>
            <code class="metrix-path ms-1">${escape(endpoint.collects_from ?? "—")}</code>`
         : `<span class="text-secondary">not collected</span>`;
+      // An observation-only box still has an address -- that is where it *is* --
+      // but nothing is sent there, and a column headed "Load target" would say
+      // otherwise. The address is kept, muted, with the reason on it.
+      const target = endpoint.load
+        ? `<code>${escape(endpoint.address)}</code>`
+        : `<span class="text-secondary" title="Traffic is not sent here">
+             <code class="text-secondary">${escape(endpoint.address)}</code> · watched only
+           </span>`;
       return `<tr>
         <td class="name" title="${escape(endpoint.id)}">${escape(targetLabel(endpoint.id))}</td>
-        <td><code>${escape(endpoint.address)}</code></td>
+        <td>${target}</td>
         <td>${endpoint.host_header ? `<code>${escape(endpoint.host_header)}</code>` : "—"}</td>
         <td>${collection}</td>
       </tr>`;
@@ -226,6 +327,7 @@ function profileCard(profile, resolving) {
       <div>
         <h3 class="card-title">${name}</h3>
         <div class="card-subtitle">${escape(profile.addressing)} addressing ·
+          ${profile.targets.length} sent to ·
           ${profile.observed.length} of ${profile.endpoints.length} observed${source}</div>
       </div>
       <div class="card-actions d-flex align-items-center gap-2">
@@ -237,6 +339,7 @@ function profileCard(profile, resolving) {
                </button>`
             : `<span class="text-secondary">nothing to collect</span>`
         }
+        ${verifyButton(profile, state)}
         ${
           profile.discover
             ? // The form edits endpoint rows, and a discovered profile has none of
@@ -257,6 +360,7 @@ function profileCard(profile, resolving) {
     </div>
     ${description}
     ${profile.discover ? discovery(profile, resolving) : ""}
+    ${verification(profile, state)}
     ${profile.endpoints.length === 0 ? "" : `<div class="table-responsive">
       <table class="table card-table table-vcenter metrix-table">
         <thead><tr>

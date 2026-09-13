@@ -330,6 +330,25 @@ async function resolveProfile(name) {
   }
 }
 
+/**
+ * Check that every endpoint in one profile can actually be reached.
+ *
+ * The result is held in memory and not persisted: reachability is true of a moment,
+ * and a green tick from yesterday shown as though it were current would be worse
+ * than no tick at all. It disappears on reload, which is correct.
+ */
+async function verifyProfile(name) {
+  try {
+    set({ error: null, verifying: name });
+    const report = await api.verifyProfile(name);
+    set({ verified: { ...get().verified, [name]: report } });
+  } catch (error) {
+    set({ error: error.message });
+  } finally {
+    set({ verifying: null });
+  }
+}
+
 async function deleteProfile(name) {
   const message =
     `Delete the profile "${name}"?
@@ -364,6 +383,7 @@ document.addEventListener("click", (event) => {
   if (action === "profile-delete") deleteProfile(profile);
   if (action === "profile-reload") reloadProfiles();
   if (action === "profile-resolve") resolveProfile(profile);
+  if (action === "profile-verify") verifyProfile(profile);
   if (action === "profile-cancel") set({ profileDraft: null });
   if (action === "profile-save") saveProfile();
   if (action === "endpoint-add") {

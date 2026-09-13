@@ -40,6 +40,10 @@ export const api = {
     request(`/api/profiles/${encodeURIComponent(name)}`, json("PUT", document)),
   resolveProfile: (name) =>
     request(`/api/profiles/${encodeURIComponent(name)}/resolve`, { method: "POST" }),
+  verifyProfile: (name) =>
+    request(`/api/profiles/${encodeURIComponent(name)}/verify`, { method: "POST" }),
+  profileTargets: (name) =>
+    request(`/api/profiles/${encodeURIComponent(name)}/targets`),
   deleteProfile: (name) =>
     request(`/api/profiles/${encodeURIComponent(name)}`, { method: "DELETE" }),
   recordings: (params = {}) => {

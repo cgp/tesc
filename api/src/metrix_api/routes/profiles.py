@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Response
 
-from metrix_api import profiles
+from metrix_api import profiles, reachability
 from metrix_api.config import Config, format_duration
 from metrix_api.deps import get_config, get_db
 from metrix_api.discovery import DiscoveryError, Resolver, to_endpoints
@@ -57,6 +58,7 @@ def _summary(profile: profiles.Profile) -> dict[str, Any]:
                 "id": e.id,
                 "address": e.address,
                 "host_header": e.host_header,
+                "load": e.load,
                 "transport": e.collect.transport,
                 "collects_from": _collects_from(e),
                 "attributes": e.attributes,
@@ -65,6 +67,9 @@ def _summary(profile: profiles.Profile) -> dict[str, Any]:
         ],
         # What the observer can actually reach, which is what a recording will cover.
         "observed": [e.id for e in profile.observed],
+        # Where traffic goes: the default selection for the engine's targets
+        # document. Usually disjoint from `observed` -- see Profile.targets.
+        "targets": [e.id for e in profile.targets],
     }
 
 
@@ -173,6 +178,83 @@ def resolve_profile(
         "inventory": _inventory_summary(resolution.stored, resolution.notes),
         "cached": resolution.cached,
     }
+
+
+@router.post("/{name}/verify")
+async def verify_profile(
+    name: str,
+    config: Config = Depends(get_config),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    """Check that every endpoint can actually be reached, right now.
+
+    Two questions per endpoint, reported separately because they fail for different
+    reasons: does the load target accept a connection, and does the collector answer
+    a real probe. Never run as a side effect of loading a page -- it is several
+    seconds of timeouts against someone else's network.
+    """
+    try:
+        profile = profiles.load_profile(config, name)
+    except profiles.ProfileError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    # A discovered profile is checked against what it last resolved to. Verifying
+    # against a fresh walk would conflate two failures -- discovery is broken, and
+    # the boxes are unreachable -- which are fixed in different places.
+    resolved, _ = _resolved(conn, profile)
+    report = await reachability.verify(
+        resolved, timeout=config.observe.timeout.total_seconds()
+    )
+    return {
+        "profile": report.profile,
+        "ok": report.ok,
+        "summary": report.summary(),
+        "checked_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "checks": [
+            {
+                "endpoint": c.endpoint,
+                "kind": c.kind,
+                "result": c.result,
+                "address": c.address,
+                "detail": c.detail,
+                "ms": c.ms,
+            }
+            for c in report.checks
+        ],
+    }
+
+
+@router.get("/{name}/targets")
+def get_targets(
+    name: str,
+    only: str | None = None,
+    config: Config = Depends(get_config),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    """The engine's `targets.json`, built from this profile.
+
+    This is the point where a profile becomes something the engine understands, and
+    the engine knows nothing about profiles. The shape is held to
+    `schema/targets.schema.json` by the test suite rather than at runtime: the schema
+    is the contract between two programs, so it is checked where a mismatch can be
+    fixed, not where it can only be reported.
+
+    `only` selects a subset by id, comma-separated. Without it the selection is the
+    profile's own: the endpoints that take traffic.
+    """
+    try:
+        profile = profiles.load_profile(config, name)
+    except profiles.ProfileError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    resolved, _ = _resolved(conn, profile)
+    chosen = [i for i in (only or "").split(",") if i] or None
+    try:
+        document = profiles.to_targets(resolved, only=chosen)
+    except profiles.ProfileError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return document
 
 
 @router.get("/{name}/document")

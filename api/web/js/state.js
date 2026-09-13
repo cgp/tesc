@@ -16,6 +16,11 @@ const state = {
   //: seconds of control-plane calls, and a button with no sign of life reads as a
   //: broken one.
   resolving: null,
+  //: The profile being checked, if any, and the last report for each one. Kept in
+  //: memory rather than stored: reachability is true of a moment, and a result from
+  //: yesterday shown as if it were current would be worse than no result.
+  verifying: null,
+  verified: {},
   recordings: [],
   selectedRecording: null,
   live: null,

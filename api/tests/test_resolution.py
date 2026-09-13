@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from metrix_api import reachability
 from metrix_api.discovery import compare, to_endpoints
 from metrix_api.discovery.resolve import ResolveError, Resolver
 from metrix_api.observer.metrics import HOST_COUNT_CHANGED
@@ -532,3 +533,101 @@ class TestRoutes:
         detail = api.get(f"/api/recordings/{recording_id}").json()
         assert detail["inventory"]["source"] == "api.staging.example.com"
         assert [r["id"] for r in detail["inventory"]["resources"] if r["role"] == "task"]
+
+
+# ---------------------------------------- verification, and the engine's target list
+
+
+class TestVerifyAndTargets:
+    def test_a_discovered_profile_is_verified_against_what_it_last_resolved_to(
+        self, api, monkeypatch
+    ) -> None:
+        """Not against a fresh walk: 'discovery is broken' and 'the boxes are
+        unreachable' are two failures fixed in two different places."""
+        api.post("/api/profiles/staging/resolve")
+
+        seen: list[str] = []
+
+        async def answered(endpoint, timeout):
+            seen.append(endpoint.id)
+            return reachability.Check(
+                endpoint=endpoint.id,
+                kind=reachability.COLLECT,
+                result=reachability.OK,
+                address="scrape",
+                detail="ip-10-0-11-21",
+            )
+
+        monkeypatch.setattr(reachability, "_collect", answered)
+        monkeypatch.setattr(reachability, "_load", answered)
+
+        body = api.post("/api/profiles/staging/verify").json()
+        assert body["ok"] is True
+        assert body["summary"].endswith("reachable")
+        # The balancer and both discovered tasks, each asked both questions.
+        assert len(seen) == 6
+        assert any(s.startswith("task/") for s in seen)
+
+    def test_an_unreachable_box_is_named_and_the_rest_still_report(
+        self, api, monkeypatch
+    ) -> None:
+        api.post("/api/profiles/staging/resolve")
+
+        async def refuse(endpoint, timeout):
+            return reachability.Check(
+                endpoint=endpoint.id,
+                kind=reachability.LOAD,
+                result=(
+                    reachability.FAILED if endpoint.id.startswith("task/7e") else reachability.OK
+                ),
+                address=endpoint.address,
+                detail="connection refused",
+            )
+
+        monkeypatch.setattr(reachability, "_collect", refuse)
+        monkeypatch.setattr(reachability, "_load", refuse)
+
+        body = api.post("/api/profiles/staging/verify").json()
+        assert body["ok"] is False
+        failed = {c["endpoint"] for c in body["checks"] if c["result"] == "failed"}
+        assert failed == {"task/7e2d4c6f8a0b1c2d3e4f5a6b3f1c5a7e"}
+        assert body["summary"] == "2 of 6 unreachable"
+
+    def test_the_targets_document_points_at_the_balancer(self, api) -> None:
+        """Load-balancer addressing: the run points there and watches the tasks."""
+        api.post("/api/profiles/staging/resolve")
+        document = api.get("/api/profiles/staging/targets").json()
+
+        assert [t["id"] for t in document["list"]] == ["lb/metrix-staging-alb/443"]
+        assert document["list"][0]["tls"] == {"enabled": True}
+        assert document["list"][0]["host_header"] == "api.staging.example.com"
+        # The inventory detail rides along, so a later comparison can explain an outlier.
+        assert document["list"][0]["attributes"]["role"] == "lb"
+
+    def test_direct_addressing_points_at_the_tasks_instead(self, api, tmp_path) -> None:
+        from metrix_api.config import load_config
+        from metrix_api.profiles import save_profile
+
+        save_profile(
+            load_config(tmp_path),
+            profile(name="staging-direct", addressing="direct"),
+        )
+        api.post("/api/profiles/staging-direct/resolve")
+        document = api.get("/api/profiles/staging-direct/targets").json()
+
+        assert [t["id"] for t in document["list"]] == [
+            "task/3f1c5a7e9b2d4c6f8a0b1c2d3e4f5a6b",
+            "task/7e2d4c6f8a0b1c2d3e4f5a6b3f1c5a7e",
+        ]
+        assert all(t["host_header"] == "api.staging.example.com" for t in document["list"])
+
+    def test_a_subset_can_be_asked_for(self, api) -> None:
+        api.post("/api/profiles/staging/resolve")
+        one = "task/3f1c5a7e9b2d4c6f8a0b1c2d3e4f5a6b"
+        document = api.get(f"/api/profiles/staging/targets?only={one}").json()
+        assert [t["id"] for t in document["list"]] == [one]
+
+    def test_a_profile_that_has_not_resolved_has_nowhere_to_send_traffic(self, api) -> None:
+        refused = api.get("/api/profiles/staging/targets")
+        assert refused.status_code == 422
+        assert "no endpoints yet" in refused.json()["detail"]

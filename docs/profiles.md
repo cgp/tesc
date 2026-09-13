@@ -211,3 +211,53 @@ instances rather than a balancer in front of them.
 
 Addressing a container directly usually needs `host_header`: most services vhost on
 it, and a raw IP gets a 404 or a default backend.
+
+## Which boxes take traffic
+
+`"load": false` on an endpoint means *watch this box, do not send to it*. Every
+endpoint still has an address — that is where the machine is — and this says whether
+it is also where the load goes:
+
+```json
+{
+  "id": "app-1",
+  "address": "10.0.3.41:8080",
+  "load": false,
+  "collect": { "transport": "ssh", "user": "ec2-user" }
+}
+```
+
+The two roles are usually different sets. Pointing at a balancer and watching the
+boxes behind it is the common shape: the balancer is a target nothing can be
+collected from, and each box behind it is observed without being addressed. The
+Profiles page counts both — *1 sent to · 3 of 4 observed* — and shows a watched-only
+address muted, so a column headed **Load target** never claims something it should
+not.
+
+Discovery sets this for you from `addressing`: with `load_balancer` the balancer
+takes the traffic, with `direct` the boxes do.
+
+## Checking a profile before trusting it
+
+**Verify** on a profile card asks two questions of every endpoint at once, and they
+are answered separately because they fail for different reasons:
+
+- **Load target** — can a connection be opened, and does the TLS handshake complete?
+  Nothing is sent. This asks whether the socket accepts, not what is listening on it.
+- **Collector** — one real probe over the transport a recording would use. Not a port
+  check: an SSH login that works and then cannot run the stats script, or an exporter
+  answering 404 on the configured path, are exactly the failures a port check passes
+  and a recording then hits. A collector that answers names the box it reached.
+
+An endpoint with no collector, or one that takes no traffic, is drawn as neither
+reachable nor unreachable — it was never going to be checked, and that is not a
+fault.
+
+The result is a snapshot of a moment and is not stored. It disappears when you leave
+the page, which is correct: reachability yesterday says nothing about reachability
+now.
+
+If a recording runs anyway and a box never answers *once*, the recording carries a
+`target_unreachable` note marked **invalid** — it cannot become a baseline without
+someone saying so out loud, because a mean over "the environment" that silently
+leaves out one machine is worse than no mean.

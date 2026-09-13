@@ -304,10 +304,13 @@ def to_endpoints(
     the resource id for that reason -- shortening it for the sake of a nicer table
     would break the join it exists to make.
 
-    Under `load_balancer` addressing the balancer is an endpoint too, with no
-    collector: an ALB cannot be logged into, and it is still where the traffic goes.
-    Under `direct` addressing it is left out, because nothing would be sent there.
+    Addressing decides which of them takes traffic. Under `load_balancer` the run
+    points at the balancer and watches the boxes behind it, so the balancer is an
+    endpoint with no collector -- an ALB cannot be logged into -- and the hosts are
+    observed but not addressed. Under `direct` the balancer is left out entirely,
+    because nothing would be sent there.
     """
+    direct = addressing == "direct"
     endpoints: list[Endpoint] = []
     notes: list[Note] = []
 
@@ -322,6 +325,7 @@ def to_endpoints(
                     address=balancer.endpoint,
                     host_header=host_header,
                     tls=Tls(enabled=balancer.attributes.get("protocol") in ("HTTPS", "TLS")),
+                    load=True,
                     attributes={"role": "lb", **balancer.attributes},
                 )
             )
@@ -344,6 +348,7 @@ def to_endpoints(
                 address=host.endpoint,
                 host_header=host_header,
                 tls=tls or Tls(),
+                load=direct,
                 attributes=_endpoint_attributes(host),
                 collect=collect or Collection(),
             )

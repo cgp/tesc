@@ -156,6 +156,18 @@ def add_sample(conn: sqlite3.Connection, recording_id: str, sample: Sample) -> i
     return len(rows)
 
 
+def sample_counts(conn: sqlite3.Connection, recording_id: str) -> dict[str, int]:
+    """Rows per target. Zero for a target that never answered is the point of it."""
+    return {
+        row["target_id"]: row["n"]
+        for row in conn.execute(
+            "SELECT target_id, COUNT(*) AS n FROM host_sample WHERE recording_id = ?"
+            " GROUP BY target_id",
+            (recording_id,),
+        )
+    }
+
+
 def add_gap(conn: sqlite3.Connection, recording_id: str, gap: Gap) -> None:
     """Record a gap *and* its annotation together.
 

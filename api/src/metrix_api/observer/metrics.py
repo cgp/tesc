@@ -114,6 +114,12 @@ class Gap:
 #: The code every collection failure is recorded under, so one query finds them all.
 COLLECTION_GAP = "collection_gap"
 
+#: A target that produced not one sample for the whole recording. Invalid rather
+#: than warn: the box was in the profile, so a reader would count it among what was
+#: measured, and a mean over "the environment" that silently omits one of its
+#: machines is worse than no number.
+TARGET_UNREACHABLE = "target_unreachable"
+
 #: Raised when a refresh at a phase boundary finds the environment a different size
 #: (design-api 2.3). Machine-written codes live together so one list answers "what can
 #: appear on a recording", whichever subsystem noticed it.
