@@ -104,6 +104,40 @@ async fn streams_conserve_counts_identify_requests_and_never_capture_secrets() {
     let events = records(&events_bytes);
     lifecycle(&summaries);
     lifecycle(&events);
+    let mut corrected_windows = 0;
+    for triple in summaries.windows(3) {
+        if let (Record::Annotation(a), Record::Annotation(_), Record::Summary(s)) =
+            (&triple[0], &triple[1], &triple[2])
+        {
+            if a.code == "schedule_corrected_latency" {
+                corrected_windows += 1;
+                let detail = a.detail.as_ref().unwrap();
+                assert_eq!(a.t_ms, s.t_ms);
+                assert_eq!(a.phase, Some(s.phase));
+                assert_eq!(detail["synthetic_samples"], json!(0));
+                let raw = &s.chains["ping"];
+                for (name, raw) in [
+                    ("chain_duration", &raw.duration),
+                    ("request_total", &raw.steps["get"].total),
+                    ("ttfb", &raw.steps["get"].ttfb),
+                ] {
+                    let corrected: metrix_metrics::events::Histogram =
+                        serde_json::from_value(detail[name].clone()).unwrap();
+                    assert_eq!(corrected.count, raw.count);
+                    assert_eq!(detail["overflow"][name], json!(0));
+                    assert!(corrected.min_us >= raw.min_us);
+                    assert_eq!(corrected.hdr.is_some(), raw.hdr.is_some());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        corrected_windows,
+        summaries
+            .iter()
+            .filter(|r| matches!(r, Record::Summary(_)))
+            .count()
+    );
     assert_eq!(summaries.first(), events.first());
     assert!(!summaries.iter().any(|r| matches!(r, Record::Request(_))));
     assert!(!events.iter().any(|r| matches!(r, Record::Summary(_))));
@@ -257,6 +291,10 @@ async fn sampling_is_deterministic_and_does_not_change_aggregate_counts() {
             })
             .unwrap();
         assert_eq!(p["request_total"]["p50"]["count"], json!(10));
+        assert_eq!(
+            p["schedule_corrected"]["request_total"]["p50"]["count"],
+            json!(10)
+        );
         assert_eq!(p["request_total"]["p50"]["support"], json!("suppressed"));
         assert!(p["request_total"]["p50"]["value_us"].is_null());
         assert!(String::from_utf8_lossy(&output.stderr).contains("events_dropped=0"));

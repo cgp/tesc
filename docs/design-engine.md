@@ -550,7 +550,7 @@ NDJSON carries these populations in B1.4; percentile support rules remain B2.2.
 - Rolling percentiles over time (p50 / p95 / p99 bands)
 - **Phase breakdown:** DNS resolve, TCP connect, TLS handshake, request write, **time-to-first-byte**, body transfer, total. TTFB vs total separates "the server is thinking" from "the response is big or the link is slow."
 - **End-to-end duration** per chain
-- **Corrected latency** (coordinated-omission adjusted, §10) reported alongside raw, never instead of it
+- **Corrected latency** (coordinated-omission adjusted, §12.2) reported alongside raw, never instead of it
 - Latency bucketed by response size — surfaces the "only slow for large accounts" case
 
 ### 9.3 Errors & correctness
@@ -755,7 +755,7 @@ duration × rate is below 2,250; it does not include warmup or idle time.
 ### 12.2 Everything else short windows break
 
 1. **Warmup contaminates everything.** JIT, connection pools, caches, autoscalers. The `warmup` window is measured and charted but excluded from the summary, so you can *see* the warmup effect instead of having it silently averaged into your p99.
-2. **Coordinated omission.** In a closed model a slow response delays the next request, so the worst latencies never get sampled. The engine defaults to the open model (requests issued on schedule regardless of outstanding ones) and reports raw and schedule-corrected latency side by side. Raw is what happened; corrected is what someone queued behind it would have experienced.
+2. **Coordinated omission.** In a closed model a slow response delays the next request, hiding latency. The open scheduler reports raw and schedule-corrected latency side by side. Correction measures from the planned arrival: chain duration adds admission delay; request total and TTFB add send-schedule drift. This is the [scheduled-time approach](https://github.com/giltene/wrk2), with one corrected sample per real terminal sample. Skipped arrivals remain explicit shortfalls, with no fabricated samples or interval-based HDR expansion. Pre-send failures have chain samples only; cancellation adds none. Corrected samples retain admission phase, overflow handling and percentile support rules. Each interval's `schedule_corrected_latency` annotation carries mergeable corrected histograms beside the raw summary; final `load_percentiles` adds `schedule_corrected` results. This answers how latency changes when generator delay is included; it cannot recover outcomes of requests never sent.
 3. **Run-to-run variance.** A single 30s run is a sample, not a measurement — and at 2250 samples the p99 noise floor is wide enough that this matters more, not less. Recordings supports **run groups**: the same plan N times, with the spread shown and the observed noise floor stated, so a "regression" smaller than the spread is labelled as one. This is the cheapest available correction to a short-window methodology.
 4. **Time alignment.** Every series is stamped against the run's monotonic start so load and target-side charts overlay exactly. Generator-to-target clock skew is measured at run start and recorded.
 

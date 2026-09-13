@@ -167,6 +167,8 @@ impl Counters {
 
 pub struct Sample {
     pub chain_duration: Duration,
+    pub admission_delay: Duration,
+    pub send_delay: Duration,
     pub request_duration: Option<Duration>,
     pub ttfb: Option<Duration>,
     pub drift: Option<Duration>,
@@ -186,6 +188,9 @@ pub struct Accumulator {
     pub total: Distribution,
     pub ttfb: Distribution,
     pub drift: Distribution,
+    pub corrected_chain: Distribution,
+    pub corrected_total: Distribution,
+    pub corrected_ttfb: Distribution,
 }
 
 impl Accumulator {
@@ -204,12 +209,18 @@ impl Accumulator {
             self.counters.completed += 1;
         }
         self.chain.record(sample.chain_duration);
+        self.corrected_chain
+            .record(sample.chain_duration.saturating_add(sample.admission_delay));
         if let Some(total) = sample.request_duration {
             self.counters.sent_finished += 1;
             self.total.record(total);
+            self.corrected_total
+                .record(total.saturating_add(sample.send_delay));
         }
         if let Some(ttfb) = sample.ttfb {
             self.ttfb.record(ttfb);
+            self.corrected_ttfb
+                .record(ttfb.saturating_add(sample.send_delay));
         }
         if let Some(drift) = sample.drift {
             self.drift.record(drift);
@@ -231,6 +242,9 @@ impl Accumulator {
         self.total.merge(&other.total);
         self.ttfb.merge(&other.ttfb);
         self.drift.merge(&other.drift);
+        self.corrected_chain.merge(&other.corrected_chain);
+        self.corrected_total.merge(&other.corrected_total);
+        self.corrected_ttfb.merge(&other.corrected_ttfb);
     }
 
     pub fn reset(&mut self) {
@@ -239,6 +253,9 @@ impl Accumulator {
         self.total.reset();
         self.ttfb.reset();
         self.drift.reset();
+        self.corrected_chain.reset();
+        self.corrected_total.reset();
+        self.corrected_ttfb.reset();
     }
 
     pub fn merge_and_reset(&mut self, workers: &mut [Self]) {

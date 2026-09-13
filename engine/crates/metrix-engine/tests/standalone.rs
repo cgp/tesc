@@ -121,6 +121,10 @@ async fn standalone_binary_holds_75_rps_for_30_seconds_without_the_api() {
         assert!(ci["lower_us"].as_u64().unwrap() <= value);
         assert!(ci["upper_us"].as_u64().unwrap() >= value);
         assert!(ci["lower_us"].as_u64().unwrap() >= 9900);
+        let corrected = &detail["schedule_corrected"][distribution];
+        assert_eq!(corrected["p99"]["count"], p["p99"]["count"]);
+        assert_eq!(corrected["p99_9"]["support"], json!("suppressed"));
+        assert!(corrected["p99"]["value_us"].as_u64().unwrap() >= value);
     }
     assert!(number("scheduler_lag_samples") > 0);
     assert!(values.contains_key("max_scheduler_lag_ms"));

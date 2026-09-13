@@ -333,6 +333,7 @@ impl SendState {
 pub(crate) struct Observation {
     pub sent: Option<Instant>,
     pub drift: Duration,
+    pub admission_delay: Duration,
     pub total: Duration,
     pub ttfb: Option<Duration>,
     pub status: Option<u16>,
@@ -377,8 +378,12 @@ pub(crate) async fn execute(job: Option<Job>) -> Completion {
     })
     .await
     .unwrap_or(Err(Failure::Timeout));
-    observation.total = job.admitted.elapsed();
-    observation.request_duration = observation.sent.map(|sent| sent.elapsed());
+    let finished = Instant::now();
+    observation.total = finished.saturating_duration_since(job.admitted);
+    observation.request_duration = observation
+        .sent
+        .map(|sent| finished.saturating_duration_since(sent));
+    observation.admission_delay = job.admitted.saturating_duration_since(job.scheduled);
     observation.error = result.err();
     if observation.error.is_some()
         && job

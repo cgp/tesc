@@ -164,6 +164,7 @@ pub(crate) async fn run(
                 let worker = if admitted_phase == Phase::Warmup { &mut warmup_workers[slots[index].worker] } else { &mut workers[slots[index].worker] };
                 worker.finish(Sample {
                     chain_duration: observation.total, request_duration: observation.request_duration,
+                    admission_delay: observation.admission_delay, send_delay: observation.drift,
                     ttfb: observation.ttfb, drift: None,
                     status: observation.status, error: observation.error.map(cause),
                     bytes_sent: if observation.sent.is_some() { plan.request.body.len() as u64 } else { 0 },

@@ -65,6 +65,13 @@ async fn interval_windows_conserve_samples_and_include_final_drain() {
     assert_eq!(merged.counters.statuses[200], report.responses);
     assert_eq!(merged.total.snapshot(), report.metrics.total.snapshot());
     assert_eq!(merged.chain.snapshot(), report.metrics.chain.snapshot());
+    assert_eq!(
+        merged.corrected_total.snapshot(),
+        report.metrics.corrected_total.snapshot()
+    );
+    assert_eq!(merged.corrected_chain.count(), merged.chain.count());
+    assert_eq!(merged.corrected_total.count(), merged.total.count());
+    assert_eq!(merged.corrected_ttfb.count(), merged.ttfb.count());
     assert_eq!(merged.ttfb.count(), report.responses);
     assert_eq!(merged.counters.bytes_received, report.responses * 12); // JSON response payload.
     let last = report.last_window.unwrap();

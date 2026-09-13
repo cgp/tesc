@@ -537,6 +537,12 @@ fn write_stream(
                     "chain_duration": percentiles(&metrics.chain),
                     "request_total": percentiles(&metrics.total),
                     "ttfb": percentiles(&metrics.ttfb),
+                    "schedule_corrected": {
+                        "method": "scheduled_arrival", "synthetic_samples": 0, "includes_skipped_arrivals": false,
+                        "chain_duration": percentiles(&metrics.corrected_chain),
+                        "request_total": percentiles(&metrics.corrected_total),
+                        "ttfb": percentiles(&metrics.corrected_ttfb),
+                    },
                 })),
             }),
             Packet::Summary {
@@ -622,6 +628,23 @@ fn write_summary(
     window: &Window,
     dropped: u64,
 ) -> io::Result<()> {
+    write_record(writer, buffer, &Record::Annotation(Annotation {
+        t_ms, target_id: Some(identity.target.clone()), code: "schedule_corrected_latency".into(), severity: Severity::Info,
+        phase: Some(phase), from_ms: t_ms.saturating_sub(millis(window.to.saturating_sub(window.from))), to_ms: Some(t_ms),
+        message: "Latency from planned arrival, including generator delay; raw latency remains in the summary. Skipped arrivals have no synthetic samples.".into(),
+        detail: Some(serde_json::json!({
+            "method": "scheduled_arrival", "synthetic_samples": 0, "includes_skipped_arrivals": false,
+            "chain": identity.chain, "step": identity.step, "timeline_phase": window.phase,
+            "chain_duration": window.metrics.corrected_chain.snapshot(),
+            "request_total": window.metrics.corrected_total.snapshot(),
+            "ttfb": window.metrics.corrected_ttfb.snapshot(),
+            "overflow": {
+                "chain_duration": window.metrics.corrected_chain.overflow,
+                "request_total": window.metrics.corrected_total.overflow,
+                "ttfb": window.metrics.corrected_ttfb.overflow,
+            },
+        })),
+    }))?;
     write_record(writer, buffer, &Record::Annotation(Annotation {
         t_ms, target_id: Some(identity.target.clone()), code: "generator_self_metrics".into(), severity: Severity::Info,
         phase: Some(phase), from_ms: t_ms.saturating_sub(millis(window.to.saturating_sub(window.from))), to_ms: Some(t_ms),

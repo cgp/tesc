@@ -147,6 +147,10 @@ async fn all_phases_preserve_warmup_identity_and_exclude_late_samples_from_measu
         })
         .unwrap();
     assert_eq!(p["request_total"]["p50"]["count"], json!(2));
+    assert_eq!(
+        p["schedule_corrected"]["request_total"]["p50"]["count"],
+        json!(2)
+    );
     assert_eq!(p["chain_duration"]["p50"]["count"], json!(2));
     assert_eq!(p["partial"], json!(false));
     let requests = records(&events);
