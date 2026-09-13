@@ -421,6 +421,14 @@ Flags are advisory in the UI and available as a machine-readable verdict for the
 
 - Select any N runs from a series and overlay their latency bands, histograms, and CDFs.
 - **Aggregate a run group** (§12.2) into a single set of statistics by merging HDR histograms — valid because the histograms are mergeable, unlike percentiles. Five 30s runs merged give 11,250 samples and a p99 with roughly the precision a single 150s run would have had, which is the cheapest route past the short-window sample-count limit.
+
+**Distributions merge; percentiles do not**, and that is the whole reason the aggregate is computed the way it is. The mean of five p95s is not the p95 of the five windows together and has no interpretation at all — it is an average of five order statistics, each describing a different set. So an aggregate pools the readings and describes the pooled set once. With no engine that means merging raw host samples; with one it means merging histograms, by the same rule and for the same reason.
+
+**Merging is refused across runs of different setups.** Runs of one setup are repeats of a single measurement and pool into a better version of it. Runs of *different* setups measure different things, and their combined distribution describes nothing that exists while carrying a sample count that would make it look authoritative. The side-by-side columns and the overlay stay — reading two setups against each other deliberately is the sanctioned way to compare across a setup change (§17.2) — and only the merged column is withheld, with the differing part of the identity named rather than the column silently dropped.
+
+**A comparison holds at most six runs.** Not a storage limit; an overlay with more lines than there are distinguishable colours stops being readable, and the answer to that is fewer runs rather than more hues — the same bargain the per-target charts already make.
+
+The overlay draws seconds since each run started rather than wall clock, which is what makes two runs of the same plan lie on top of each other, and pools each run's boxes into one line: six runs across three boxes is eighteen lines, which is not a chart. The per-box view is §15, one run at a time.
 - Per-phase comparison across runs: baseline vs baseline (environment drift), measure vs measure (the actual question), settle vs settle (is recovery degrading?).
 - Step-aligned comparison for breakpoint runs: the same rate step across two runs, side by side.
 

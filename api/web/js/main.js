@@ -7,6 +7,7 @@
 
 import { api } from "./api.js";
 import * as charts from "./charts.js";
+import * as compare from "./compare.js";
 import * as config from "./config.js";
 import { escape } from "./format.js";
 import * as profiles from "./profiles.js";
@@ -55,6 +56,16 @@ const ROUTES = {
     subtitle: "Is a setup getting better or worse, run by run?",
     view: series,
   },
+  compare: {
+    section: "Archive",
+    // No nav item of its own -- it is always reached from a selection, never from a
+    // standing menu entry that would be empty on arrival. `nav` keeps the menu
+    // showing where you came from rather than highlighting nothing.
+    nav: "series",
+    title: "Compare",
+    subtitle: "Runs side by side, and where it means anything, merged.",
+    view: compare,
+  },
 };
 
 const DEFAULT_ROUTE = "recordings";
@@ -77,6 +88,14 @@ function selectView(state) {
   ];
 }
 
+// Ticking a run changes nothing that has to be fetched, and rebuilding the view
+// would replace the checkbox under the pointer. The view patches itself and only
+// falls back to a full render when the markup it expected is not there.
+subscribe((state) => [state.selectedRuns], (state) => {
+  if (activeRoute(state).name !== "series") return;
+  if (!series.patchSelection(state.selectedRuns ?? [])) render(state);
+});
+
 function parseHash() {
   const path = (location.hash || "").replace(/^#\/?/, "");
   const parts = path.split("/").filter(Boolean);
@@ -88,6 +107,15 @@ function parseHash() {
   }
   if (parts[0] === "recordings") {
     return { name: "recordings", recordingId: parts[1] ?? null };
+  }
+  if (parts[0] === "compare") {
+    // The runs are in the hash so a comparison can be linked to and reopened. The
+    // selection that produced it is not -- that is a choice in progress.
+    return {
+      name: "compare",
+      runs: (parts[1] ? decodeURIComponent(parts[1]) : "").split(",").filter(Boolean),
+      phase: parts[2] ? decodeURIComponent(parts[2]) : null,
+    };
   }
   if (parts[0] === "series") {
     // The key carries pipes and an `=`; the hash holds it encoded and it is decoded
@@ -109,6 +137,11 @@ async function load(route) {
 
     if (route.name === "series") {
       await loadSeries(route.seriesKey);
+      return;
+    }
+
+    if (route.name === "compare") {
+      await loadComparison(route.runs, route.phase);
       return;
     }
 
@@ -159,6 +192,52 @@ async function loadSeries(key) {
     return;
   }
   set({ selectedSeries: await api.seriesTrend(key) });
+}
+
+/**
+ * A comparison, and the samples its overlay is drawn from.
+ *
+ * The table arrives summarised -- every percentile in this product is computed in
+ * one place, server-side, and this page is not an exception. The per-run series are
+ * a second set of requests because they are the picture rather than the answer, and
+ * they reuse the endpoint the single-run charts already read.
+ */
+async function loadComparison(runs, phase) {
+  if (runs.length < 2) {
+    set({ comparison: null, comparisonSeries: null });
+    return;
+  }
+  const comparison = await api.compare(runs, phase);
+  set({ comparison, comparisonSeries: null });
+
+  const fetched = await Promise.all(comparison.runs.map((run) => api.series(run.id)));
+  const byRun = {};
+  comparison.runs.forEach((run, i) => {
+    byRun[run.id] = fetched[i];
+  });
+  set({ comparisonSeries: byRun });
+}
+
+/** Tick or untick a run on the series page. */
+function toggleRun(id) {
+  const chosen = get().selectedRuns ?? [];
+  set({
+    selectedRuns: chosen.includes(id) ? chosen.filter((r) => r !== id) : [...chosen, id],
+  });
+}
+
+function compareSelected() {
+  const chosen = get().selectedRuns ?? [];
+  if (chosen.length < 2) return;
+  location.hash = `#/compare/${encodeURIComponent(chosen.join(","))}`;
+}
+
+// The window a comparison is read over. In the hash beside the runs, so a link to
+// "settle against settle" reopens as that rather than as the whole recording.
+function compareOver(phase) {
+  const route = activeRoute(get());
+  const runs = encodeURIComponent((route.runs ?? []).join(","));
+  location.hash = phase ? `#/compare/${runs}/${encodeURIComponent(phase)}` : `#/compare/${runs}`;
 }
 
 // The last value of every metric, read out of the series already fetched. A live
@@ -228,8 +307,9 @@ function renderShell(state) {
   document.getElementById("page-subtitle").textContent = entry.subtitle;
   document.title = `${entry.title} · Metrix`;
 
+  const highlight = entry.nav ?? route.name;
   for (const item of document.querySelectorAll("#nav .nav-item[data-route]")) {
-    item.classList.toggle("active", item.dataset.route === route.name);
+    item.classList.toggle("active", item.dataset.route === highlight);
   }
 
   // Offered only where a page has written one. A help button that opens an empty
@@ -276,6 +356,7 @@ function renderView(state) {
   // data costs an array; rebuilding one costs its crosshair and its zoom.
   if (activeRoute(state).name === "charts") charts.draw(state);
   if (activeRoute(state).name === "series") series.draw(state);
+  if (activeRoute(state).name === "compare") compare.draw(state);
 }
 
 function renderError(state) {
@@ -607,6 +688,10 @@ document.addEventListener("click", (event) => {
   if (action === "profile-resolve") resolveProfile(profile);
   if (action === "profile-verify") verifyProfile(profile);
   if (action === "archive-clear") clearArchiveFilters();
+  if (action === "run-toggle") toggleRun(button.dataset.recording);
+  if (action === "compare-runs") compareSelected();
+  if (action === "compare-clear") set({ selectedRuns: [] });
+  if (action === "compare-phase") compareOver(button.dataset.phase || null);
   if (action === "help-close") closeHelp();
   if (action === "table-sort") sortTable(button.dataset.column);
   if (action === "table-copy") copyTable();
@@ -660,6 +745,7 @@ window.addEventListener("resize", () => {
   const route = activeRoute(get()).name;
   if (route === "charts") charts.resize();
   if (route === "series") series.resize();
+  if (route === "compare") compare.resize();
 });
 
 await pollHealth();

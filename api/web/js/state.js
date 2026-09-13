@@ -42,6 +42,15 @@ const state = {
   //: How many usable runs a series needs before it has a band. Sent by the API so
   //: the list can say which series are long enough to be worth opening.
   seriesFloor: 0,
+  //: Which runs of the open series are ticked for comparison. Held while the page
+  //: is open rather than in the hash: it is a selection in progress, and a URL that
+  //: changed on every tick would fill the back button with half-made choices.
+  selectedRuns: [],
+  //: The comparison being read, and each of its runs' samples for the overlay. The
+  //: table comes summarised from the server; these are only what the lines are drawn
+  //: from, which is why they are kept apart from it.
+  comparison: null,
+  comparisonSeries: null,
   live: null,
   error: null,
   //: A short confirmation of something that worked, in the same slot as the error.

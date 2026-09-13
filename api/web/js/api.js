@@ -59,6 +59,11 @@ export const api = {
   // pipes in it, and burying that in a path hides the very thing it is readable for.
   seriesTrend: (key) =>
     request(`/api/series/trend?${new URLSearchParams({ key })}`),
+  compare: (ids, phase) => {
+    const query = new URLSearchParams(ids.map((id) => ["run", id]));
+    if (phase) query.set("phase", phase);
+    return request(`/api/compare?${query}`);
+  },
   startRecording: (body) => request("/api/recordings", json("POST", body)),
   stopRecording: (id) =>
     request(`/api/recordings/${encodeURIComponent(id)}/stop`, { method: "POST" }),

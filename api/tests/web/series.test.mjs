@@ -406,3 +406,39 @@ test("a series that could not be judged says so rather than showing a quiet pass
   assert.match(markup, /not judged/);
   assert.doesNotMatch(markup, /within band/);
 });
+
+/* ------------------------------------------------------------ picking runs */
+
+const picked = (runs, chosen) =>
+  render({ selectedSeries: series(runs), selectedRuns: chosen });
+
+test("with nothing ticked the page says what ticking is for", () => {
+  const markup = picked([point()], []);
+  assert.match(markup, /Tick two or\s+more to compare/);
+  assert.doesNotMatch(markup, /data-action="compare-runs"/);
+});
+
+test("one run is not a comparison, so the button is offered but refuses", () => {
+  const markup = picked([point()], ["r1"]);
+  assert.match(markup, /data-action="compare-runs"[^>]*disabled/);
+  assert.match(markup, /Compare 1/);
+});
+
+test("two or more and the button goes", () => {
+  const markup = picked([point(), point({ recording_id: "r2" })], ["r1", "r2"]);
+  assert.match(markup, /Compare 2/);
+  assert.doesNotMatch(markup, /data-action="compare-runs"[^>]*disabled/);
+});
+
+test("too many says so before the request rather than after it is refused", () => {
+  // Past six an overlay has more lines than there are colours anyone can tell apart.
+  const markup = picked([point()], ["a", "b", "c", "d", "e", "f", "g"]);
+  assert.match(markup, /7 is too many \(max 6\)/);
+  assert.match(markup, /data-action="compare-runs"[^>]*disabled/);
+});
+
+test("a ticked run is marked in its own row, not only in the count", () => {
+  const markup = picked([point({ recording_id: "r1" })], ["r1"]);
+  assert.match(markup, /<tr class="metrix-picked">/);
+  assert.match(markup, /type="checkbox" checked/);
+});

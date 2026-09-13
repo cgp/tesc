@@ -23,9 +23,17 @@ can report a number the count will not support.
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
-from metrix_api.stats import Delta, Recovery, Summary, compare, recovery, summarize
+from metrix_api.stats import (
+    Delta,
+    Recovery,
+    Summary,
+    compare,
+    merge,
+    recovery,
+    summarize,
+)
 from metrix_api.stats.trend import BAND_WINDOW, Run, Trend, Verdict, trend, verdict_from
 from metrix_api.store import recordings as store
 
@@ -321,3 +329,139 @@ def series_verdict(
     this one is measured from what the setup actually does.
     """
     return series_trends(conn, key, window=window).verdict(recording_id)
+#: How many runs one comparison may hold. Not a storage limit -- everything is kept
+#: (design-api 17.1) -- but an overlay of more lines than there are distinguishable
+#: colours stops being readable, and the answer to that is fewer runs rather than
+#: more hues. The same bargain the chart palette already makes across targets.
+MAX_COMPARED = 6
+
+#: What the identity tuple is made of, in words a person can read off a row. Used to
+#: say *which part* differs when two runs are not comparable, because "different
+#: setup" without naming the difference is the same as no answer.
+IDENTITY = {
+    "kind": lambda r: r.kind,
+    "profile": lambda r: r.profile,
+    "addressing": lambda r: r.addressing_mode,
+    "api version": lambda r: r.api_version,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class RunComparison:
+    """N runs side by side, and -- where it means anything -- merged into one."""
+
+    runs: list[store.RecordingRow] = field(default_factory=list)
+    phase: str | None = None
+    #: Per metric, per run. A run missing a metric is absent rather than zero.
+    per_run: dict[str, dict[str, Summary]] = field(default_factory=dict)
+    #: Per metric, every run's readings in one distribution. Empty when the runs do
+    #: not share a setup -- see `mergeable`.
+    merged: dict[str, Summary] = field(default_factory=dict)
+    #: Each run against the reference, per metric. The reference is the oldest run,
+    #: because a comparison reads as "what changed since", and what changed since is
+    #: measured from the earlier thing.
+    deltas: dict[str, dict[str, Delta]] = field(default_factory=dict)
+    reference_id: str | None = None
+    #: Which parts of the identity tuple are not shared: name -> the values seen.
+    differences: dict[str, list[str]] = field(default_factory=dict)
+
+    @property
+    def metrics(self) -> list[str]:
+        return sorted(self.per_run)
+
+    @property
+    def mergeable(self) -> bool:
+        """Whether pooling these runs describes anything real.
+
+        Runs of one setup are repeats of one measurement and merge into a better
+        version of it. Runs of *different* setups are measurements of different
+        things, and their pooled distribution describes nothing that exists -- it is
+        the average of an apple and a Tuesday, with a sample count that makes it look
+        authoritative. Side by side is still a legitimate way to read them
+        (design-api 17.2 says opening two setups deliberately is the only way to
+        compare across a change), so the overlay and the columns stay; only the
+        merged column is withheld.
+        """
+        return not self.differences and len(self.runs) > 1
+
+
+def compare_runs(
+    conn: sqlite3.Connection,
+    recording_ids: list[str],
+    *,
+    phase: str | None = None,
+) -> RunComparison:
+    """Read N runs as one table: each on its own, merged, and against the first.
+
+    `phase` restricts every run to that phase of its own timeline, which is what
+    design-api 17.5 asks for: baseline against baseline is environment drift, measure
+    against measure is the actual question, and settle against settle says whether
+    recovery is degrading. Without it the whole recording is the window.
+    """
+    runs = []
+    for recording_id in recording_ids[:MAX_COMPARED]:
+        try:
+            runs.append(store.get(conn, recording_id))
+        except LookupError:
+            continue
+    if not runs:
+        return RunComparison(phase=phase)
+
+    runs.sort(key=lambda r: (r.started_at, r.id))
+    ids = [r.id for r in runs]
+    values = store.pooled_values(conn, ids, phase=phase)
+
+    per_run: dict[str, dict[str, Summary]] = {}
+    for run in runs:
+        for metric, readings in values.get(run.id, {}).items():
+            per_run.setdefault(metric, {})[run.id] = summarize(metric, readings)
+
+    differences = {
+        name: sorted({str(read(run)) for run in runs})
+        for name, read in IDENTITY.items()
+        if len({read(run) for run in runs}) > 1
+    }
+
+    reference = runs[0]
+    comparison = RunComparison(
+        runs=runs,
+        phase=phase,
+        per_run=per_run,
+        deltas={
+            metric: {
+                run.id: compare(by_run[reference.id], by_run[run.id])
+                for run in runs[1:]
+                if run.id in by_run and reference.id in by_run
+            }
+            for metric, by_run in per_run.items()
+        },
+        reference_id=reference.id,
+        differences=differences,
+    )
+    if not comparison.mergeable:
+        return comparison
+
+    return replace(
+        comparison,
+        merged={
+            metric: merge(metric, [values.get(i, {}).get(metric, []) for i in ids])
+            for metric in per_run
+        },
+    )
+
+
+def shared_phases(conn: sqlite3.Connection, recording_ids: list[str]) -> list[str]:
+    """Phases every one of these runs recorded, in the order they happen.
+
+    Only the shared ones: offering a phase that half the runs do not have would make
+    a comparison whose columns are missing for no stated reason. An observation-only
+    run has one phase, so a group containing one offers only that.
+    """
+    order = ["baseline", "warmup", "measure", "drain", "settle"]
+    seen: list[set[str]] = []
+    for recording_id in recording_ids:
+        seen.append({row["phase"] for row in store.phases(conn, recording_id)})
+    if not seen:
+        return []
+    shared = set.intersection(*seen)
+    return [phase for phase in order if phase in shared] + sorted(shared - set(order))

@@ -39,15 +39,19 @@ const CAPTIONS = {
   "fd.open": "Open descriptors per run, which is where a slow leak shows up first.",
 };
 
+//: The server's cap, repeated here so the button can say why before the request is
+//: made rather than after it is refused.
+const MAX_COMPARED = 6;
+
 let charts = new Map();
 let drawnFor = null;
 
 export function selectState(state) {
-  return [state.series, state.selectedSeries];
+  return [state.series, state.selectedSeries, state.selectedRuns];
 }
 
 export function render(state) {
-  if (state.selectedSeries) return detail(state.selectedSeries);
+  if (state.selectedSeries) return detail(state.selectedSeries, state.selectedRuns ?? []);
   return list(state);
 }
 
@@ -269,7 +273,7 @@ function bandState(usable, floor) {
 
 /* ----------------------------------------------------------------- one series */
 
-function detail(series) {
+function detail(series, chosen) {
   const runs = series.runs ?? [];
   const identity = series.series ?? {};
 
@@ -309,7 +313,7 @@ function detail(series) {
     ${verdictCard(series)}
     ${legend(series)}
     ${cards || noMetrics()}
-    ${runsCard(series)}
+    ${runsCard(series, chosen)}
   </div>`;
 }
 
@@ -369,6 +373,64 @@ function firstTrend(series) {
 }
 
 /**
+ * Tick runs, then compare them.
+ *
+ * The button says what it will do rather than being disabled and silent: two is the
+ * minimum because one run is not a comparison, and six is the maximum because past
+ * that an overlay has more lines than there are colours anyone can tell apart.
+ */
+function compareAction(chosen) {
+  const n = chosen.length;
+  if (!n) {
+    return `<div class="card-actions text-secondary" data-compare-actions>Tick two or
+      more to compare them.</div>`;
+  }
+  const tooMany = n > MAX_COMPARED;
+  return `<div class="card-actions d-flex align-items-center gap-2" data-compare-actions>
+    <button class="btn" data-action="compare-clear">Clear</button>
+    <button class="btn btn-primary" data-action="compare-runs"
+            ${n < 2 || tooMany ? "disabled" : ""}
+            title="${escape(
+              tooMany
+                ? `At most ${MAX_COMPARED}: past that an overlay stops being readable`
+                : "Read these runs side by side"
+            )}">
+      ${icon("chart-line")} ${
+        tooMany ? `${n} is too many (max ${MAX_COMPARED})` : `Compare ${n}`
+      }
+    </button>
+  </div>`;
+}
+
+/**
+ * Tick a run without rebuilding the page.
+ *
+ * Re-rendering on every tick would replace the checkbox under the pointer and take
+ * focus off it — exactly wrong for the one interaction here that anyone does several
+ * times in a row, and on a long list it would throw away the scroll position too.
+ * The same bargain the live table and the charts make.
+ *
+ * The boxes are set from the state rather than left to toggle themselves: the click
+ * that reaches them is intercepted, so the state is the only thing that says which
+ * runs are picked, and reading it back off the DOM would give two answers.
+ *
+ * Returns false when the page it expected is not on screen, and the caller renders.
+ */
+export function patchSelection(chosen) {
+  const boxes = document.querySelectorAll('[data-action="run-toggle"]');
+  const actions = document.querySelector("[data-compare-actions]");
+  if (!boxes.length || !actions) return false;
+
+  for (const box of boxes) {
+    const picked = chosen.includes(box.dataset.recording);
+    box.checked = picked;
+    box.closest("tr")?.classList.toggle("metrix-picked", picked);
+  }
+  actions.outerHTML = compareAction(chosen);
+  return true;
+}
+
+/**
  * The runs behind the points.
  *
  * A trend says which way a metric went; this is what says which run to open next,
@@ -376,7 +438,7 @@ function firstTrend(series) {
  * full. Newest first, because the run anyone is looking for is almost always the
  * most recent one.
  */
-function runsCard(series) {
+function runsCard(series, chosen = []) {
   const runs = [...(series.runs ?? [])].reverse();
   if (!runs.length) return "";
 
@@ -388,7 +450,13 @@ function runsCard(series) {
   const rows = runs
     .map((run) => {
       const point = points.get(run.id);
-      return `<tr>
+      const picked = chosen.includes(run.id);
+      return `<tr class="${picked ? "metrix-picked" : ""}">
+        <td>
+          <input class="form-check-input m-0" type="checkbox" ${picked ? "checked" : ""}
+                 data-action="run-toggle" data-recording="${escape(run.id)}"
+                 aria-label="Compare ${escape(run.id)}">
+        </td>
         <td class="name">
           <a href="#/recordings/${encodeURIComponent(run.id)}">${escape(run.id)}</a>
           ${
@@ -415,15 +483,17 @@ function runsCard(series) {
           a median over eleven readings and one over six hundred are different
           claims.</div>
       </div>
+      ${compareAction(chosen)}
     </div>
     <div class="table-responsive">
       <table class="table card-table table-vcenter metrix-table">
         <thead><tr>
-          <th style="width:28%">Recording</th>
-          <th style="width:18%">Started</th>
+          <th style="width:3%"></th>
+          <th style="width:25%">Recording</th>
+          <th style="width:17%">Started</th>
           <th class="num" style="width:9%">Length</th>
           <th class="num" style="width:17%">${escape(metric ?? "Value")}</th>
-          <th style="width:16%">Against the band</th>
+          <th style="width:17%">Against the band</th>
           <th style="width:12%">Notes</th>
         </tr></thead>
         <tbody>${rows}</tbody>
@@ -754,7 +824,3 @@ export function resize() {
   }
 }
 
-/** Whether the charts on screen belong to the series in state. */
-export function drawnSeries() {
-  return drawnFor;
-}

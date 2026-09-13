@@ -17,6 +17,7 @@ baseline's own spread says.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
 from statistics import median, stdev
 
@@ -136,6 +137,33 @@ def summarize(metric: str, values: list[float]) -> Summary:
             quantile(ordered, 0.75) - quantile(ordered, 0.25) if n >= MIN_FOR_MEDIAN else None
         ),
     )
+
+
+def merge(metric: str, windows: Iterable[Iterable[float]]) -> Summary:
+    """One distribution out of several windows of the same thing.
+
+    **Distributions merge; percentiles do not.** The mean of five p95s is not the p95
+    of the five windows together and has no interpretation at all -- it is a number
+    made of order statistics, each describing a different set. So this pools the
+    readings and describes the pooled set once, which is the only arithmetic that
+    gives an answer about the whole.
+
+    That is the same property design-api 17.5 relies on for HDR histograms when the
+    engine lands: a histogram is a distribution and merges, which is why the
+    aggregate of a run group is computed from merged histograms rather than from
+    averaged percentiles.
+
+    It is also the cheapest route past a short window (design-engine 12.2). Five runs
+    each too short to support a p95 merge into one set that does: the count that
+    travels with the answer is the sum of all of them, and it is a real count of real
+    readings rather than a borrowed one.
+
+    Merging is only meaningful across windows that measure the same thing. Nothing
+    here can check that -- it is a question about setups, not about numbers -- so the
+    caller decides, and `analysis.compare_runs` is where that decision is made and
+    refused.
+    """
+    return summarize(metric, [value for window in windows for value in window])
 
 
 #: How far a metric may sit from its baseline before it is worth looking at, as a
