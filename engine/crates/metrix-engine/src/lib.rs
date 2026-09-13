@@ -2,11 +2,14 @@
 
 mod bundle;
 mod http;
+mod output;
 mod schedule;
 mod wake_clock;
 
 pub use bundle::Plan;
 pub use http::Failure;
+use metrix_metrics::events::Phase;
+pub use output::{Output, OutputReport};
 
 use metrix_metrics::aggregation::{Accumulator, Cause, Sample, Window};
 use std::{
@@ -48,6 +51,8 @@ pub struct Report {
 struct Slot {
     active: bool,
     worker: usize,
+    iteration: u64,
+    admitted: Instant,
     future: ReusableBoxFuture<'static, Completion>,
 }
 
@@ -61,6 +66,24 @@ pub async fn run_with_snapshots(
     plan: Plan,
     shutdown: impl Future<Output = ()>,
     snapshots: Option<mpsc::Sender<Window>>,
+) -> Result<Report, String> {
+    run_internal(plan, shutdown, snapshots, None).await
+}
+
+/// NDJSON delivery shares the nonblocking snapshot path; request packets contain only scalars.
+pub async fn run_with_output(
+    plan: Plan,
+    shutdown: impl Future<Output = ()>,
+    output: &Output,
+) -> Result<Report, String> {
+    run_internal(plan, shutdown, None, Some(output)).await
+}
+
+async fn run_internal(
+    plan: Plan,
+    shutdown: impl Future<Output = ()>,
+    snapshots: Option<mpsc::Sender<Window>>,
+    output: Option<&Output>,
 ) -> Result<Report, String> {
     tokio::pin!(shutdown);
     let mut report = Report::default();
@@ -77,6 +100,8 @@ pub async fn run_with_snapshots(
         slots.push(Slot {
             active: false,
             worker: 0,
+            iteration: 0,
+            admitted: Instant::now(),
             future: ReusableBoxFuture::new(execute(None)),
         });
     }
@@ -86,6 +111,10 @@ pub async fn run_with_snapshots(
     workers[0].counters.connections_opened = 1;
     let mut interval_metrics = Accumulator::default();
     let start = Instant::now();
+    let mut phase = Phase::Measure;
+    if let Some(output) = output {
+        output.phase(phase);
+    }
     let mut last_snapshot = Duration::ZERO;
     let mut snapshot_tick = tokio::time::interval_at(
         start + Duration::from_millis(250),
@@ -98,17 +127,40 @@ pub async fn run_with_snapshots(
     let mut active = 0;
     while Instant::now() < start + plan.duration || schedule.next_deadline().is_some() || active > 0
     {
+        if phase == Phase::Measure
+            && Instant::now() >= start + plan.duration
+            && schedule.next_deadline().is_none()
+        {
+            flush(
+                &mut workers,
+                &mut interval_metrics,
+                &mut report,
+                &mut last_snapshot,
+                start.elapsed(),
+                active,
+                snapshots.as_ref(),
+            );
+            if let Some(output) = output {
+                output.summary(report.last_window.as_ref().expect("flushed window"), phase);
+                output.phase(Phase::Drain);
+            }
+            phase = Phase::Drain;
+        }
         let next = schedule.next_deadline();
         tokio::select! {
             biased;
             _ = &mut shutdown => {
                 report.interrupted = true;
                 report.cancelled = active as u64;
-                for slot in &slots { if slot.active { workers[slot.worker].cancel(); } }
+                for slot in &slots { if slot.active {
+                    workers[slot.worker].cancel();
+                    if let Some(output) = output { output.cancel(slot.iteration, phase, slot.admitted.elapsed()); }
+                } }
                 break;
             }
             _ = snapshot_tick.tick() => {
                 flush(&mut workers, &mut interval_metrics, &mut report, &mut last_snapshot, start.elapsed(), active, snapshots.as_ref());
+                if let Some(output) = output { output.summary(report.last_window.as_ref().expect("flushed window"), phase); }
             }
             // Reap completed requests before deciding whether a due arrival hits a cap.
             (index, completion) = poll_fn(|cx| {
@@ -122,6 +174,7 @@ pub async fn run_with_snapshots(
                 slots[index].active = false;
                 active -= 1;
                 let observation = completion.observation;
+                if let Some(output) = output { output.request(slots[index].iteration, phase, &observation, plan.request.body.len()); }
                 workers[slots[index].worker].finish(Sample {
                     chain_duration: observation.total, request_duration: observation.request_duration,
                     ttfb: observation.ttfb, drift: observation.sent.map(|_| observation.drift),
@@ -152,6 +205,8 @@ pub async fn run_with_snapshots(
                             assert!(slot.future.try_set(future).is_ok(), "request future layout changed");
                             slot.active = true;
                             slot.worker = report.admitted as usize % workers.len();
+                            slot.iteration = report.admitted;
+                            slot.admitted = Instant::now();
                             workers[slot.worker].start();
                             active += 1;
                             report.admitted += 1;
@@ -171,6 +226,12 @@ pub async fn run_with_snapshots(
         0,
         snapshots.as_ref(),
     );
+    if let Some(output) = output {
+        output.summary(report.last_window.as_ref().expect("flushed window"), phase);
+        if phase == Phase::Measure {
+            output.phase(Phase::Drain);
+        }
+    }
     // Dropping slots cancels pending body reads; dropping the pool aborts its drivers.
     Ok(report)
 }

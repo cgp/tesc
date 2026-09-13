@@ -404,3 +404,12 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - Merge/reset partitions every 250ms into interval and cumulative accumulators; flush the final partial window after drain or cancellation. Retain bounded report state and provide optional bounded snapshot delivery with try_send and dropped-window accounting.
 - Add tests for uneven-population merging, serialization, empty/zero/overflow samples, failure/cancellation populations, interval conservation, final drain and stalled/closed consumers. Extend existing load tests to reconcile metrics with execution counts. Mark B1.3 complete; B1.4 NDJSON output is next.
 - Validation: bash scripts/check.sh passes, including six new aggregation/snapshot tests and the existing standalone 75 RPS/30s acceptance; 384 API tests and 67 front-end tests pass (5 live-host tests skipped). Shared schemas are unchanged.
+
+## 2026-09-13 — Engine B1.4
+
+- Shipped bounded NDJSON --summary (stdout by default) and opt-in --events streams with shared lifecycle, measure/drain boundaries, 250ms interval histograms, request identifiers, fixed transport errors and cancellation records.
+- Added deterministic --sample-rate/--seed selection, separate intentional omission/backpressure counts, events_dropped annotations on healthy streams and a 500ms output shutdown bound. New output files are created exclusively; streams cannot share a destination.
+- Added required run identity, timestamp, engine version and SHA-256 digest of exact loaded bundle documents. Request capture excludes URLs, headers, query values, bodies and raw transport errors. Frozen v1 numeric self-metric fields are explicitly annotated unavailable pending their collectors.
+- Added standalone stream, conservation, sampling, redaction, failure/cancellation, overwrite protection and unread-pipe regressions. scripts/check.sh validates genuinely emitted NDJSON against the frozen event schema in the full suite.
+- B1.4 complete; B1.5 self-metrics is next. Work remains isolated on engine in its worktree.
+- Validation: full bash scripts/check.sh passed, including emitted-stream schema validation, 384 Python tests and 67 front-end tests; scoped engine checks passed again after the final queue/completion adjustments.

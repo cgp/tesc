@@ -53,7 +53,27 @@ async fn standalone_binary_holds_75_rps_for_30_seconds_without_the_api() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(output.stdout.is_empty(), "NDJSON output is B1.4");
+    let records: Vec<metrix_metrics::Record> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(matches!(
+        records.first(),
+        Some(metrix_metrics::Record::RunStarted(_))
+    ));
+    assert!(
+        matches!(records.last(), Some(metrix_metrics::Record::RunFinished(finished)) if finished.exit_code == 0)
+    );
+    let completed: u64 = records
+        .iter()
+        .filter_map(|record| match record {
+            metrix_metrics::Record::Summary(summary) => {
+                Some(summary.chains["ping"].iterations_completed)
+            }
+            _ => None,
+        })
+        .sum();
     let diagnostic = String::from_utf8(output.stderr).unwrap();
     let values: HashMap<_, _> = diagnostic
         .split_whitespace()
@@ -63,6 +83,8 @@ async fn standalone_binary_holds_75_rps_for_30_seconds_without_the_api() {
     assert_eq!(number("offered"), 2250);
     assert_eq!(number("failed"), 0);
     assert_eq!(number("responses"), number("admitted"));
+    assert_eq!(completed, number("responses"));
+    assert_eq!(number("summaries_dropped"), 0);
     assert_eq!(number("sent_finished"), number("responses"));
     // A loaded CI host may skip late arrivals; require >=98% of the requested rate,
     // with the full shortfall and drift explicitly reported instead of hidden.

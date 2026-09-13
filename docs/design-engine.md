@@ -2,7 +2,7 @@
 
 The load generator: what it executes, how it measures, and why the numbers can be trusted. Pairs with [design-api.md](design-api.md); the boundary is in [design-api-engine-contract.md](design-api-engine-contract.md).
 
-> **Status: core load-path implementation.** B1.1 supplies the mock target; B1.2 adds fixed-rate scheduling and HTTP transport. See [implementation-engine.md](implementation-engine.md) for the remaining milestones.
+> **Status: B1.1–B1.4 implemented.** Standalone mock and fixed-rate HTTP execution now produce interval histograms and bounded NDJSON streams. See [implementation-engine.md](implementation-engine.md) for the remaining milestones.
 
 The engine takes one self-contained plan bundle and emits NDJSON. It knows nothing about the API, the database, the UI, or AWS, and nothing in this design may assume otherwise.
 
@@ -102,12 +102,32 @@ Connection and stream failures are counted without logging request/response data
 `max_concurrency` defaults to 200; worker threads default to physical cores minus
 one, minimum one. DNS resolution happens at setup; reconnects use those addresses.
 
-Until B1.3–B1.5, the binary writes only an end-of-run diagnostic to stderr: offered,
-admitted, sent among finished attempts, response, failure, cancellation and skipped
-counts, peak in-flight, and maximum send drift (with its finished-send count). These answer whether the requested
-traffic was attempted; there are no percentiles or NDJSON promises yet. HTTP status
-codes are responses, not assertion failures. Exit 0 means execution finished, 1
-means setup/internal failure, and 130 means interruption; SLO verdicts land in B4.6.
+`--summary` defaults to `-` (stdout); `--events` is opt-in. Each accepts a new file
+or `-`, but cannot share a destination. Both carry lifecycle and annotations;
+only summary carries 250ms interval histograms, and only events carries requests.
+Writers run outside the scheduler with bounded queues, reserved lifecycle capacity
+and nonblocking admission. Lost records raise `events_dropped` on either healthy
+stream; stderr also reports losses and unfinished writers. Shutdown waits at most
+500ms for output, so a blocked pipe may end without its final records. Files are
+created exclusively, preventing accidental overwrites of a bundle or recording.
+`--sample-rate` in [0, 1] selects iterations deterministically using `--seed`
+(default 0); sampled requests are labelled and intentional omissions are counted
+separately from backpressure. Request events retain identifiers and numeric timings,
+never URLs, headers, bodies or raw transport errors. Unavailable DNS/connect/TLS
+timings are omitted; cancellations use `other` with a fixed message and elapsed
+attempt duration. Transport errors without an exact OS cause use `other`.
+
+All timestamps use one monotonic run clock, including setup and final drain.
+Measure and drain windows are split at the admission boundary; full phase execution
+remains B2.1. Required metadata includes a SHA-256 digest of length-framed relative
+paths and the exact bytes of the mix, targets and referenced call files, sorted by
+path. The frozen v1 schema requires numeric health fields: until their collectors
+land, zero is an unavailable sentinel explicitly identified by a
+`self_metrics_unavailable` annotation, never evidence of generator health. Available
+drift and in-flight measurements still carry their underlying interval counts.
+Stderr retains the final traffic diagnostic. HTTP status codes are responses, not
+assertion failures. Exit 0 means execution finished, 1 setup/internal or output
+failure, and 130 interruption; SLO verdicts land in B4.6.
 
 ---
 
@@ -513,7 +533,7 @@ cancellation flushes a partial window. The report retains totals and the last
 window only. An optional bounded channel receives window copies via `try_send`;
 full or closed channels increment a dropped-window count and never delay traffic.
 Snapshot allocation/serialization occurs only off the per-request recording path.
-NDJSON wiring and percentile support rules remain B1.4 and B2.2.
+NDJSON carries these populations in B1.4; percentile support rules remain B2.2.
 
 ### 9.1 Throughput & volume
 - Requests attempted / completed / failed — overall, per chain, per step
