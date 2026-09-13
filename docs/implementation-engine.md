@@ -2,7 +2,7 @@
 
 The load generator. Buildable and testable with nothing but a shell, a bundle, and the mock target — no API, no database, no cloud credentials.
 
-> **Status: B1 complete.** The standalone load path includes interval histograms, bounded NDJSON and live send-drift, in-flight, pre-send queue and timer-lag measurements. B2.1, the phase timeline, is next.
+> **Status: B1 and B2.1 complete.** The standalone load path includes the full phase timeline, separate warmup measurements, interval histograms, bounded NDJSON and live self-metrics. B2.2, percentile support rules, is next.
 
 Design: [design-engine.md](design-engine.md). Boundary and shared foundation (**F0, do this first**): [design-api-engine-contract.md](design-api-engine-contract.md). The other track: [implementation-api.md](implementation-api.md).
 
@@ -81,7 +81,7 @@ Buildable and testable with nothing but a shell, a bundle, and the mock target.
 
 ### B2 — Measurement you can trust
 
-- [ ] **B2.1** — Phase timeline: baseline → warmup → measure → drain → settle (§10.1)
+- [x] **B2.1** — Phase timeline: baseline → warmup → measure → drain → settle (§10.1)
 - [ ] **B2.2** — Percentile support rules: the 2250 floor, CIs on p99, p99.9 suppression (§12.1)
 - [ ] **B2.3** — Coordinated-omission correction reported beside raw (§12.2)
 - [ ] **B2.4** — Annotation detectors: `concurrency_cap_reached`, `rate_not_achieved`, `send_schedule_drift`, `sample_count_low` (§13.1)
@@ -156,6 +156,6 @@ The mock target (B1.1) is the measurement ground truth: seeded latency distribut
 
 ## 7. Where to start
 
-B2.1: implement baseline, warmup, measure, drain and settle. `examples/plans/mock-fixed` runs one static call against the mock; unsupported later-step features fail before sending traffic ([design-engine.md §2.3](design-engine.md#23-fixed-rate-execution-b12)). Tests run the copied binary at 75 RPS for 30s with only its bundle, requiring at least 98% achieved traffic. Self-metric tests cover live drift, cancellation, TLS waits, Hyper's HTTP/2 send boundary and executor stalls. Output tests check conservation, sampling, redaction and stalled pipes; the full check validates emitted records against the frozen schema. CPU/RSS/FD probes remain explicitly unavailable.
+B2.2: implement percentile support floors, confidence intervals and suppression. `examples/plans/mock-fixed` runs one static call against the mock; unsupported later-step features fail before sending traffic ([design-engine.md §2.3](design-engine.md#23-fixed-rate-execution-b12)). Tests run the copied binary at 75 RPS for 30s with only its bundle, requiring at least 98% achieved traffic. Phase tests cover idle windows, late warmup results, original drain deadlines and cancellation in every phase. Self-metric tests cover drift, TLS waits, Hyper's HTTP/2 send boundary and executor stalls. Output tests check conservation, sampling, redaction and stalled pipes; the full check validates emitted records against the frozen schema. CPU/RSS/FD probes remain explicitly unavailable.
 
 Then compare the reported p50/p95/p99 against the injected distribution by hand. That comparison is the real milestone — everything downstream assumes those numbers are right.

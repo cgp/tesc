@@ -131,6 +131,7 @@ async fn tls_handshake_wait_is_queued_until_a_pre_send_timeout() {
         worker: 0,
         iteration: 0,
         admitted: now,
+        phase: metrix_metrics::events::Phase::Measure,
         send_state: Arc::clone(&state),
         send_recorded: false,
         future: ReusableBoxFuture::new(execute(Some(Job {
@@ -154,6 +155,8 @@ async fn tls_handshake_wait_is_queued_until_a_pre_send_timeout() {
             .is_err()
     );
     let mut workers = vec![Accumulator::default()];
+    let mut warmup_workers = vec![Accumulator::default()];
+    let mut warmup_interval = Accumulator::default();
     let mut interval = Accumulator::default();
     let mut report = crate::Report::default();
     let mut lag = crate::Lag::default();
@@ -162,6 +165,9 @@ async fn tls_handshake_wait_is_queued_until_a_pre_send_timeout() {
         crate::Recording {
             slots: &mut slots,
             workers: &mut workers,
+            warmup_workers: &mut warmup_workers,
+            warmup_interval: &mut warmup_interval,
+            phase: metrix_metrics::events::Phase::Measure,
             lag: &mut lag,
         },
         &mut interval,
@@ -183,6 +189,9 @@ async fn tls_handshake_wait_is_queued_until_a_pre_send_timeout() {
         crate::Recording {
             slots: &mut slots,
             workers: &mut workers,
+            warmup_workers: &mut warmup_workers,
+            warmup_interval: &mut warmup_interval,
+            phase: metrix_metrics::events::Phase::Measure,
             lag: &mut lag,
         },
         &mut interval,

@@ -71,8 +71,8 @@ the generator's hot-path constraints do not apply to this test target.
 ### 2.3 Fixed-rate execution (B1.2)
 
 `metrix-engine --plan examples/plans/mock-fixed` executes the initial supported
-subset: one target, one 100% chain, one static call, fixed open load, and explicitly
-zero baseline/warmup/settle. Later-step features (assertions, extraction, generators,
+subset: one target, one 100% chain, one static call, fixed open load, and the
+full B2.1 phase timeline. Later-step features (assertions, extraction, generators,
 auth, sessions beyond stateless `fresh`, mixtures, sweeps, SLOs, redirects and target
 Host/SNI overrides) fail before network I/O. This keeps partial execution from
 silently producing a different workload. Bundle files must stay within its root.
@@ -118,8 +118,8 @@ timings are omitted; cancellations use `other` with a fixed message and elapsed
 attempt duration. Transport errors without an exact OS cause use `other`.
 
 All timestamps use one monotonic run clock, including setup and final drain.
-Measure and drain windows are split at the admission boundary; full phase execution
-remains B2.1. Required metadata includes a SHA-256 digest of length-framed relative
+Every phase boundary flushes its partial window. Required metadata includes a
+SHA-256 digest of length-framed relative
 paths and the exact bytes of the mix, targets and referenced call files, sorted by
 path. The frozen v1 schema requires numeric OS resource fields: until CPU, RSS and
 file-descriptor probes land, zero is an unavailable sentinel explicitly identified
@@ -620,6 +620,23 @@ Every run — with or without load — is a sequence of named phases on one mono
 Phase boundaries are recorded as timestamped events, drawn as vertical annotations on every chart, and available as filters — any statistic can be computed over any phase. The default comparison the UI presents is **baseline vs measure vs settle** for each host metric, as a three-column table alongside the charts.
 
 Both pauses are configurable, defaulted (30s baseline, 60s settle), and can be set to zero. They are on by default because the cost is a minute of wall clock and the benefit is that the numbers mean something.
+
+B2.1 runs this timeline after target connection setup, using one monotonic clock.
+Zero-length baseline, warmup and settle phases are skipped; drain is always marked.
+Baseline and settle emit idle summaries and send no requests. Warmup is optional,
+at the configured fixed rate; `load.duration` covers measure only. The two traffic
+phases have absolute schedules anchored to their boundaries, with expired arrivals
+skipped on late wakes. Warmup connections and request slots carry into measure.
+Each request keeps its admission phase, including its event, send drift and terminal
+result. Separate accumulators exclude all warmup samples from the measured report,
+even when they finish in measure or drain. Such completions produce additional
+`warmup` summaries over the same window; their target rate is zero and companion
+annotations state the current timeline phase. The primary summary carries global
+in-flight/queue gauges; additional warmup summaries carry only warmup gauges.
+Measure results completed during drain remain in measured totals. Drain waits for
+all admitted attempts under their original deadlines, then closes connections and
+starts settle. Ctrl-C cancels requests, flushes the current phase and emits no
+unreached phase transitions. Full phase support remains independent of an observer.
 
 **Delta-from-baseline** is a first-class derived series: for every host metric, the observed value minus its baseline-phase median. This is usually the series you actually want to read, and is what the target-side charts plot by default, with absolute values a toggle away.
 

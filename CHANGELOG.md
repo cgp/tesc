@@ -422,3 +422,10 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - Added regressions for live drift before slow responses, sample conservation, cancellation, stalled TLS/pre-send timeouts, HTTP/2 peer-capacity limits, executor stalls and emitted metric/sample-count pairing. Reused exact distribution maxima without histogram encoding for scalar drift output.
 - B1.5 and B1 complete; B2.1 phase timeline is next. Changes remain isolated on engine in its worktree.
 - Validation: full bash scripts/check.sh passed, including Rust fmt/clippy/tests, the copied binary 75 RPS/30s acceptance run, emitted NDJSON schema validation, 384 Python tests and 67 front-end regressions.
+
+## 2026-09-13 — Engine B2.1
+
+- Implemented baseline, optional warmup, measure, drain and settle with absolute traffic schedules and boundary snapshots. Idle phases emit summaries without sending requests; drain retains each admitted request's original timeout and closes the pool before settle.
+- Kept request events and samples tied to admission phase, including late warmup completions and cancellations. Separate warmup accumulators and summaries prevent measured histograms and counters from including warmup work. Moved the execution future onto the heap for the Windows CLI stack.
+- Updated the engine design and checklist; B2.1 is complete and B2.2 is next. Added phase, cancellation, timeout, default and overflow coverage plus schema validation of real phase streams.
+- Validation: bash scripts/check.sh passed, including Rust tests and the 75 RPS standalone acceptance run, 384 API tests (5 skipped), 67 front-end tests, schema drift and emitted NDJSON contract checks.

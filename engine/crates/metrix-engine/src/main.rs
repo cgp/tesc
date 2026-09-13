@@ -8,7 +8,7 @@ use std::process::ExitCode;
 #[derive(Parser)]
 #[command(about = "Run a fixed-rate HTTP plan without a control plane")]
 struct Args {
-    /// Bundle directory. B1.2 supports one static call, one target and zero phases.
+    /// Bundle directory. Supports one static call, one target and a complete phase timeline.
     #[arg(
         long,
         required_unless_present = "emit_schemas",
@@ -144,10 +144,17 @@ fn execute(args: Args) -> Result<ExitCode, String> {
         report.skipped_connections,
         report.peak_in_flight,
         report.max_send_drift.as_secs_f64() * 1000.0,
-        report.metrics.drift.count(),
+        report.metrics.drift.count() + report.warmup_metrics.drift.count(),
         report.max_scheduler_lag.as_secs_f64() * 1000.0,
         report.scheduler_lag_samples,
         report.interrupted
+    );
+    eprintln!(
+        "measured_started={} measured_completed={} warmup_started={} warmup_completed={}",
+        report.metrics.counters.started,
+        report.metrics.counters.completed,
+        report.warmup_metrics.counters.started,
+        report.warmup_metrics.counters.completed
     );
     Ok(if report.interrupted {
         ExitCode::from(130)

@@ -29,6 +29,9 @@ pub struct Plan {
     pub(crate) request: Arc<RequestTemplate>,
     pub(crate) rate: f64,
     pub(crate) duration: Duration,
+    pub(crate) baseline: Duration,
+    pub(crate) warmup: Duration,
+    pub(crate) settle: Duration,
     pub(crate) concurrency: usize,
     pub(crate) connections: usize,
     pub worker_threads: usize,
@@ -61,12 +64,6 @@ impl Plan {
         require(
             mix.load.stages.is_empty() && mix.load.breakpoint.is_none(),
             "mix.json/load: stages and breakpoint are not implemented",
-        )?;
-        require(
-            mix.phases.baseline.is_zero()
-                && mix.phases.settle.is_zero()
-                && mix.load.warmup.is_none_or(|d| d.is_zero()),
-            "mix.json/phases: set baseline, warmup and settle to zero until B2.1",
         )?;
         require(
             mix.auth.is_none() && mix.datasets.is_empty() && mix.generators.is_empty(),
@@ -115,6 +112,21 @@ impl Plan {
             .ok_or("mix.json/load/rate: required for fixed load")?;
         let duration = mix.load.duration.as_duration();
         Schedule::validate(rate, duration)?;
+        let baseline = mix.phases.baseline.as_duration();
+        let warmup = mix.load.warmup.map_or(Duration::ZERO, |d| d.as_duration());
+        let settle = mix.phases.settle.as_duration();
+        if !warmup.is_zero() {
+            Schedule::validate(rate, warmup)?;
+        }
+        let span = baseline
+            .checked_add(warmup)
+            .and_then(|d| d.checked_add(duration))
+            .and_then(|d| d.checked_add(settle))
+            .ok_or("mix.json/phases: timeline duration is not representable")?;
+        require(
+            std::time::Instant::now().checked_add(span).is_some(),
+            "mix.json/phases: timeline duration is not representable",
+        )?;
         let concurrency = mix.load.max_concurrency.unwrap_or(200) as usize;
         let connections = mix.engine.connections_per_host.unwrap_or(256) as usize;
         require(
@@ -231,6 +243,12 @@ impl Plan {
             !timeout.is_zero() && std::time::Instant::now().checked_add(timeout).is_some(),
             "call/timeout_ms: must be positive and representable by the monotonic clock",
         )?;
+        require(
+            span.checked_add(timeout)
+                .and_then(|d| std::time::Instant::now().checked_add(d))
+                .is_some(),
+            "mix.json/phases: timeline duration including drain is not representable",
+        )?;
         Ok(Self {
             name: mix.name.clone(),
             hash: bundle_hash(&documents),
@@ -247,6 +265,9 @@ impl Plan {
             }),
             rate,
             duration,
+            baseline,
+            warmup,
+            settle,
             concurrency,
             connections,
             worker_threads,

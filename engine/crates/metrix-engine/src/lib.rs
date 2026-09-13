@@ -1,9 +1,11 @@
 //! Fixed-rate load execution independent of the control plane.
 
 mod bundle;
+mod execution;
 mod http;
 mod output;
 mod schedule;
+mod timeline;
 mod wake_clock;
 
 pub use bundle::Plan;
@@ -11,20 +13,13 @@ pub use http::Failure;
 use metrix_metrics::events::Phase;
 pub use output::{Output, OutputReport};
 
-use metrix_metrics::aggregation::{Accumulator, Cause, Sample, Window};
-use std::{
-    future::{Future, poll_fn},
-    sync::Arc,
-    task::Poll,
-    time::Duration,
-};
+use metrix_metrics::aggregation::{Accumulator, Cause, Window};
+use std::{future::Future, sync::Arc, time::Duration};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio_util::sync::ReusableBoxFuture;
 
-use http::{Completion, Job, Pool, SendState, execute};
-use schedule::Schedule;
-use wake_clock::WakeClock;
+use http::{Completion, SendState};
 
 #[derive(Debug, Default)]
 pub struct Report {
@@ -47,6 +42,8 @@ pub struct Report {
     pub scheduler_lag_samples: u64,
     pub interrupted: bool,
     pub metrics: Accumulator,
+    /// Warmup-admitted attempts, including completions after the warmup boundary.
+    pub warmup_metrics: Accumulator,
     pub last_window: Option<Window>,
     pub windows: u64,
     pub windows_dropped: u64,
@@ -57,6 +54,7 @@ struct Slot {
     worker: usize,
     iteration: u64,
     admitted: Instant,
+    phase: Phase,
     send_state: Arc<SendState>,
     send_recorded: bool,
     future: ReusableBoxFuture<'static, Completion>,
@@ -91,174 +89,8 @@ async fn run_internal(
     snapshots: Option<mpsc::Sender<Window>>,
     output: Option<&Output>,
 ) -> Result<Report, String> {
-    tokio::pin!(shutdown);
-    let mut report = Report::default();
-    let mut pool = tokio::select! {
-        biased;
-        _ = &mut shutdown => { report.interrupted = true; return Ok(report); }
-        pool = Pool::prepare(&plan.target, plan.connections.min(plan.concurrency), plan.request.timeout) => pool.map_err(|e| format!("target setup failed: {e}"))?,
-    };
-    let mut slots = Vec::new();
-    slots
-        .try_reserve_exact(plan.concurrency)
-        .map_err(|_| "cannot allocate request slots")?;
-    for _ in 0..plan.concurrency {
-        slots.push(Slot {
-            active: false,
-            worker: 0,
-            iteration: 0,
-            admitted: Instant::now(),
-            send_state: Arc::new(SendState::default()),
-            send_recorded: false,
-            future: ReusableBoxFuture::new(execute(None)),
-        });
-    }
-    let mut workers: Vec<_> = (0..plan.worker_threads.min(plan.concurrency))
-        .map(|_| Accumulator::default())
-        .collect();
-    workers[0].counters.connections_opened = 1;
-    let mut interval_metrics = Accumulator::default();
-    let mut lag = Lag::default();
-    let start = Instant::now();
-    let mut phase = Phase::Measure;
-    if let Some(output) = output {
-        output.phase(phase);
-    }
-    let mut last_snapshot = Duration::ZERO;
-    let mut snapshot_tick = tokio::time::interval_at(
-        start + Duration::from_millis(250),
-        Duration::from_millis(250),
-    );
-    snapshot_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut schedule = Schedule::new(start, plan.rate, plan.duration);
-    let clock = WakeClock::start(start, plan.rate, plan.duration)?;
-    let mut clock_tick = 0;
-    let mut active = 0;
-    while Instant::now() < start + plan.duration || schedule.next_deadline().is_some() || active > 0
-    {
-        if phase == Phase::Measure
-            && Instant::now() >= start + plan.duration
-            && schedule.next_deadline().is_none()
-        {
-            flush(
-                Recording {
-                    slots: &mut slots,
-                    workers: &mut workers,
-                    lag: &mut lag,
-                },
-                &mut interval_metrics,
-                &mut report,
-                &mut last_snapshot,
-                start.elapsed(),
-                active,
-                snapshots.as_ref(),
-            );
-            if let Some(output) = output {
-                output.summary(report.last_window.as_ref().expect("flushed window"), phase);
-                output.phase(Phase::Drain);
-            }
-            phase = Phase::Drain;
-        }
-        let next = schedule.next_deadline();
-        tokio::select! {
-            biased;
-            _ = &mut shutdown => {
-                report.interrupted = true;
-                report.cancelled = active as u64;
-                for slot in &slots { if slot.active {
-                    workers[slot.worker].cancel();
-                    if let Some(output) = output { output.cancel(slot.iteration, phase, slot.admitted.elapsed()); }
-                } }
-                break;
-            }
-            deadline = snapshot_tick.tick() => {
-                let late = Instant::now().saturating_duration_since(deadline);
-                lag.max = lag.max.max(late);
-                lag.samples += 1;
-                report.max_scheduler_lag = report.max_scheduler_lag.max(late);
-                report.scheduler_lag_samples += 1;
-                flush(Recording { slots: &mut slots, workers: &mut workers, lag: &mut lag }, &mut interval_metrics, &mut report, &mut last_snapshot, start.elapsed(), active, snapshots.as_ref());
-                if let Some(output) = output { output.summary(report.last_window.as_ref().expect("flushed window"), phase); }
-            }
-            // Reap completed requests before deciding whether a due arrival hits a cap.
-            (index, completion) = poll_fn(|cx| {
-                for (index, slot) in slots.iter_mut().enumerate() {
-                    if slot.active {
-                        if let Poll::Ready(completion) = slot.future.get_pin().poll(cx) { return Poll::Ready((index, completion)); }
-                    }
-                }
-                Poll::Pending
-            }), if active > 0 => {
-                record_send(&mut slots[index], &mut workers, &mut report);
-                slots[index].active = false;
-                active -= 1;
-                let observation = completion.observation;
-                if let Some(output) = output { output.request(slots[index].iteration, phase, &observation, plan.request.body.len()); }
-                workers[slots[index].worker].finish(Sample {
-                    chain_duration: observation.total, request_duration: observation.request_duration,
-                    ttfb: observation.ttfb, drift: None,
-                    status: observation.status, error: observation.error.map(cause),
-                    bytes_sent: if observation.sent.is_some() { plan.request.body.len() as u64 } else { 0 },
-                    bytes_received: observation.bytes_received,
-                    connections_opened: observation.connections_opened, connection_reused: observation.connection_reused,
-                });
-                if observation.sent.is_some() {
-                    report.sent_finished += 1;
-                }
-                if let Some(error) = observation.error {
-                    report.failed += 1;
-                    report.timed_out += u64::from(error == Failure::Timeout);
-                } else { report.responses += 1; }
-                pool.release(completion.lease);
-            }
-            _ = clock.tick(&mut clock_tick), if next.is_some() || active == 0 => {
-                let (arrival, late) = schedule.due(Instant::now());
-                report.offered += late + u64::from(arrival.is_some());
-                report.skipped_late += late;
-                if let Some(scheduled) = arrival {
-                    if let Some(slot) = slots.iter_mut().find(|s| !s.active) {
-                        if let Some(lease) = pool.acquire() {
-                            slot.send_state.reset();
-                            slot.send_recorded = false;
-                            let admitted = Instant::now();
-                            let future = execute(Some(Job { lease, endpoint: Arc::clone(&pool.endpoint), template: Arc::clone(&plan.request), scheduled, admitted, send_state: Arc::clone(&slot.send_state) }));
-                            // Same execute() future layout for every use; never reallocates.
-                            assert!(slot.future.try_set(future).is_ok(), "request future layout changed");
-                            slot.active = true;
-                            slot.worker = report.admitted as usize % workers.len();
-                            slot.iteration = report.admitted;
-                            slot.admitted = admitted;
-                            workers[slot.worker].start();
-                            active += 1;
-                            report.admitted += 1;
-                            report.peak_in_flight = report.peak_in_flight.max(active);
-                        } else { report.skipped_connections += 1; }
-                    } else { report.skipped_concurrency += 1; }
-                }
-            }
-        }
-    }
-    flush(
-        Recording {
-            slots: &mut slots,
-            workers: &mut workers,
-            lag: &mut lag,
-        },
-        &mut interval_metrics,
-        &mut report,
-        &mut last_snapshot,
-        start.elapsed(),
-        0,
-        snapshots.as_ref(),
-    );
-    if let Some(output) = output {
-        output.summary(report.last_window.as_ref().expect("flushed window"), phase);
-        if phase == Phase::Measure {
-            output.phase(Phase::Drain);
-        }
-    }
-    // Dropping slots cancels pending body reads; dropping the pool aborts its drivers.
-    Ok(report)
+    // Keep the phase accumulators off the Windows CLI's small main-thread stack.
+    Box::pin(execution::run(plan, shutdown, snapshots, output)).await
 }
 
 #[derive(Default)]
@@ -270,13 +102,26 @@ struct Lag {
 struct Recording<'a> {
     slots: &'a mut [Slot],
     workers: &'a mut [Accumulator],
+    warmup_workers: &'a mut [Accumulator],
+    warmup_interval: &'a mut Accumulator,
+    phase: Phase,
     lag: &'a mut Lag,
 }
 
-fn record_send(slot: &mut Slot, workers: &mut [Accumulator], report: &mut Report) {
+fn record_send(
+    slot: &mut Slot,
+    workers: &mut [Accumulator],
+    warmup_workers: &mut [Accumulator],
+    report: &mut Report,
+) {
     if slot.active && !slot.send_recorded {
         if let Some(drift) = slot.send_state.drift() {
-            workers[slot.worker].drift.record(drift);
+            let worker = if slot.phase == Phase::Warmup {
+                &mut warmup_workers[slot.worker]
+            } else {
+                &mut workers[slot.worker]
+            };
+            worker.drift.record(drift);
             report.sent += 1;
             report.max_send_drift = report.max_send_drift.max(drift);
             slot.send_recorded = true;
@@ -296,14 +141,46 @@ fn flush(
     let Recording {
         slots,
         workers,
+        warmup_workers,
+        warmup_interval,
+        phase,
         lag,
     } = recording;
     for slot in &mut *slots {
-        record_send(slot, workers, report);
+        record_send(slot, workers, warmup_workers, report);
     }
     interval.merge_and_reset(workers);
     report.metrics.merge(interval);
+    warmup_interval.merge_and_reset(warmup_workers);
+    report.warmup_metrics.merge(warmup_interval);
+    let warmup_active = if active == 0 {
+        0
+    } else {
+        slots
+            .iter()
+            .filter(|s| s.active && s.phase == Phase::Warmup)
+            .count()
+    };
+    let warmup_queue = if active == 0 {
+        0
+    } else {
+        slots
+            .iter()
+            .filter(|s| s.active && s.phase == Phase::Warmup && s.send_state.drift().is_none())
+            .count()
+    };
+    let carry = phase != Phase::Warmup
+        && (warmup_active > 0
+            || warmup_interval.counters.completed > 0
+            || warmup_interval.counters.failed > 0
+            || warmup_interval.counters.cancelled > 0
+            || warmup_interval.drift.count() > 0
+            || warmup_interval.drift.overflow > 0);
     let window = Window {
+        phase,
+        warmup_metrics: carry.then(|| Box::new(warmup_interval.clone())),
+        warmup_in_flight: warmup_active,
+        warmup_queue_depth: warmup_queue,
         from: *last,
         to: now,
         in_flight: active,
@@ -317,7 +194,11 @@ fn flush(
         },
         scheduler_lag: lag.max,
         scheduler_lag_samples: lag.samples,
-        metrics: interval.clone(),
+        metrics: if phase == Phase::Warmup {
+            warmup_interval.clone()
+        } else {
+            interval.clone()
+        },
     };
     if let Some(consumer) = consumer {
         if consumer.try_send(window.clone()).is_err() {

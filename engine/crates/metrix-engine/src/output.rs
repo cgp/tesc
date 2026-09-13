@@ -17,7 +17,7 @@ use std::{
 };
 use tokio::sync::mpsc;
 
-const RESERVED: usize = 8;
+const RESERVED: usize = 12;
 // Histogram windows are much larger than scalar request packets.
 const SUMMARY_CAPACITY: usize = 32;
 const EVENTS_CAPACITY: usize = 1024;
@@ -492,15 +492,35 @@ fn write_stream(
             Packet::Summary {
                 t_ms,
                 phase,
-                window,
+                mut window,
             } => {
-                write_record(&mut writer, &mut buffer, &Record::Annotation(Annotation {
-                    t_ms, target_id: Some(identity.target.clone()), code: "generator_self_metrics".into(), severity: Severity::Info,
-                    phase: Some(phase), from_ms: t_ms.saturating_sub(millis(window.to.saturating_sub(window.from))), to_ms: Some(t_ms),
-                    message: "Sample counts for this interval's maximum send drift and summary timer wake lateness; zero samples means no observation.".into(),
-                    detail: Some(serde_json::json!({"drift_samples": window.metrics.drift.count(), "drift_overflow": window.metrics.drift.overflow, "scheduler_lag_samples": window.scheduler_lag_samples})),
-                }))?;
-                summary_record(identity, t_ms, phase, &window, current.1)
+                write_summary(
+                    &mut writer,
+                    &mut buffer,
+                    identity,
+                    t_ms,
+                    phase,
+                    &window,
+                    current.1,
+                )?;
+                if let Some(metrics) = window.warmup_metrics.take() {
+                    window.metrics = *metrics;
+                    window.in_flight = window.warmup_in_flight;
+                    window.queue_depth = window.warmup_queue_depth;
+                    window.scheduler_lag = Duration::ZERO;
+                    window.scheduler_lag_samples = 0;
+                    write_summary(
+                        &mut writer,
+                        &mut buffer,
+                        identity,
+                        t_ms,
+                        Phase::Warmup,
+                        &window,
+                        current.1,
+                    )?;
+                }
+                started = true;
+                continue;
             }
             Packet::Request(data) => Record::Request(RequestEvent {
                 t_ms: data.t_ms,
@@ -541,6 +561,28 @@ fn write_stream(
         started = true;
     }
     writer.flush()
+}
+
+fn write_summary(
+    writer: &mut dyn Write,
+    buffer: &mut Vec<u8>,
+    identity: &Identity,
+    t_ms: u64,
+    phase: Phase,
+    window: &Window,
+    dropped: u64,
+) -> io::Result<()> {
+    write_record(writer, buffer, &Record::Annotation(Annotation {
+        t_ms, target_id: Some(identity.target.clone()), code: "generator_self_metrics".into(), severity: Severity::Info,
+        phase: Some(phase), from_ms: t_ms.saturating_sub(millis(window.to.saturating_sub(window.from))), to_ms: Some(t_ms),
+        message: "Sample counts for this interval's maximum send drift and summary timer wake lateness; zero samples means no observation.".into(),
+        detail: Some(serde_json::json!({"drift_samples": window.metrics.drift.count(), "drift_overflow": window.metrics.drift.overflow, "scheduler_lag_samples": window.scheduler_lag_samples, "timeline_phase": window.phase})),
+    }))?;
+    write_record(
+        writer,
+        buffer,
+        &summary_record(identity, t_ms, phase, window, dropped),
+    )
 }
 
 fn write_record(writer: &mut dyn Write, buffer: &mut Vec<u8>, record: &Record) -> io::Result<()> {
@@ -608,7 +650,7 @@ fn summary_record(
         target_id: identity.target.clone(),
         phase,
         window_ms: millis(window.to.saturating_sub(window.from)),
-        target_rate: if phase == Phase::Measure {
+        target_rate: if matches!(phase, Phase::Measure | Phase::Warmup) && window.phase == phase {
             identity.rate
         } else {
             0.0

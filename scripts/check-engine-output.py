@@ -8,7 +8,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 root = Path(__file__).resolve().parents[1]
 schema = json.loads((root / "schema/events.schema.json").read_text(encoding="utf-8"))
 validator = Draft202012Validator(schema, format_checker=FormatChecker())
-for name in ("summary", "events"):
+for name in ("summary", "events", "phases-summary", "phases-events"):
     path = root / "engine/target/output-contract" / f"{name}.ndjson"
     lines = path.read_text(encoding="utf-8").splitlines()
     if not lines:

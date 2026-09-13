@@ -252,6 +252,10 @@ impl Accumulator {
 
 #[derive(Clone, Debug)]
 pub struct Window {
+    pub phase: events::Phase,
+    pub warmup_metrics: Option<Box<Accumulator>>,
+    pub warmup_in_flight: usize,
+    pub warmup_queue_depth: usize,
     pub from: Duration,
     pub to: Duration,
     pub in_flight: usize,
