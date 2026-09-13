@@ -1,0 +1,27 @@
+# Line endings are LF, in the repository and in every checkout.
+#
+# Without this file git stores whatever the editor happened to write, and this
+# repository had drifted to 83 files with LF, 34 with CRLF, and four with both
+# inside one file. That is invisible until something rewrites a file wholesale and
+# a three-line change arrives as a nine-hundred-line diff, which is exactly the
+# review nobody can do.
+#
+# `text=auto` lets git decide what is text, so a binary added later is left alone
+# without anyone remembering to say so. `eol=lf` is what makes the working tree
+# match, on Windows too -- there is nothing here that needs CRLF: no .bat or .cmd
+# files, and the shell scripts are bash.
+* text=auto eol=lf
+
+# Safety net for asset types that would be corrupted if the detection above ever
+# guessed wrong. Nothing here yet; vendored fonts and images are the likely arrivals.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.pdf binary
+*.zst binary
