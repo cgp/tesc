@@ -5,5 +5,6 @@
 
 pub mod aggregation;
 pub mod events;
+pub mod stats;
 
 pub use events::{EVENTS_VERSION, HISTOGRAM_ENCODING, Phase, Record, Severity};

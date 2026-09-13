@@ -12,7 +12,7 @@ pub const MAX_LATENCY_US: u64 = 3_600_000_000;
 
 #[derive(Clone, Debug)]
 pub struct Distribution {
-    hdr: Histogram<u64>,
+    pub(crate) hdr: Histogram<u64>,
     min: Option<u64>,
     max: Option<u64>,
     sum: u128,

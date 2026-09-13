@@ -2,7 +2,12 @@
 
 use crate::{Failure, Plan, http::Observation};
 use chrono::{SecondsFormat, Utc};
-use metrix_metrics::{Record, aggregation::Window, events::*};
+use metrix_metrics::{
+    Record,
+    aggregation::{Accumulator, Window},
+    events::*,
+    stats::percentiles,
+};
 use std::{
     collections::BTreeMap,
     fs::OpenOptions,
@@ -17,7 +22,7 @@ use std::{
 };
 use tokio::sync::mpsc;
 
-const RESERVED: usize = 12;
+const RESERVED: usize = 16;
 // Histogram windows are much larger than scalar request packets.
 const SUMMARY_CAPACITY: usize = 32;
 const EVENTS_CAPACITY: usize = 1024;
@@ -61,6 +66,12 @@ enum Packet {
         window: Box<Window>,
     },
     Request(RequestData),
+    Percentiles {
+        t_ms: u64,
+        from_ms: u64,
+        partial: bool,
+        metrics: Box<Accumulator>,
+    },
 }
 
 impl Packet {
@@ -68,6 +79,7 @@ impl Packet {
         match self {
             Self::Fence(_) => unreachable!("fences do not produce records"),
             Self::Summary { t_ms, .. } => *t_ms,
+            Self::Percentiles { t_ms, .. } => *t_ms,
             Self::Request(request) => request.t_ms,
             Self::Record(record) => match record.as_ref() {
                 Record::RunStarted(r) => r.t_ms,
@@ -195,11 +207,38 @@ impl Output {
             message: "Zero in cpu_pct, rss_bytes and open_fds means unavailable; OS resource probes are not implemented yet.".into(),
             detail: Some(serde_json::json!({"unavailable": ["cpu_pct", "rss_bytes", "open_fds"]})),
         }));
+        let planned = plan.duration.as_secs_f64() * plan.rate;
+        if planned < metrix_plan::MIN_SAMPLES as f64 {
+            output.lifecycle(Record::Annotation(Annotation {
+                t_ms: 0, target_id: Some(plan.target.id.clone()), code: "planned_sample_count_low".into(), severity: Severity::Warn,
+                phase: Some(Phase::Measure), from_ms: 0, to_ms: None,
+                message: "Planned measured volume is below 2250 requests; actual histogram counts determine percentile support.".into(),
+                detail: Some(serde_json::json!({"planned_samples": planned, "minimum_samples": metrix_plan::MIN_SAMPLES})),
+            }));
+        }
         Ok(output)
     }
 
     pub(crate) fn elapsed(&self) -> u64 {
         millis(self.start.elapsed())
+    }
+
+    /// Calculate final statistics on the writer thread, after the load path stops.
+    pub(crate) fn percentiles(&self, metrics: &Accumulator, from_ms: u64, partial: bool) {
+        let t_ms = self.elapsed();
+        if self
+            .summary
+            .sender
+            .try_send(Packet::Percentiles {
+                t_ms,
+                from_ms: from_ms.min(t_ms),
+                partial,
+                metrics: Box::new(metrics.clone()),
+            })
+            .is_err()
+        {
+            self.losses.failed.store(true, Ordering::Relaxed);
+        }
     }
 
     fn lifecycle(&self, record: Record) {
@@ -489,6 +528,17 @@ fn write_stream(
         let record = match packet {
             Packet::Fence(_) => unreachable!("fences handled above"),
             Packet::Record(record) => *record,
+            Packet::Percentiles { t_ms, from_ms, partial, metrics } => Record::Annotation(Annotation {
+                t_ms, target_id: Some(identity.target.clone()), code: "load_percentiles".into(), severity: Severity::Info,
+                phase: Some(Phase::Measure), from_ms, to_ms: Some(t_ms),
+                message: "Measured latency percentiles with actual sample counts and binomial order-statistic 95% intervals; warmup is excluded. Intervals assume independent stationary samples.".into(),
+                detail: Some(serde_json::json!({
+                    "partial": partial, "chain": identity.chain, "step": identity.step,
+                    "chain_duration": percentiles(&metrics.chain),
+                    "request_total": percentiles(&metrics.total),
+                    "ttfb": percentiles(&metrics.ttfb),
+                })),
+            }),
             Packet::Summary {
                 t_ms,
                 phase,

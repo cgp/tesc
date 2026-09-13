@@ -240,6 +240,25 @@ async fn sampling_is_deterministic_and_does_not_change_aggregate_counts() {
             })
             .sum();
         assert_eq!(completed, 10);
+        let summary = records(&output.stdout);
+        let warning = summary
+            .iter()
+            .find_map(|r| match r {
+                Record::Annotation(a) if a.code == "planned_sample_count_low" => a.detail.as_ref(),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(warning["planned_samples"], json!(10.0));
+        let p = summary
+            .iter()
+            .find_map(|r| match r {
+                Record::Annotation(a) if a.code == "load_percentiles" => a.detail.as_ref(),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(p["request_total"]["p50"]["count"], json!(10));
+        assert_eq!(p["request_total"]["p50"]["support"], json!("suppressed"));
+        assert!(p["request_total"]["p50"]["value_us"].is_null());
         assert!(String::from_utf8_lossy(&output.stderr).contains("events_dropped=0"));
         selections.push(selected);
     }

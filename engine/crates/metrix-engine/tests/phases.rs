@@ -139,6 +139,16 @@ async fn all_phases_preserve_warmup_identity_and_exclude_late_samples_from_measu
         3
     );
     let summaries = records(&summary);
+    let p = summaries
+        .iter()
+        .find_map(|r| match r {
+            Record::Annotation(a) if a.code == "load_percentiles" => a.detail.as_ref(),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(p["request_total"]["p50"]["count"], json!(2));
+    assert_eq!(p["chain_duration"]["p50"]["count"], json!(2));
+    assert_eq!(p["partial"], json!(false));
     let requests = records(&events);
     let phases = transitions(&summaries);
     assert_eq!(
@@ -269,6 +279,18 @@ async fn cancellation_flushes_each_reached_phase_without_emitting_future_transit
         assert!(!sink.finish(130, Some("interrupted".into())).failed);
         server.abort();
         let records = records(&summary);
+        let p = records
+            .iter()
+            .find_map(|r| match r {
+                Record::Annotation(a) if a.code == "load_percentiles" => a.detail.as_ref(),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(p["partial"], json!(true));
+        assert_eq!(
+            p["request_total"]["p50"]["count"],
+            json!(report.metrics.total.count())
+        );
         assert_eq!(transitions(&records).last().unwrap().0, wanted);
         assert!(matches!(records.last(), Some(Record::RunFinished(r)) if r.exit_code == 130));
         assert_eq!(

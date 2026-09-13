@@ -429,3 +429,9 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - Kept request events and samples tied to admission phase, including late warmup completions and cancellations. Separate warmup accumulators and summaries prevent measured histograms and counters from including warmup work. Moved the execution future onto the heap for the Windows CLI stack.
 - Updated the engine design and checklist; B2.1 is complete and B2.2 is next. Added phase, cancellation, timeout, default and overflow coverage plus schema validation of real phase streams.
 - Validation: bash scripts/check.sh passed, including Rust tests and the 75 RPS standalone acceptance run, 384 API tests (5 skipped), 67 front-end tests, schema drift and emitted NDJSON contract checks.
+
+## 2026-09-13 — Engine B2.2
+
+- Added load-percentile support in Rust stats/: 10 tail samples for crude support, 100 for stable support, with p99.9 suppressed below 10,000 samples. Every percentile carries its histogram count, overflow count, support, nullable value and binomial order-statistic 95% interval expanded to HDR bucket bounds. Overflow and unrepresentable counts suppress claims.
+- Warn before traffic when planned measured volume is below 2,250. Emit final measured chain, request-total and TTFB percentiles through the frozen annotation contract; calculations run on the writer thread. Warmup and cancellation samples are excluded, event sampling leaves counts intact, and interrupted reports are labelled partial.
+- Updated design and checklist: B2.2 complete, B2.3 next. Validation: bash scripts/check.sh passed, including exact interval coverage and support-boundary tests, the standalone 75 RPS/30s percentile report, 384 API tests (5 skipped), 67 front-end tests and frozen-schema checks of genuine output.

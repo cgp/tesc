@@ -734,7 +734,21 @@ What 2250 samples buys, by tail count and by the 95% confidence interval on the 
 
 p99 at the floor is real but blunt: it will not resolve a 10% regression, and it moves run to run on noise alone. The UI therefore **renders p99 with its confidence interval rather than as a bare number**, and suppresses p99.9 below 10,000 samples rather than printing a figure derived from two requests.
 
-The general rule the engine applies: a percentile needs roughly 10 samples beyond it to be crude and 100 to be stable. That is 1,000 samples for a crude p99 and 10,000 for a stable one — 133s at 75 RPS, or 30s at 333 RPS. The run header states which side of that the run sits on.
+The engine's `stats/` implementation requires 10 samples beyond a percentile for
+crude support and 100 for stable support: p50 needs 20/200 samples, p95 200/2,000,
+p99 1,000/10,000, and p99.9 10,000/100,000. The 2,250 floor is a planned-volume
+warning, not a blanket gate. Actual unsampled measured histograms determine support;
+warmup and cancelled attempts do not count. Any histogram overflow suppresses its
+percentiles rather than claiming support from a truncated population.
+
+The frozen histogram records remain mergeable. A final `load_percentiles` annotation
+reports measured chain duration, request total and TTFB, each percentile carrying
+its count, overflow count, support level, nullable value and two-sided 95% interval.
+Intervals use binomial order-statistic ranks (equal tails, with discrete coverage at
+least 95%), expanded outward to HDR bucket bounds. They assume independent samples
+from one stationary population; they do not measure run-to-run variation. Partial
+runs are labelled. `planned_sample_count_low` warns before traffic when measured
+duration × rate is below 2,250; it does not include warmup or idle time.
 
 **Consequence for regression detection:** at the floor, compare **p95** when the question is "did this get worse?" and reserve p99 for "is the tail catastrophic?". The comparison view leads with the metric the sample count can defend rather than always leading with p99.
 

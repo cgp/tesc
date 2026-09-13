@@ -54,6 +54,13 @@ pub(crate) async fn run(
     let mut warmup_interval = Accumulator::default();
     let mut lag = Lag::default();
     let start = Instant::now();
+    let measure_from_ms = output.map(|o| {
+        o.elapsed().saturating_add(
+            (plan.baseline + plan.warmup)
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64,
+        )
+    });
     let mut timeline = Timeline::new(start, &plan)?;
     if let Some(output) = output {
         output.phase(timeline.phase);
@@ -197,6 +204,13 @@ pub(crate) async fn run(
                 }
             }
         }
+    }
+    if let Some(output) = output {
+        output.percentiles(
+            &report.metrics,
+            measure_from_ms.expect("output clock"),
+            report.interrupted,
+        );
     }
     Ok(report)
 }
