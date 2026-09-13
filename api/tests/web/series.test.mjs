@@ -15,7 +15,7 @@ Object.defineProperty(globalThis, "uPlot", { configurable: true, value: undefine
 const { align, render } = await import("../../web/js/series.js");
 
 function point(patch = {}) {
-  return {
+  const p = {
     recording_id: "r1",
     at: "2026-09-01T00:00:00Z",
     value: 10,
@@ -29,6 +29,24 @@ function point(patch = {}) {
     band_runs: 0,
     outside: false,
     worse: false,
+    ...patch,
+  };
+  // Derived server-side and sent on the wire (stats/trend.py). Computed here the
+  // same way rather than pinned per test, so a fixture cannot describe a point the
+  // API would never send -- flagged without a band, say.
+  const supported = p.value != null;
+  return {
+    flagged: p.outside && supported && !p.invalid,
+    regressed: p.outside && supported && !p.invalid && p.worse,
+    judged: p.band != null && supported && !p.invalid,
+    unjudged_because: p.invalid
+      ? "invalid"
+      : !supported
+        ? "unsupported"
+        : p.band == null
+          ? "no_band"
+          : null,
+    ...p,
     ...patch,
   };
 }
@@ -163,26 +181,40 @@ test("a run the count could not support shows no value rather than a zero", () =
   assert.doesNotMatch(markup, />0\.00</);
 });
 
-test("a point outside the band is not called a regression", () => {
-  // §17.4 wants the move, the sample count and validity together before that word
-  // is earned, and that verdict is not built yet.
+test("a flagged run is called a regression only when all three conditions hold", () => {
+  // §17.4: the move, a sample count that supports it, and no invalid note.
+  const moved = { center: 10, band: 2, value: 40, outside: true, worse: true };
+  assert.match(
+    render({ selectedSeries: series([point(moved)]) }),
+    /regressed/,
+    "all three hold"
+  );
+
+  for (const [missing, label] of [
+    [{ invalid: true }, /held out of the band/],
+    [{ value: null, n: 2 }, /too few samples/],
+    [{ band: null, center: null }, /no band yet/],
+  ]) {
+    const markup = render({ selectedSeries: series([point({ ...moved, ...missing })]) });
+    assert.match(markup, label);
+    assert.doesNotMatch(markup, /regressed/, `one condition short: ${JSON.stringify(missing)}`);
+  }
+});
+
+test("a flag in the good direction is not a regression", () => {
   const markup = render({
-    selectedSeries: series([point({ center: 10, band: 2, value: 40, outside: true, worse: true })]),
+    selectedSeries: series([
+      point({ center: 10, band: 2, value: 1, outside: true, worse: false }),
+    ]),
   });
-  assert.match(markup, /outside, the bad way/);
-  assert.doesNotMatch(markup, /regression/i);
+  assert.match(markup, /outside, the good way/);
+  assert.doesNotMatch(markup, /regressed/);
 });
 
 test("a point with no band behind it says so rather than reading as within one", () => {
   const markup = render({ selectedSeries: series([point()]) });
   assert.match(markup, /no band yet/);
-});
-
-test("an invalid run's verdict says it was not measured, not that it was fine", () => {
-  const markup = render({
-    selectedSeries: series([point({ invalid: true, center: 10, band: 2 })]),
-  });
-  assert.match(markup, /not measured/);
+  assert.doesNotMatch(markup, /within band/, "unchecked is not a pass");
 });
 
 test("a series that recorded nothing says so rather than drawing empty cards", () => {
@@ -279,4 +311,98 @@ test("the runs table shows the metric that moved, not the one that sorts first",
     }),
   });
   assert.match(markup, /<th class="num" style="width:17%">cpu\.busy<\/th>/);
+});
+
+/* ------------------------------------------------------------------ the verdict */
+
+function verdict(patch = {}) {
+  return {
+    series_key: "k",
+    recording_id: "2026-09-09_zz",
+    at: "2026-09-09T00:00:00Z",
+    status: "ok",
+    findings: [],
+    judged: ["cpu.busy"],
+    unjudged: {},
+    ...patch,
+  };
+}
+
+const withVerdict = (v) => render({ selectedSeries: series([point()], { verdict: v }) });
+
+test("a regression names the metric, what normal was, and the size of the move", () => {
+  const markup = withVerdict(
+    verdict({
+      status: "regressed",
+      judged: [],
+      findings: [
+        {
+          metric: "cpu.busy",
+          value: 40,
+          center: 10,
+          band: 2,
+          change: 30,
+          change_pct: 300,
+          n: 60,
+          worse: true,
+        },
+      ],
+    })
+  );
+  assert.match(markup, /regressed/);
+  assert.match(markup, /cpu\.busy/);
+  assert.match(markup, /\+300\.0%/);
+  assert.match(markup, /n=60/, "the count behind the claim travels with it");
+  assert.match(markup, /#\/recordings\/2026-09-09_zz/);
+});
+
+test("a move the good way is reported as a change, not a failure", () => {
+  const markup = withVerdict(verdict({ status: "changed" }));
+  assert.match(markup, /changed/);
+  assert.doesNotMatch(markup, /regressed/);
+});
+
+test("a clean run says how many metrics were actually checked", () => {
+  // "Nothing moved" is only reassuring if something was looked at.
+  const markup = withVerdict(verdict({ judged: ["cpu.busy", "fd.open"] }));
+  assert.match(markup, /within band/);
+  assert.match(markup, /2 metric\(s\) checked/);
+});
+
+test("a metric that could not be checked is named, with the reason", () => {
+  const markup = withVerdict(
+    verdict({ status: "unknown", judged: [], unjudged: { "cpu.busy": "no_band" } })
+  );
+  assert.match(markup, /not judged/);
+  assert.match(markup, /Not checked:/);
+  assert.match(markup, /not enough history yet/);
+});
+
+test("an unchecked run is never dressed as a passing one", () => {
+  // The failure this whole flag exists to avoid: silence reported as success.
+  const markup = withVerdict(
+    verdict({ status: "unknown", judged: [], unjudged: { "cpu.busy": "invalid" } })
+  );
+  assert.match(markup, /this run carries an invalid note/);
+  assert.doesNotMatch(markup, /within band/);
+});
+
+test("a series with no runs to judge shows no verdict card at all", () => {
+  const markup = withVerdict(verdict({ recording_id: null, status: "unknown" }));
+  assert.doesNotMatch(markup, /Latest run/);
+});
+
+test("the list says how each series' latest run stands", () => {
+  // So the archive can be scanned for the one that moved.
+  const markup = render(
+    listState([row({ latest_status: "regressed" }), row({ key: "b", latest_status: "ok" })])
+  );
+  assert.match(markup, /regressed/);
+  assert.match(markup, /within band/);
+});
+
+test("a series that could not be judged says so rather than showing a quiet pass", () => {
+  const markup = render(listState([row({ latest_status: "unknown" })]));
+  assert.match(markup, /not judged/);
+  assert.doesNotMatch(markup, /within band/);
 });

@@ -32,12 +32,19 @@ from metrix_api.stats.summary import (
 )
 from metrix_api.stats.trend import (
     BAND_WINDOW,
+    CHANGED,
     MIN_RUNS_FOR_BAND,
+    OK,
+    REGRESSED,
+    UNKNOWN,
+    Finding,
     Point,
     Run,
     Trend,
+    Verdict,
     band_from,
     trend,
+    verdict_from,
 )
 from metrix_api.stats.trend import (
     MIN_BAND_FRACTION as TREND_MIN_BAND_FRACTION,
@@ -45,6 +52,10 @@ from metrix_api.stats.trend import (
 
 __all__ = [
     "BAND_WINDOW",
+    "CHANGED",
+    "OK",
+    "REGRESSED",
+    "UNKNOWN",
     "MIN_BAND_FRACTION",
     "MIN_FOR_MEDIAN",
     "MIN_FOR_P95",
@@ -54,11 +65,13 @@ __all__ = [
     "RECOVERY_MULTIPLE",
     "TREND_MIN_BAND_FRACTION",
     "Delta",
+    "Finding",
     "Point",
     "Recovery",
     "Run",
     "Summary",
     "Trend",
+    "Verdict",
     "band_for",
     "band_from",
     "compare",
@@ -66,5 +79,6 @@ __all__ = [
     "recovery",
     "summarize",
     "trend",
+    "verdict_from",
     "worse_direction",
 ]

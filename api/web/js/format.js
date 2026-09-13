@@ -43,6 +43,25 @@ export function metricValue(name, value) {
 }
 
 /**
+ * How far a metric moved, as opposed to what it reads.
+ *
+ * Separate from `metricValue` because a change in a metric that is *itself* a
+ * percentage is not a percentage: CPU going from 21% to 57% moved 36 percentage
+ * points, and printing that as "+35.7%" beside the relative "+167.8%" puts two
+ * different meanings of the same symbol next to each other in one cell. Points are
+ * what a difference between two percentages is called, so it says so.
+ */
+export function metricChange(name, value) {
+  if (value == null) return "—";
+  const sign = value > 0 ? "+" : value < 0 ? "−" : "";
+  const size = Math.abs(value);
+  if (name.startsWith("cpu.") || name.endsWith("_pct")) {
+    return `${sign}${size.toFixed(1)} pts`;
+  }
+  return `${sign}${metricValue(name, size)}`;
+}
+
+/**
  * A target id, shortened for a column heading.
  *
  * Discovered endpoints are named after the thing they are -- an ECS task id is 32

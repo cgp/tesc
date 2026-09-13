@@ -1,7 +1,15 @@
 // The archive. Observation-only recordings and load runs are the same object with
 // different sections populated, so one list shows both.
 
-import { bytes, duration, escape, metricValue, targetLabel, timestamp } from "./format.js";
+import {
+  bytes,
+  duration,
+  escape,
+  metricChange,
+  metricValue,
+  targetLabel,
+  timestamp,
+} from "./format.js";
 import { empty, field, icon } from "./ui.js";
 
 export function selectState(state) {
@@ -417,8 +425,8 @@ function comparisonCard(recording) {
         <td class="name">${escape(d.metric)} ${where}</td>
         <td class="num">${figure(d.baseline)}</td>
         <td class="num">${figure(d.current)}</td>
-        <td class="num ${direction}">${sign}${metricValue(d.metric, d.change)}
-          <span class="text-secondary">(${sign}${d.change_pct.toFixed(1)}%)</span></td>
+        <td class="num ${direction}">${metricChange(d.metric, d.change)}
+          <span class="text-secondary">(${sign}${d.change_pct.toFixed(1)}% of normal)</span></td>
         <td class="num text-secondary">±${metricValue(d.metric, d.band)}</td>
       </tr>`;
     })

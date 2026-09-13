@@ -26,7 +26,7 @@ import sqlite3
 from dataclasses import dataclass, field
 
 from metrix_api.stats import Delta, Recovery, Summary, compare, recovery, summarize
-from metrix_api.stats.trend import BAND_WINDOW, Run, Trend, trend
+from metrix_api.stats.trend import BAND_WINDOW, Run, Trend, Verdict, trend, verdict_from
 from metrix_api.store import recordings as store
 
 #: The two windows a recovery measurement needs. Named here because the pairing is
@@ -242,6 +242,10 @@ class SeriesTrends:
     def metrics(self) -> list[str]:
         return sorted(self.trends)
 
+    def verdict(self, recording_id: str | None = None) -> Verdict:
+        """How one run of this series -- the latest by default -- stands against it."""
+        return verdict_from(self.key, self.trends, recording_id=recording_id)
+
 
 def series_trends(
     conn: sqlite3.Connection,
@@ -303,3 +307,17 @@ def series_trends(
         trends=trends,
         has_baseline_phase=bool(at_rest),
     )
+def series_verdict(
+    conn: sqlite3.Connection,
+    key: str,
+    *,
+    recording_id: str | None = None,
+    window: int = BAND_WINDOW,
+) -> Verdict:
+    """The machine-readable answer for one run of one series (design-api 17.4).
+
+    The historical check a pipeline can gate on, and usually the more useful of the
+    two it has -- a fixed SLO threshold is a guess made before the data existed, and
+    this one is measured from what the setup actually does.
+    """
+    return series_trends(conn, key, window=window).verdict(recording_id)

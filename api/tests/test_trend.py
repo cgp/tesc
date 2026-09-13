@@ -18,9 +18,20 @@ from metrix_api.main import create_app
 from metrix_api.observer.metrics import Annotation, Sample
 from metrix_api.profiles import parse_profile, save_profile
 from metrix_api.stats import (
+    CHANGED,
+    MIN_RUNS_FOR_BAND,
+    OK,
+    REGRESSED,
+    UNKNOWN,
+    Run,
+    band_from,
+    summarize,
+    trend,
+    verdict_from,
+)
+from metrix_api.stats import (
     MIN_BAND_FRACTION as SAMPLE_BAND_FRACTION,
 )
-from metrix_api.stats import MIN_RUNS_FOR_BAND, Run, band_from, summarize, trend
 from metrix_api.stats.trend import MIN_BAND_FRACTION
 from metrix_api.store import open_store
 from metrix_api.store import recordings as store
@@ -347,3 +358,232 @@ class TestRoutes:
         key = client.get("/api/series").json()["series"][0]["key"]
         assert "|" in key and key.endswith("|api=0.0.0")
         assert client.get("/api/series/trend", params={"key": key}).json()["series"]["key"] == key
+
+
+# ------------------------------------------------------------------ the verdict
+
+
+class TestFlag:
+    """design-api 17.4: outside the band, AND sample-supported, AND not invalid."""
+
+    def history(self, *, then, invalid=False, n=30):
+        """Six steady runs, and a seventh that moved a long way."""
+        return [*steady(6, 10.0), run(day(9), then, n=n, invalid=invalid)]
+
+    def test_all_three_conditions_together_are_the_flag(self) -> None:
+        flagged = trend("cpu.busy", self.history(then=40.0)).points[-1]
+        assert flagged.outside and flagged.supported and not flagged.invalid
+        assert flagged.flagged and flagged.regressed
+
+    def test_a_move_inside_the_band_is_not_flagged(self) -> None:
+        inside = trend("cpu.busy", self.history(then=10.2)).points[-1]
+        assert not inside.outside
+        assert not inside.flagged
+        assert inside.judged, "checked, and it passed -- which is not the same as unchecked"
+
+    def test_a_move_the_sample_count_cannot_support_is_not_flagged(self) -> None:
+        thin = trend("cpu.busy", self.history(then=40.0, n=2)).points[-1]
+        assert not thin.supported and not thin.flagged
+        assert not thin.judged
+        assert thin.unjudged_because == "unsupported"
+
+    def test_a_move_on_an_invalid_run_is_not_flagged(self) -> None:
+        """Its numbers are the ones already known not to be trusted."""
+        broken = trend("cpu.busy", self.history(then=40.0, invalid=True)).points[-1]
+        assert broken.outside, "the geometry is still true"
+        assert not broken.flagged
+        assert broken.unjudged_because == "invalid"
+
+    def test_a_move_with_no_band_behind_it_is_not_flagged(self) -> None:
+        short = trend("cpu.busy", [*steady(3, 10.0), run(day(9), 40.0)]).points[-1]
+        assert short.band is None and not short.flagged
+        assert short.unjudged_because == "no_band"
+
+    def test_a_flag_the_good_way_is_not_a_regression(self) -> None:
+        """An unexplained improvement is worth reading, not worth failing a build on."""
+        better = trend("cpu.busy", self.history(then=1.0)).points[-1]
+        assert better.flagged and not better.worse
+        assert not better.regressed
+
+    def test_invalid_outranks_the_other_reasons(self) -> None:
+        """One reason is reported, and it is the one that says the most."""
+        both = trend("cpu.busy", self.history(then=40.0, n=2, invalid=True)).points[-1]
+        assert both.unjudged_because == "invalid"
+
+
+class TestVerdict:
+    def series(self, **moves: float | None):
+        """One trend per named metric: six steady runs at 10, then the given move."""
+        return {
+            metric: trend(metric, [*[
+                Run(f"r{i}", day(i + 1), summarize(metric, [10.0] * 30)) for i in range(6)
+            ], Run("latest", day(9), summarize(metric, [] if then is None else [then] * 30))])
+            for metric, then in moves.items()
+        }
+
+    def test_a_bad_move_is_a_regression_and_names_what_moved(self) -> None:
+        verdict = verdict_from("k", self.series(**{"cpu.busy": 40.0, "fd.open": 10.0}))
+        assert verdict.status == REGRESSED
+        assert [f.metric for f in verdict.findings] == ["cpu.busy"]
+        assert verdict.findings[0].change == pytest.approx(30.0)
+        assert verdict.findings[0].change_pct == pytest.approx(300.0)
+        assert verdict.judged == ["fd.open"], "checked and fine"
+
+    def test_a_good_move_is_a_change_rather_than_a_failure(self) -> None:
+        verdict = verdict_from("k", self.series(**{"cpu.busy": 1.0}))
+        assert verdict.status == CHANGED
+        assert verdict.findings and not verdict.findings[0].worse
+
+    def test_nothing_moving_is_a_pass(self) -> None:
+        assert verdict_from("k", self.series(**{"cpu.busy": 10.1})).status == OK
+
+    def test_nothing_checkable_is_unknown_rather_than_a_pass(self) -> None:
+        """A pipeline treating "could not check" as "passed" gets one useful signal
+        out of this endpoint, and it is the wrong one."""
+        verdict = verdict_from("k", self.series(**{"cpu.busy": None}))
+        assert verdict.status == UNKNOWN
+        assert verdict.judged == []
+        assert verdict.unjudged == {"cpu.busy": "unsupported"}
+
+    def test_a_short_series_cannot_answer(self) -> None:
+        short = {"cpu.busy": trend("cpu.busy", steady(3, 10.0))}
+        verdict = verdict_from("k", short)
+        assert verdict.status == UNKNOWN
+        assert verdict.unjudged == {"cpu.busy": "no_band"}
+
+    def test_one_unjudged_metric_does_not_hide_a_regression_in_another(self) -> None:
+        verdict = verdict_from("k", self.series(**{"cpu.busy": 40.0, "fd.open": None}))
+        assert verdict.status == REGRESSED
+        assert verdict.unjudged == {"fd.open": "unsupported"}
+
+    def test_an_empty_series_answers_unknown_without_a_run(self) -> None:
+        verdict = verdict_from("k", {})
+        assert verdict.status == UNKNOWN
+        assert verdict.recording_id is None
+
+    def test_the_worst_finding_is_first(self) -> None:
+        """A pipeline prints the first line of this and stops."""
+        verdict = verdict_from(
+            "k", self.series(**{"cpu.busy": 40.0, "mem.used_bytes": 1.0, "fd.open": 22.0})
+        )
+        assert [f["metric"] for f in verdict.to_document()["findings"]] == [
+            "cpu.busy",
+            "fd.open",
+            "mem.used_bytes",
+        ]
+
+    def test_an_older_run_can_be_asked_about_by_name(self) -> None:
+        trends = self.series(**{"cpu.busy": 40.0})
+        earlier = verdict_from("k", trends, recording_id="r3")
+        assert earlier.recording_id == "r3"
+        assert earlier.status == UNKNOWN, "nothing behind it yet"
+
+
+class TestVerdictRoute:
+    """The machine-readable half of design-api 17.4: what a pipeline reads."""
+
+    @pytest.fixture
+    def home(self, tmp_path: Path):
+        config = load_config(tmp_path).ensure_layout()
+        save_profile(config, parse_profile(PROFILE))
+        return config
+
+    @pytest.fixture
+    def client(self, home):
+        return TestClient(create_app(home))
+
+    def seed(self, home, *, then=None, invalid=False):
+        with open_store(home.database) as conn:
+            for i in range(7):
+                record(conn, value=10.0, started=at(i + 1))
+            if then is not None:
+                last = record(conn, value=then, started=at(9))
+                if invalid:
+                    store.add_annotation(
+                        conn,
+                        last,
+                        Annotation(
+                            code="target_unreachable",
+                            severity="invalid",
+                            from_ms=0,
+                            message="never answered",
+                        ),
+                    )
+            return store.series_list(conn)[0].key
+
+    def verdict(self, client, key, **params):
+        response = client.get("/api/series/verdict", params={"key": key, **params})
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def test_a_regression_names_the_metric_and_the_size_of_the_move(self, home, client):
+        key = self.seed(home, then=40.0)
+        body = self.verdict(client, key)
+
+        assert body["status"] == "regressed"
+        assert [f["metric"] for f in body["findings"]] == ["cpu.busy"]
+        assert body["findings"][0]["worse"] is True
+        assert body["findings"][0]["n"] == 60
+        assert body["recording_id"]
+
+    def test_a_steady_series_passes(self, home, client) -> None:
+        key = self.seed(home, then=10.0)
+        assert self.verdict(client, key)["status"] == "ok"
+
+    def test_an_invalid_run_cannot_be_a_regression(self, home, client) -> None:
+        """The three conditions hold over the wire, not only in the arithmetic."""
+        key = self.seed(home, then=40.0, invalid=True)
+        body = self.verdict(client, key)
+        assert body["status"] == "unknown"
+        assert body["findings"] == []
+        assert body["unjudged"] == {"cpu.busy": "invalid"}
+
+    def test_a_short_history_answers_unknown_rather_than_passing(self, home, client):
+        with open_store(home.database) as conn:
+            for i in range(3):
+                record(conn, value=10.0, started=at(i + 1))
+            key = store.series_list(conn)[0].key
+
+        body = self.verdict(client, key)
+        assert body["status"] == "unknown"
+        assert body["unjudged"] == {"cpu.busy": "no_band"}
+        assert body["judged"] == []
+
+    def test_an_older_run_can_be_judged_by_name(self, home, client) -> None:
+        key = self.seed(home, then=40.0)
+        runs = client.get("/api/series/trend", params={"key": key}).json()["runs"]
+        steady_run = runs[-2]["id"]
+
+        body = self.verdict(client, key, recording=steady_run)
+        assert body["recording_id"] == steady_run
+        assert body["status"] == "ok"
+
+    def test_a_recording_outside_the_series_is_a_404(self, home, client) -> None:
+        key = self.seed(home, then=10.0)
+        response = client.get(
+            "/api/series/verdict", params={"key": key, "recording": "not-a-run"}
+        )
+        assert response.status_code == 404
+
+    def test_a_series_nobody_recorded_is_a_404(self, client) -> None:
+        assert client.get("/api/series/verdict", params={"key": "made|up"}).status_code == 404
+
+    def test_the_list_says_how_each_series_latest_run_stands(self, home, client) -> None:
+        """So the archive can be scanned for the one that moved, rather than opened
+        one series at a time."""
+        key = self.seed(home, then=40.0)
+        rows = client.get("/api/series").json()["series"]
+        assert {r["key"]: r["latest_status"] for r in rows} == {key: "regressed"}
+
+    def test_the_list_can_skip_the_verdicts_for_a_caller_that_only_wants_names(
+        self, home, client
+    ) -> None:
+        key = self.seed(home, then=40.0)
+        rows = client.get("/api/series", params={"verdicts": "false"}).json()["series"]
+        assert [r["key"] for r in rows] == [key]
+        assert rows[0]["latest_status"] == "unknown", "not claimed, rather than claimed wrong"
+
+    def test_the_page_and_the_pipeline_read_the_same_judgement(self, home, client) -> None:
+        key = self.seed(home, then=40.0)
+        drawn = client.get("/api/series/trend", params={"key": key}).json()
+        assert drawn["verdict"] == self.verdict(client, key)

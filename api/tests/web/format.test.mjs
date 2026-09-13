@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { bytes, escape, targetLabel } = await import("../../web/js/format.js");
+const { bytes, escape, metricChange, targetLabel } = await import("../../web/js/format.js");
 
 test("bytes scales the magnitude, so a negative delta reads like a size", () => {
   assert.equal(bytes(0), "0 B");
@@ -33,4 +33,23 @@ test("escaping covers quotes, because most of what it escapes lands in an attrib
   assert.equal(escape("a & b"), "a &amp; b");
   assert.equal(escape(null), "");
   assert.equal(escape(42), "42");
+});
+
+test("a change in a percentage is points, not another percentage", () => {
+  // CPU from 21% to 57% moved 36 percentage points. Printing that as "+35.7%" next
+  // to the relative "+167.8%" puts two meanings of one symbol in the same cell.
+  assert.equal(metricChange("cpu.busy", 35.66), "+35.7 pts");
+  assert.equal(metricChange("cpu.busy", -4), "−4.0 pts");
+  assert.equal(metricChange("queue_pct", 1.25), "+1.3 pts");
+});
+
+test("a change in anything else keeps that metric's own units", () => {
+  assert.equal(metricChange("mem.used_bytes", 359439205), "+342.8 MB");
+  assert.equal(metricChange("mem.used_bytes", -359439205), "−342.8 MB");
+  assert.equal(metricChange("conn.established", 3), "+3.00");
+});
+
+test("no change is signed neither way, and no value is a dash", () => {
+  assert.equal(metricChange("cpu.busy", 0), "0.0 pts");
+  assert.equal(metricChange("cpu.busy", null), "—");
 });

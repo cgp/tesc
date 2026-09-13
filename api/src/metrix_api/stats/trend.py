@@ -19,9 +19,11 @@ reading a trend is making anyway.
 two of them, and a band that narrow flags the fourth run for being a Tuesday, which is
 how a flag gets trained into noise (design-api 17.4).
 
-What this module deliberately does not do is decide that a point *is* a regression.
-`outside` is geometry -- the point sits beyond the band -- and that is one of the
-three conditions design-api 17.4 requires. The verdict is assembled elsewhere.
+`outside` is geometry and nothing more -- the point sits beyond the band. It is one
+of the three conditions design-api 17.4 requires before the word *regression* is
+earned; `Point.flagged` is where all three are put together, and the reason they are
+written out separately is that any one of them alone produces false positives at a
+rate that trains people to ignore the flag.
 """
 
 from __future__ import annotations
@@ -99,10 +101,62 @@ class Point:
     #: history fills rather than wondering why it appeared.
     band_runs: int = 0
     #: Beyond the band, and if so whether it is the bad direction for this metric.
-    #: Geometry, not a verdict: design-api 17.4 also requires the count to support
-    #: the claim and the run to be valid.
+    #: Geometry, not a verdict on its own: see `flagged`.
     outside: bool = False
     worse: bool = False
+
+    @property
+    def supported(self) -> bool:
+        """The run carried enough samples to have a median at all.
+
+        `stats/summary.py` withholds one below its floor, so an unsupported point has
+        no value rather than a value with a caveat -- which is why this reads as a
+        `None` check and not as a second sample-count rule.
+        """
+        return self.value is not None
+
+    @property
+    def flagged(self) -> bool:
+        """The three conditions of design-api 17.4, together.
+
+        It moved beyond the band the series' own history supports, **and** its sample
+        count supports the claim, **and** the run is not one whose numbers are already
+        known to be untrustworthy. Any one of the three on its own produces false
+        positives at a rate that teaches people to ignore the flag, which costs more
+        than never having flagged anything.
+        """
+        return self.outside and self.supported and not self.invalid
+
+    @property
+    def regressed(self) -> bool:
+        """Flagged, and in the direction that is bad for this metric.
+
+        A flag in the good direction is still worth surfacing -- an unexplained
+        improvement usually means the test stopped doing some of the work -- but it
+        is not what a pipeline should fail on, so the two are named apart.
+        """
+        return self.flagged and self.worse
+
+    @property
+    def judged(self) -> bool:
+        """Whether this point could be checked at all."""
+        return self.band is not None and self.supported and not self.invalid
+
+    @property
+    def unjudged_because(self) -> str | None:
+        """Why it could not be, in the order that matters.
+
+        Kept as a reason rather than folded into a pass, because "this is fine" and
+        "this could not be checked" are different answers and a pipeline acting on
+        the first when it was given the second is the whole failure mode here.
+        """
+        if self.invalid:
+            return "invalid"
+        if not self.supported:
+            return "unsupported"
+        if self.band is None:
+            return "no_band"
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +175,9 @@ class Trend:
     def banded(self) -> bool:
         """Whether any point has a band. False for a series too short to have one."""
         return any(p.band is not None for p in self.points)
+
+    def point_for(self, recording_id: str) -> Point | None:
+        return next((p for p in self.points if p.recording_id == recording_id), None)
 
     def to_document(self) -> dict[str, object]:
         return {
@@ -143,6 +200,10 @@ class Trend:
                     "band_runs": p.band_runs,
                     "outside": p.outside,
                     "worse": p.worse,
+                    "flagged": p.flagged,
+                    "regressed": p.regressed,
+                    "judged": p.judged,
+                    "unjudged_because": p.unjudged_because,
                 }
                 for p in self.points
             ],
@@ -202,3 +263,134 @@ def trend(metric: str, runs: Iterable[Run], *, window: int = BAND_WINDOW) -> Tre
             history.append(value)
 
     return Trend(metric=metric, points=points, window=window)
+# --------------------------------------------------------------- the CI verdict
+
+#: Nothing in this series could be checked -- too short a history, a run whose
+#: sample count says nothing, or a run already marked invalid. Deliberately not
+#: `OK`: a pipeline that treats "could not check" as "passed" gets exactly one
+#: useful signal out of this endpoint, the wrong one.
+UNKNOWN = "unknown"
+#: Everything that could be checked sat inside its band.
+OK = "ok"
+#: Something moved beyond its band, but only in the direction that is good for it.
+#: Worth a look -- an unexplained improvement usually means the test stopped doing
+#: part of the work -- but not something to fail a build on.
+CHANGED = "changed"
+#: Something moved beyond its band the bad way, with the count to support it, on a
+#: run with no invalid note. This is the one to fail on.
+REGRESSED = "regressed"
+
+
+@dataclass(frozen=True, slots=True)
+class Finding:
+    """One metric that moved, and by how much against what."""
+
+    metric: str
+    value: float
+    center: float
+    band: float
+    n: int
+    worse: bool
+
+    @property
+    def change(self) -> float:
+        return self.value - self.center
+
+    @property
+    def change_pct(self) -> float | None:
+        return (100.0 * self.change / self.center) if self.center else None
+
+    def to_document(self) -> dict[str, object]:
+        return {
+            "metric": self.metric,
+            "value": self.value,
+            "center": self.center,
+            "band": self.band,
+            "change": self.change,
+            "change_pct": self.change_pct,
+            "n": self.n,
+            "worse": self.worse,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class Verdict:
+    """One run against the history of its series, in a shape a pipeline can read.
+
+    design-api 17.4: the historical check is usually more useful than a fixed SLO
+    threshold, because fixed thresholds are guesses made before the data existed.
+    What makes it safe to gate on is that it says when it cannot answer, per metric
+    and with the reason, rather than reporting silence as a pass.
+    """
+
+    series_key: str
+    recording_id: str | None = None
+    at: str | None = None
+    findings: list[Finding] = field(default_factory=list)
+    #: Metrics that were checked and sat inside their band.
+    judged: list[str] = field(default_factory=list)
+    #: Metrics that could not be checked, and why: metric -> reason.
+    unjudged: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def status(self) -> str:
+        if any(f.worse for f in self.findings):
+            return REGRESSED
+        if self.findings:
+            return CHANGED
+        return OK if self.judged else UNKNOWN
+
+    def to_document(self) -> dict[str, object]:
+        return {
+            "series_key": self.series_key,
+            "recording_id": self.recording_id,
+            "at": self.at,
+            "status": self.status,
+            # Worst first: a pipeline prints the first line of this and stops.
+            "findings": [
+                f.to_document()
+                for f in sorted(
+                    self.findings, key=lambda f: (not f.worse, -abs(f.change_pct or 0.0))
+                )
+            ],
+            "judged": sorted(self.judged),
+            "unjudged": dict(sorted(self.unjudged.items())),
+        }
+
+
+def verdict_from(
+    series_key: str, trends: dict[str, Trend], *, recording_id: str | None = None
+) -> Verdict:
+    """Judge one run -- the latest by default -- across every metric in a series."""
+    points = {}
+    for metric, one in trends.items():
+        point = one.point_for(recording_id) if recording_id else one.latest
+        if point is not None:
+            points[metric] = point
+    if not points:
+        return Verdict(series_key=series_key, recording_id=recording_id)
+
+    any_point = next(iter(points.values()))
+    return Verdict(
+        series_key=series_key,
+        recording_id=any_point.recording_id,
+        at=any_point.at,
+        findings=[
+            Finding(
+                metric=metric,
+                value=p.value,
+                center=p.center,
+                band=p.band,
+                n=p.n,
+                worse=p.worse,
+            )
+            for metric, p in points.items()
+            if p.flagged
+        ],
+        judged=[metric for metric, p in points.items() if p.judged and not p.flagged],
+        unjudged={
+            metric: reason
+            for metric, p in points.items()
+            if (reason := p.unjudged_because) is not None
+        },
+    )

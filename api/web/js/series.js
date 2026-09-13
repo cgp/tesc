@@ -14,7 +14,7 @@
 //   * an `invalid` run is drawn hollow and excluded from the band — that it failed
 //     validity is part of the history, but its numbers are not
 
-import { duration, escape, metricValue, timestamp } from "./format.js";
+import { duration, escape, metricChange, metricValue, timestamp } from "./format.js";
 import { empty, field, icon } from "./ui.js";
 
 //: uPlot is vendored and loaded by index.html before this module runs.
@@ -110,12 +110,30 @@ export function help() {
           application regressing.</li>
       </ul>
 
-      <h4>What this page will not say</h4>
-      <p>It says a point sits <em>outside the band</em>, and no more than that.
-        Calling something a regression takes three things together: the move, a
-        sample count that supports the claim, and a run with no invalid note. Until
-        all three are checked, the word would be wrong on precisely the runs the
-        other two conditions exist to catch.</p>
+      <h4>When a move is called a regression</h4>
+      <p>Three things together, never one of them alone: the metric moved beyond the
+        band, <strong>and</strong> its sample count supports the claim,
+        <strong>and</strong> the run carries no <strong>invalid</strong> note. Any
+        one on its own produces false positives at a rate that teaches people to
+        ignore the flag, which costs more than never having flagged anything.</p>
+      <p>A move in the <em>good</em> direction meets the same three conditions and is
+        still not a regression — it is reported as a change. It is worth reading,
+        because an unexplained improvement usually means the test stopped doing part
+        of the work, but it is not something to fail a build on.</p>
+      <p>When a metric cannot be checked the page says so and names the reason,
+        rather than letting it pass quietly. <strong>Nothing moved</strong> and
+        <strong>nothing could be checked</strong> are different answers, and the
+        second one dressed as the first is the failure this flag exists to avoid.</p>
+
+      <h4>For a pipeline</h4>
+      <p><code>GET /api/series/verdict?key=…</code> returns the same judgement this
+        page shows, for the latest run or for one named with
+        <code>&amp;recording=…</code>. Its <code>status</code> is
+        <code>regressed</code>, <code>changed</code>, <code>ok</code> or
+        <code>unknown</code>; <strong>fail on <code>regressed</code></strong>, and
+        treat <code>unknown</code> as unanswered rather than as a pass. A historical
+        check like this is usually more useful than a fixed threshold, because fixed
+        thresholds are guesses made before the data existed.</p>
 
       <h4>Reading the charts</h4>
       <p>One point per run, on a <strong>real time axis</strong> rather than a run
@@ -159,6 +177,7 @@ function list(state) {
         <td class="text-secondary">${escape(row.addressing_mode)}</td>
         <td class="num">${row.runs}</td>
         <td>${bandState(usable, floor)}</td>
+        <td>${statusBadge(row.latest_status)}</td>
         <td class="text-secondary">${timestamp(row.last_at)}</td>
       </tr>`;
     })
@@ -181,11 +200,12 @@ function list(state) {
       <div class="table-responsive">
         <table class="table card-table table-vcenter metrix-table">
           <thead><tr>
-            <th style="width:38%">Setup</th>
+            <th style="width:30%">Setup</th>
             <th style="width:11%">Kind</th>
-            <th style="width:14%">Addressing</th>
-            <th class="num" style="width:7%">Runs</th>
-            <th style="width:14%">Trend</th>
+            <th style="width:13%">Addressing</th>
+            <th class="num" style="width:6%">Runs</th>
+            <th style="width:11%">Trend</th>
+            <th style="width:13%">Latest run</th>
             <th style="width:16%">Last run</th>
           </tr></thead>
           <tbody>${body}</tbody>
@@ -193,6 +213,46 @@ function list(state) {
       </div>
     </div>
   </div>`;
+}
+
+/**
+ * How the most recent run of a series stands against that series' own history.
+ *
+ * In the list because this is what the list is scanned for. The alternative is
+ * opening every series to find the one that moved, which is the same problem the
+ * archive's severity column solved for recordings.
+ *
+ * `unknown` is drawn as its own thing rather than as a quiet pass: "nothing moved"
+ * and "nothing could be checked" are different answers, and the second one dressed
+ * as the first is the failure this whole flag exists to avoid.
+ */
+const STATUS = {
+  regressed: {
+    tone: "red",
+    label: "regressed",
+    title: "A metric moved beyond this series' own band, the bad way, on a run whose sample count supports it",
+  },
+  changed: {
+    tone: "yellow",
+    label: "changed",
+    title: "A metric moved beyond the band, but in the good direction — worth reading, not a failure",
+  },
+  ok: {
+    tone: "green",
+    label: "within band",
+    title: "Everything that could be checked sat inside the band its history supports",
+  },
+  unknown: {
+    tone: "secondary",
+    label: "not judged",
+    title: "Nothing could be checked: too short a history, too few samples, or a run marked invalid",
+  },
+};
+
+function statusBadge(status) {
+  const state = STATUS[status] ?? STATUS.unknown;
+  return `<span class="badge bg-${state.tone}-lt" title="${escape(state.title)}"
+    >${escape(state.label)}</span>`;
 }
 
 // Said in the list rather than after opening it: a series too short to have a band
@@ -246,6 +306,7 @@ function detail(series) {
         </div>
       </div>
     </div>
+    ${verdictCard(series)}
     ${legend(series)}
     ${cards || noMetrics()}
     ${runsCard(series)}
@@ -408,15 +469,111 @@ function figure(metric, point) {
  * built yet. This says only what the geometry says.
  */
 function verdict(point) {
-  if (!point || point.band == null) {
-    return `<span class="text-secondary" title="Not enough runs behind it to say">no band yet</span>`;
+  if (!point) return `<span class="text-secondary">—</span>`;
+  // Why it could not be checked, never a silent pass. "Nothing moved" and "nothing
+  // could be checked" are different answers and only one of them is reassuring.
+  const excuse = {
+    invalid: ["held out of the band", "This run carries an invalid note"],
+    unsupported: ["too few samples", "The sample count cannot support a median"],
+    no_band: ["no band yet", "Not enough runs behind it to say"],
+  }[point.unjudged_because];
+  if (excuse) {
+    return `<span class="text-secondary" title="${escape(excuse[1])}">${excuse[0]}</span>`;
   }
-  if (point.invalid) {
-    return `<span class="text-secondary" title="Held out of the band">not measured</span>`;
-  }
-  if (!point.outside) return `<span class="text-success">within</span>`;
-  return `<span class="${point.worse ? "text-danger" : "text-success"}"
-    >outside, ${point.worse ? "the bad way" : "the good way"}</span>`;
+  if (!point.flagged) return `<span class="text-success">within band</span>`;
+  // The same word the badge and the CI status use. Three vocabularies for one
+  // judgement is how a page and a pipeline come to appear to disagree.
+  return point.regressed
+    ? `<span class="text-danger">regressed</span>`
+    : `<span class="text-success">outside, the good way</span>`;
+}
+/**
+ * The latest run, judged against the series (design §17.4).
+ *
+ * Three conditions together before the word *regression* is used: the metric moved
+ * beyond the band its own history supports, its sample count supports the claim, and
+ * the run carries no `invalid` note. Any one alone produces false positives at a rate
+ * that teaches people to ignore the flag.
+ *
+ * The same judgement the CI endpoint serves, from the same field, so the page and a
+ * pipeline cannot disagree about whether the last run regressed.
+ */
+function verdictCard(series) {
+  const verdict = series.verdict;
+  if (!verdict?.recording_id) return "";
+
+  const state = STATUS[verdict.status] ?? STATUS.unknown;
+  const rows = verdict.findings
+    .map(
+      (f) => `<tr>
+        <td class="name">${escape(f.metric)}</td>
+        <td class="num">${metricValue(f.metric, f.center)}
+          <span class="text-secondary">±${metricValue(f.metric, f.band)}</span></td>
+        <td class="num">${metricValue(f.metric, f.value)}
+          <small class="text-secondary">n=${f.n}</small></td>
+        <td class="num ${f.worse ? "text-danger" : "text-success"}">
+          ${metricChange(f.metric, f.change)}
+          <span class="text-secondary">(${f.change > 0 ? "+" : ""}${f.change_pct.toFixed(
+            1
+          )}% of normal)</span></td>
+      </tr>`
+    )
+    .join("");
+
+  // Why a metric could not be checked, rather than letting it pass silently.
+  const reasons = {
+    no_band: "not enough history yet",
+    unsupported: "too few samples for a median",
+    invalid: "this run carries an invalid note",
+  };
+  const unjudged = Object.entries(verdict.unjudged ?? {});
+  const skipped = unjudged.length
+    ? `<div class="card-body py-2 border-top text-secondary">
+         Not checked:
+         ${unjudged
+           .map(
+             ([metric, why]) =>
+               `<code>${escape(metric)}</code> (${escape(reasons[why] ?? why)})`
+           )
+           .join(", ")}.
+       </div>`
+    : "";
+
+  return `<div class="card">
+    <div class="card-header">
+      <div>
+        <h3 class="card-title">Latest run
+          <span class="ms-2">${statusBadge(verdict.status)}</span>
+        </h3>
+        <div class="card-subtitle">
+          <a href="#/recordings/${encodeURIComponent(verdict.recording_id)}"
+             >${escape(verdict.recording_id)}</a>, ${timestamp(verdict.at)}.
+          ${escape(state.title)}.
+          ${
+            verdict.judged?.length
+              ? `${verdict.judged.length} metric(s) checked and within band.`
+              : ""
+          }
+        </div>
+      </div>
+    </div>
+    ${
+      rows
+        ? `<div class="table-responsive">
+             <table class="table card-table table-vcenter metrix-table">
+               <thead><tr>
+                 <th style="width:22%">Metric</th>
+                 <th class="num" style="width:22%">Normally</th>
+                 <th class="num" style="width:22%">This run</th>
+                 <th class="num" style="width:34%">Move</th>
+               </tr></thead>
+               <tbody>${rows}</tbody>
+             </table>
+           </div>`
+        : ""
+    }
+    ${skipped}
+  </div>`;
 }
 
 function noteBadge(run) {

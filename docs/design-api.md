@@ -407,7 +407,13 @@ Trendable metrics include p50/p95/p99 with intervals, error rate, achieved vs ta
 
 A metric is flagged when it moves beyond a configured multiple of the series' noise floor (default 2× IQR), **and** its sample count supports the claim, **and** the run carries no `invalid` annotation. All three conditions, because any one alone produces false positives at a rate that trains people to ignore the flag.
 
-The three are kept apart in the code. §17.3 computes only the geometry — *this point sits outside the band* — and the trend view says exactly that and no more; the word *regression* is not used until all three conditions are assembled here. A view that called the first condition by the name of the verdict would be wrong on precisely the runs the other two exist to catch.
+The three are kept apart in the code. §17.3 computes only the geometry — *this point sits outside the band* — and the word *regression* is not used until all three are assembled. A view that called the first condition by the name of the verdict would be wrong on precisely the runs the other two exist to catch.
+
+**A move in the good direction meets all three conditions and is still not a regression.** It is reported as a *change*: worth reading, because an unexplained improvement usually means the test stopped doing part of the work, but not something to fail a build on. The two are named apart rather than merged into "flagged", because the one thing a pipeline does with this is decide whether to stop.
+
+**Not being able to check is a first-class answer, and never a pass.** A series too short to have a band, a run whose sample count cannot support a median, and a run already carrying an `invalid` note are three different reasons the check has nothing to say, and the verdict names the metric and the reason for each. Reporting silence as success is the one failure this check must not have — a pipeline that treats *could not check* as *passed* gets exactly one useful signal out of it, the wrong one, and it gets it on the runs that went most wrong.
+
+The verdict is served at `GET /api/series/verdict?key=…`, for the latest run or for one named with `&recording=…`, with `status` one of `regressed`, `changed`, `ok` and `unknown`. The trend response carries the same document, so the page and the pipeline read one judgement rather than two implementations of it.
 
 Flags are advisory in the UI and available as a machine-readable verdict for the same CI path as §16, so a pipeline can fail on "outside the historical band" as well as on a fixed SLO threshold. The historical check is usually the more useful of the two — fixed thresholds are guesses made before the data existed.
 

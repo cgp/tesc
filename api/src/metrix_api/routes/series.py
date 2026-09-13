@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from metrix_api import analysis
 from metrix_api.deps import get_db
-from metrix_api.stats.trend import BAND_WINDOW, MIN_RUNS_FOR_BAND
+from metrix_api.stats.trend import BAND_WINDOW, MIN_RUNS_FOR_BAND, UNKNOWN
 from metrix_api.store import recordings as store
 
 router = APIRouter(prefix="/api/series", tags=["series"])
@@ -42,17 +42,66 @@ def _series(row: store.SeriesRow) -> dict[str, Any]:
 
 
 @router.get("")
-def list_series(conn: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
+def list_series(
+    verdicts: bool = True, conn: sqlite3.Connection = Depends(get_db)
+) -> dict[str, Any]:
     """Every setup that has been recorded against, most recent first.
 
     `min_runs_for_band` travels with the list so the page can say which series are
     long enough to have a trend worth reading, rather than offering every one of them
     and explaining the short ones only after they are opened.
+
+    Each row carries how its **latest run** stands against its own history, because
+    that is the question the list is scanned for and the alternative is opening every
+    series to find the one that moved. It costs a pass over each series' samples, so
+    `verdicts=false` is there for a caller that only wants the identities.
     """
+    rows = store.series_list(conn)
+    latest = (
+        {row.key: analysis.series_verdict(conn, row.key).status for row in rows}
+        if verdicts
+        else {}
+    )
     return {
-        "series": [_series(row) for row in store.series_list(conn)],
+        "series": [
+            {**_series(row), "latest_status": latest.get(row.key, UNKNOWN)} for row in rows
+        ],
         "min_runs_for_band": MIN_RUNS_FOR_BAND,
     }
+
+
+@router.get("/verdict")
+def get_verdict(
+    key: str,
+    recording: str | None = None,
+    window: int = Query(default=BAND_WINDOW, ge=2, le=100),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    """How one run stands against the history of its series (design-api 17.4).
+
+    The latest run unless one is named. `status` is one of `regressed`, `changed`,
+    `ok` and `unknown`, and **a pipeline should fail on `regressed` only** -- a flag
+    in the good direction is worth reading but is not a build failure.
+
+    `unknown` is a first-class answer and never a pass. A series too short to have a
+    band, a run whose sample count cannot support a median, and a run already carrying
+    an `invalid` note are all cases where this endpoint has nothing to say, and
+    `unjudged` names the metric and the reason for each of them. Reporting silence as
+    success is the one failure this check must not have.
+    """
+    if not any(row.key == key for row in store.series_list(conn)):
+        raise HTTPException(status_code=404, detail=f"no series {key!r}")
+
+    # Read the series once and check membership against its runs. Asking the verdict
+    # whether it found the recording cannot answer this: a run that exists but
+    # collected nothing and a run that does not exist both come back empty, and
+    # answering "unknown" for a typo would send a pipeline chasing its own history.
+    result = analysis.series_trends(conn, key, window=window)
+    if recording and not any(run.id == recording for run in result.runs):
+        raise HTTPException(
+            status_code=404, detail=f"no recording {recording!r} in series {key!r}"
+        )
+    return result.verdict(recording).to_document()
 
 
 @router.get("/trend")
@@ -75,6 +124,9 @@ def get_trend(
     return {
         "series": _series(found[0]),
         "has_baseline_phase": result.has_baseline_phase,
+        # The same judgement the CI endpoint serves, so the page and the pipeline
+        # cannot disagree about whether the last run was a regression.
+        "verdict": result.verdict().to_document(),
         "metrics": result.metrics,
         "trends": {metric: t.to_document() for metric, t in result.trends.items()},
         # The runs themselves, in the order the points are drawn in. The chart says
