@@ -78,6 +78,11 @@ export const api = {
     ),
   clearBaseline: (id) =>
     request(`/api/recordings/${encodeURIComponent(id)}/baseline`, { method: "DELETE" }),
+  purgeable: (id) => request(`/api/recordings/${encodeURIComponent(id)}/purgeable`),
+  purge: (id) =>
+    request(`/api/recordings/${encodeURIComponent(id)}/purge`, { method: "POST" }),
+  purgeSeries: (key) =>
+    request(`/api/series/purge?${new URLSearchParams({ key })}`, { method: "POST" }),
   series: (id, metric, target) => {
     const query = new URLSearchParams({
       ...(metric ? { metric } : {}),

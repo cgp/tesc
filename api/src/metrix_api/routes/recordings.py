@@ -6,9 +6,12 @@ import json
 import sqlite3
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, PlainTextResponse
 
-from metrix_api import analysis
+from metrix_api import analysis, export
+from metrix_api import purge as purging
+from metrix_api.config import Config
 from metrix_api.deps import get_db
 from metrix_api.stats import Delta, Recovery, Summary
 from metrix_api.store import inventories
@@ -29,6 +32,8 @@ def _row(recording: store.RecordingRow) -> dict[str, Any]:
         "finished_at": recording.finished_at,
         "duration_ms": recording.duration_ms,
         "is_baseline": recording.is_baseline,
+        # Not the same as never having had any: one is a decision somebody made.
+        "purged_at": recording.purged_at,
         "annotations_by_severity": recording.annotations,
         "worst": recording.worst,
         "note": recording.note,
@@ -366,3 +371,118 @@ def _baseline_medians(conn: sqlite3.Connection, recording_id: str) -> dict[str, 
         return {}
     pooled = analysis.summaries(conn, baseline.id).get(analysis.ENVIRONMENT, {})
     return {metric: s.p50 for metric, s in pooled.items() if s.p50 is not None}
+def _config(request: Request) -> Config:
+    return request.app.state.config
+
+
+def _require(conn: sqlite3.Connection, recording_id: str) -> store.RecordingRow:
+    try:
+        return store.get(conn, recording_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+# ------------------------------------------------------------------------ purge
+
+
+@router.get("/{recording_id}/purgeable")
+def get_purgeable(
+    recording_id: str,
+    request: Request,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    """What a purge would drop, measured rather than estimated.
+
+    Read before the confirmation is drawn, so the dialog names a real number. One
+    that says "frees about 2 GB" and turns out to free four kilobytes teaches people
+    to stop reading dialogs, which is expensive on the one that mattered.
+    """
+    _require(conn, recording_id)
+    found = purging.describe(_config(request), conn, recording_id)
+    return {
+        "recording_id": found.recording_id,
+        "files": found.files,
+        "bytes": found.bytes,
+        "anything": found.anything,
+        "purged_at": found.purged_at,
+        # Said in both directions, because a confirmation that only lists losses
+        # reads as though everything is being lost.
+        "drops": list(purging.DROPPED),
+        "keeps": list(purging.KEPT),
+    }
+
+
+@router.post("/{recording_id}/purge")
+def post_purge(
+    recording_id: str,
+    request: Request,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    """Drop this recording's request-level bulk. Every figure survives.
+
+    By a button and never by a policy (design-api 17.1). A retention rule runs on a
+    schedule and is therefore certain to delete the evidence for the one run somebody
+    needed, on the day they needed it, with nobody present to notice.
+    """
+    _require(conn, recording_id)
+    result = purging.purge(_config(request), conn, recording_id)
+    return {
+        "purged": result.recordings,
+        "skipped": result.skipped,
+        "files": result.files,
+        "bytes": result.bytes,
+    }
+
+
+# ----------------------------------------------------------------------- export
+
+
+@router.get("/{recording_id}/export.json")
+def export_json(
+    recording_id: str, conn: sqlite3.Connection = Depends(get_db)
+) -> dict[str, Any]:
+    """Everything known about this recording, samples included."""
+    _require(conn, recording_id)
+    return export.document(conn, recording_id)
+
+
+@router.get("/{recording_id}/export.csv", response_class=PlainTextResponse)
+def export_csv(
+    recording_id: str,
+    kind: str = Query(default="series", pattern="^(series|summary)$"),
+    conn: sqlite3.Connection = Depends(get_db),
+) -> PlainTextResponse:
+    """The samples, or the table, as CSV.
+
+    Two shapes because they go to two places: `series` is what somebody builds a
+    chart from, `summary` is what goes into a ticket. The summary carries `n` as a
+    column rather than a footnote — a spreadsheet is exactly where a figure gets
+    separated from its caveat.
+    """
+    _require(conn, recording_id)
+    body = (
+        export.series_csv(conn, recording_id)
+        if kind == "series"
+        else export.summary_csv(conn, recording_id)
+    )
+    return PlainTextResponse(
+        body,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{recording_id}-{kind}.csv"'
+        },
+    )
+
+
+@router.get("/{recording_id}/report.html", response_class=HTMLResponse)
+def export_report(
+    recording_id: str, conn: sqlite3.Connection = Depends(get_db)
+) -> HTMLResponse:
+    """A self-contained report: one file, no network, no script.
+
+    For the reader who does not have this tool and cannot ask a follow-up question,
+    which is why it carries its own explanations and leads with whether the numbers
+    can be trusted at all.
+    """
+    _require(conn, recording_id)
+    return HTMLResponse(export.report_html(conn, recording_id))

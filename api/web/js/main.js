@@ -9,7 +9,7 @@ import { api } from "./api.js";
 import * as charts from "./charts.js";
 import * as compare from "./compare.js";
 import * as config from "./config.js";
-import { escape } from "./format.js";
+import { bytes as formatBytes, count, escape } from "./format.js";
 import * as profiles from "./profiles.js";
 import * as recordings from "./recordings.js";
 import * as series from "./series.js";
@@ -530,6 +530,54 @@ async function verifyProfile(name) {
 }
 
 /**
+ * Drop a recording's request-level bulk, after saying exactly what that costs.
+ *
+ * The confirmation names a measured size rather than an estimate, and lists what
+ * survives as well as what goes: a dialog that only enumerates losses reads as though
+ * everything is being lost, and one that guesses at the number teaches people to stop
+ * reading dialogs -- which is expensive on the one that mattered.
+ */
+async function purgeRecording(id) {
+  try {
+    set({ error: null });
+    const what = await api.purgeable(id);
+    if (!what.anything) {
+      notify(
+        "Nothing to purge: this recording holds no request-level data. Host samples " +
+          "are not bulk and are never dropped."
+      );
+      return;
+    }
+    // Every line break lives inside a template literal: a plain string cannot span
+    // lines, and this message is mostly lines.
+    const list = (items) =>
+      items
+        .map(
+          (item) => `
+  — ${item}`
+        )
+        .join("");
+    const message =
+      `Drop the request-level data for ${id}?
+
+This frees ${formatBytes(what.bytes)} across ${count(what.files, "file")}.
+
+It removes:${list(what.drops)}
+
+It keeps:${list(what.keeps)}
+
+This cannot be undone.`;
+    if (!window.confirm(message)) return;
+
+    const result = await api.purge(id);
+    notify(`Purged ${formatBytes(result.bytes)}. Every figure is unchanged.`);
+    await onRouteChange();
+  } catch (error) {
+    set({ error: error.message });
+  }
+}
+
+/**
  * Mark a recording as the baseline its series is compared against, or clear it.
  *
  * A refusal is a 409 rather than an error to shrug at: the recording carries an
@@ -688,6 +736,7 @@ document.addEventListener("click", (event) => {
   if (action === "profile-resolve") resolveProfile(profile);
   if (action === "profile-verify") verifyProfile(profile);
   if (action === "archive-clear") clearArchiveFilters();
+  if (action === "purge") purgeRecording(button.dataset.recording);
   if (action === "run-toggle") toggleRun(button.dataset.recording);
   if (action === "compare-runs") compareSelected();
   if (action === "compare-clear") set({ selectedRuns: [] });

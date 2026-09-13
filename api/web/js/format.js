@@ -16,6 +16,16 @@ export function bytes(value) {
   return `${sign}${n.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
+/**
+ * A count of things, with the noun, so a bare number never stands in a sentence.
+ *
+ * English pluralisation for the handful of nouns this page counts. "1 files" reads as
+ * unfinished and "file(s)" reads as though nobody looked.
+ */
+export function count(n, singular, plural = `${singular}s`) {
+  return `${n} ${n === 1 ? singular : plural}`;
+}
+
 export function percent(value) {
   return value == null ? "—" : `${value.toFixed(1)}%`;
 }

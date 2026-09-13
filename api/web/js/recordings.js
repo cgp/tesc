@@ -460,11 +460,11 @@ function comparisonCard(recording) {
         ? `<div class="table-responsive">
              <table class="table card-table table-vcenter metrix-table">
                <thead><tr>
-                 <th style="width:34%">Metric</th>
-                 <th class="num" style="width:17%">Normally</th>
-                 <th class="num" style="width:17%">This time</th>
-                 <th class="num" style="width:20%">Change</th>
-                 <th class="num" style="width:12%">Band</th>
+                 <th style="width:26%">Metric</th>
+                 <th class="num" style="width:16%">Normally</th>
+                 <th class="num" style="width:16%">This time</th>
+                 <th class="num" style="width:29%">Change</th>
+                 <th class="num" style="width:13%">Band</th>
                </tr></thead>
                <tbody>${rows}</tbody>
              </table>
@@ -561,6 +561,54 @@ function baselineButton(recording) {
   </button>`;
 }
 
+/**
+ * The three ways out of this tool, side by side.
+ *
+ * Plain links rather than fetch-and-download: the browser already knows how to save a
+ * response, the server already names the file, and doing it by hand would mean
+ * holding a whole export in memory to hand it straight back.
+ *
+ * The report opens in a tab instead of downloading, because the first thing anyone
+ * does with it is look at it.
+ */
+function exportMenu(recording) {
+  const base = `/api/recordings/${encodeURIComponent(recording.id)}`;
+  return `<div class="btn-group">
+    <a class="btn btn-sm" href="${base}/report.html" target="_blank" rel="noopener"
+       title="One self-contained page — no network, no script — for somebody who does not have this tool">
+      ${icon("chart-line")} Report
+    </a>
+    <a class="btn btn-sm" href="${base}/export.csv?kind=summary" download
+       title="The table, with the sample count beside every figure">CSV</a>
+    <a class="btn btn-sm" href="${base}/export.csv?kind=series" download
+       title="Every sample, one per row, for building a chart elsewhere">Samples</a>
+    <a class="btn btn-sm" href="${base}/export.json" download
+       title="Everything known about this recording">JSON</a>
+  </div>`;
+}
+
+/**
+ * Drop the request-level bulk, by a button and never by a policy.
+ *
+ * A retention rule runs on a schedule and is therefore certain to delete the evidence
+ * for the one run somebody needed, on the day they needed it, with nobody present to
+ * notice. So this only happens because a person asked, and the asking says exactly
+ * what goes and exactly what stays.
+ */
+function purgeButton(recording) {
+  if (recording.purged_at) {
+    return `<span class="badge bg-secondary-lt"
+                  title="The request-level data was dropped on ${escape(
+                    recording.purged_at
+                  )}. Every figure on this page is unaffected.">purged</span>`;
+  }
+  return `<button class="btn btn-sm" data-action="purge"
+                  data-recording="${escape(recording.id)}"
+                  title="Drop the request-level records. Every figure, note and trend stays.">
+    ${icon("trash")} Purge
+  </button>`;
+}
+
 function detail(recording) {
   const annotations = recording.annotations.length
     ? `<div class="list-group list-group-flush">${recording.annotations
@@ -589,7 +637,9 @@ function detail(recording) {
       <div class="card-header">
         <h3 class="card-title">${escape(recording.id)}</h3>
         <div class="card-actions d-flex align-items-center gap-2">
+        ${exportMenu(recording)}
         ${baselineButton(recording)}
+        ${purgeButton(recording)}
         ${statusBadge(recording.status)}
       </div>
       </div>
@@ -605,6 +655,14 @@ function detail(recording) {
               .join(", ") || "—"
           )}
           ${field("Metrics", String(recording.metrics.length))}
+          ${field(
+            "Request data",
+            recording.purged_at
+              ? `<span title="Purged ${escape(
+                  recording.purged_at
+                )} — every figure on this page is unaffected">purged</span>`
+              : "kept"
+          )}
           ${field(
             "Series",
             // The identity is also the way into the history: what this run did is

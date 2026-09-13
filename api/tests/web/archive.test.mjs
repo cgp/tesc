@@ -126,3 +126,49 @@ test("a search term is escaped back into the box, not interpreted", () => {
   assert.match(markup, /&quot;&gt;&lt;script&gt;/);
   assert.doesNotMatch(markup, /<script>/);
 });
+
+/* ------------------------------------------------------- exporting and purging */
+
+function opened(patch = {}) {
+  return render({
+    selectedRecording: {
+      ...recording(),
+      metrics: ["cpu.busy"],
+      annotations: [],
+      gaps: [],
+      identity: {},
+      filesystems: [],
+      inventory: null,
+      ...patch,
+    },
+    recordings: [],
+    archive: { filters: {}, facets: {}, total: 1 },
+  });
+}
+
+test("all three exports are offered, and the report opens rather than downloads", () => {
+  // The first thing anyone does with a report is look at it.
+  const markup = opened();
+  assert.match(markup, /report\.html" target="_blank"/);
+  assert.match(markup, /export\.csv\?kind=summary" download/);
+  assert.match(markup, /export\.csv\?kind=series" download/);
+  assert.match(markup, /export\.json" download/);
+});
+
+test("the summary export says it carries the sample count", () => {
+  assert.match(opened(), /sample count beside every figure/);
+});
+
+test("a recording that still holds its request data offers the purge", () => {
+  const markup = opened();
+  assert.match(markup, /data-action="purge"/);
+  assert.match(markup, /Every figure, note and trend stays/);
+  assert.match(markup, />kept</);
+});
+
+test("one already purged says so instead of offering it again", () => {
+  const markup = opened({ purged_at: "2026-09-13T10:00:00Z" });
+  assert.doesNotMatch(markup, /data-action="purge"/);
+  assert.match(markup, /purged/);
+  assert.match(markup, /Every figure on this page is unaffected/);
+});

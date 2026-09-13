@@ -16,9 +16,10 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from metrix_api import analysis
+from metrix_api import purge as purging
 from metrix_api.deps import get_db
 from metrix_api.stats.trend import BAND_WINDOW, MIN_RUNS_FOR_BAND, UNKNOWN
 from metrix_api.store import recordings as store
@@ -145,4 +146,28 @@ def get_trend(
             }
             for run in result.runs
         ],
+    }
+@router.post("/purge")
+def purge_series(
+    key: str,
+    request: Request,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    """Drop the request-level bulk for every run of one setup.
+
+    A series is the unit a decision like this is actually made about -- *we are done
+    with this setup's request-level data* -- and doing it one run at a time is how
+    somebody gives up halfway and leaves an archive in two states.
+
+    `skipped` names the runs that had nothing to drop rather than counting them as
+    done, so "purged 12 runs" never covers for eleven of them having been empty.
+    """
+    if not any(row.key == key for row in store.series_list(conn)):
+        raise HTTPException(status_code=404, detail=f"no series {key!r}")
+    result = purging.purge_series(request.app.state.config, conn, key)
+    return {
+        "purged": result.recordings,
+        "skipped": result.skipped,
+        "files": result.files,
+        "bytes": result.bytes,
     }

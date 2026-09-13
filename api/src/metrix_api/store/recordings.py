@@ -61,6 +61,10 @@ class RecordingRow:
     duration_ms: int | None = None
     is_baseline: bool = False
     note: str | None = None
+    #: When the request-level bulk was dropped, if it was. Not the same as never
+    #: having had any: one is a decision somebody made and the other is a run with
+    #: no engine attached, and a page that conflates them is lying about evidence.
+    purged_at: str | None = None
     targets: list[str] = field(default_factory=list)
     #: Annotation counts by severity. The archive needs to say which recordings have
     #: something wrong with them without opening each one, and `invalid` is the
@@ -89,6 +93,7 @@ class RecordingRow:
             duration_ms=row["duration_ms"],
             is_baseline=bool(row["is_baseline"]),
             note=row["note"],
+            purged_at=row["purged_at"],
         )
 
 

@@ -2,7 +2,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { bytes, escape, metricChange, targetLabel } = await import("../../web/js/format.js");
+const { bytes, count, escape, metricChange, targetLabel } = await import(
+  "../../web/js/format.js"
+);
 
 test("bytes scales the magnitude, so a negative delta reads like a size", () => {
   assert.equal(bytes(0), "0 B");
@@ -52,4 +54,12 @@ test("a change in anything else keeps that metric's own units", () => {
 test("no change is signed neither way, and no value is a dash", () => {
   assert.equal(metricChange("cpu.busy", 0), "0.0 pts");
   assert.equal(metricChange("cpu.busy", null), "—");
+});
+
+test("a count brings its noun, so a bare number never stands alone", () => {
+  assert.equal(count(1, "file"), "1 file");
+  assert.equal(count(0, "file"), "0 files");
+  assert.equal(count(12, "file"), "12 files");
+  assert.equal(count(1, "series", "series"), "1 series");
+  assert.equal(count(3, "series", "series"), "3 series");
 });
