@@ -24,8 +24,8 @@ pub mod targets;
 pub use call::{Assertion, Call, CallFile, Condition, Generate};
 pub use common::{Dur, Method, Selector};
 pub use mix::{
-    Chain, Dataset, DatasetMode, Defaults, ExecProtocol, Generator, Load, LoadMode, LoadModel, Mix,
-    OnFailure, Phases, RepeatUntil, SessionPolicy, Step,
+    Chain, Corpus, Dataset, DatasetMode, Defaults, ExecProtocol, Generator, Load, LoadMode,
+    LoadModel, Mix, OnFailure, Phases, RepeatUntil, SessionPolicy, Step,
 };
 pub use targets::{Target, Targets};
 

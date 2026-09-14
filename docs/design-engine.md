@@ -499,6 +499,22 @@ Sandboxed: no `os.execute`, no network, no `require` outside the plan directory.
 
 Corpus files are **loaded once into memory at run start and shared across every Lua VM**, not read per call. They are expected to be small enough for that, and the engine enforces it: a configured size ceiling, checked at load, with a clear failure rather than a slow run. No streaming, no lazy reads, no file handles on the hot path — the whole point of allowing reads is convenience at setup, not I/O during the measured window.
 
+A corpus is declared on the generator that reads it, as a directory inside the bundle and a ceiling over everything under it:
+
+```jsonc
+"order": { "type": "lua", "file": "gen/order.lua",
+           "corpus": { "dir": "corpus", "max_kb": 4096 } }
+```
+
+There is no `read` call, because there is no reading: the files are already in memory when the script first runs, and the script sees them as two read-only globals.
+
+```lua
+local body = corpus["payloads/order.xml"]              -- by name
+local pick = corpus[corpus_names[ctx.rng:int(1, #corpus_names)]]
+```
+
+Keys are paths relative to `dir`, with forward slashes on every platform so a plan reads the same on the box it was written on and the box it runs on. Values are byte strings, so a binary fixture works as well as a word list. Both globals are read-only: a VM outlives the iteration that used it, and a script that could write to the corpus would be leaking one iteration's state into the next. A name that is not there fails the generation naming what is, rather than substituting nil into a request.
+
 A generator that needs to write, execute, or reach the network wants the exec tier, where the process boundary makes the cost and the risk explicit.
 
 **Rust plugin tier** is a trait implemented in-tree and registered by name, compiled into the engine. For the cases where even Lua's per-call overhead matters — multi-megabyte XML assembly, request signing, on-the-fly compression — or where an existing Rust type can be serialized directly with no intermediate representation.

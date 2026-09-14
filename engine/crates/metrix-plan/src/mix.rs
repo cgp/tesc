@@ -291,6 +291,21 @@ pub enum DatasetMode {
     UniquePerIteration,
 }
 
+/// Static files a generator may read, as a directory inside the bundle.
+///
+/// A ceiling rather than a hope: the whole point of allowing reads is convenience at
+/// setup, not I/O during the measured window, so everything under `dir` is loaded
+/// before the run and a plan pointing at something too large is refused rather than
+/// swallowing it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Corpus {
+    pub dir: PathBuf,
+    /// Total kilobytes allowed under `dir`. Default 4096.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_kb: Option<u64>,
+}
+
 /// How a request gets built when a template is not enough.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -300,6 +315,10 @@ pub enum Generator {
         file: PathBuf,
         #[serde(default = "default_lua_entry")]
         entry: String,
+        /// Static files the script reads: sample payloads, a fixture set, a word
+        /// list. Loaded once at run start, never read per call.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        corpus: Option<Corpus>,
         /// Build a request buffer during warmup so the measured window pays nothing.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         prefetch: Option<u32>,

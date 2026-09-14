@@ -615,6 +615,28 @@
         "steps"
       ]
     },
+    "Corpus": {
+      "description": "Static files a generator may read, as a directory inside the bundle.\n\nA ceiling rather than a hope: the whole point of allowing reads is convenience at\nsetup, not I/O during the measured window, so everything under `dir` is loaded\nbefore the run and a plan pointing at something too large is refused rather than\nswallowing it.",
+      "type": "object",
+      "properties": {
+        "dir": {
+          "type": "string"
+        },
+        "max_kb": {
+          "description": "Total kilobytes allowed under `dir`. Default 4096.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "dir"
+      ]
+    },
     "Dataset": {
       "type": "object",
       "properties": {
@@ -779,6 +801,17 @@
           "description": "The default tier: embedded, in-process, one VM per worker thread.",
           "type": "object",
           "properties": {
+            "corpus": {
+              "description": "Static files the script reads: sample payloads, a fixture set, a word\nlist. Loaded once at run start, never read per call.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Corpus"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "entry": {
               "type": "string",
               "default": "generate"

@@ -521,3 +521,178 @@ fn a_sidecar_that_cannot_be_started_is_refused_before_the_run() {
         .unwrap_err();
     assert!(error.contains("definitely-not-a-program-9f3a"), "{error}");
 }
+
+/// A bundle whose script reads a corpus of static files.
+fn with_corpus(root: &Path, address: SocketAddr, script: &str, files: &[(&str, &str)]) {
+    with_lua(
+        root,
+        address,
+        script,
+        json!({"method": "POST", "path": "/unused", "generate": {"generator": "build"}}),
+    );
+    for (name, contents) in files {
+        let path = root.join("corpus").join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, contents).unwrap();
+    }
+    edit(root, "mix.json", |doc| {
+        doc["generators"]["build"]["corpus"] = json!({"dir": "corpus"});
+    });
+}
+
+#[tokio::test]
+async fn a_script_sends_a_payload_it_read_from_the_bundle() {
+    let seen: Seen = Arc::default();
+    let address = serve(Arc::clone(&seen)).await;
+    let dir = tempfile::tempdir().unwrap();
+    with_corpus(
+        dir.path(),
+        address,
+        r#"
+function generate(ctx)
+  local name = corpus_names[ctx.rng:int(1, #corpus_names)]
+  return { path = "/p", body = corpus[name] }
+end
+"#,
+        &[
+            ("payloads/one.xml", "<order>1</order>"),
+            ("payloads/two.xml", "<order>2</order>"),
+        ],
+    );
+    let plan = Plan::load(dir.path()).unwrap();
+    run(plan, pending::<()>()).await.unwrap();
+
+    let seen = seen.lock().unwrap().clone();
+    assert!(!seen.is_empty(), "nothing was sent");
+    let bodies: std::collections::BTreeSet<_> = seen.iter().map(|sent| sent.body.clone()).collect();
+    // Both files reachable, and nothing else: the corpus is what is under the
+    // directory and the script picked from it by index.
+    assert!(
+        bodies.iter().all(|body| body.starts_with("<order>")),
+        "{bodies:?}"
+    );
+    assert!(
+        bodies.len() > 1,
+        "only one payload was ever picked: {bodies:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_corpus_is_read_once_rather_than_per_request() {
+    let seen: Seen = Arc::default();
+    let address = serve(Arc::clone(&seen)).await;
+    let dir = tempfile::tempdir().unwrap();
+    with_corpus(
+        dir.path(),
+        address,
+        r#"function generate(ctx) return { path = "/p", body = corpus["a.txt"] } end"#,
+        &[("a.txt", "original")],
+    );
+    let plan = Plan::load(dir.path()).unwrap();
+    // Changed on disk after the plan is loaded. The run must not notice, because
+    // nothing opens the file again: no file handles on the hot path.
+    fs::write(dir.path().join("corpus/a.txt"), "changed-mid-run").unwrap();
+    run(plan, pending::<()>()).await.unwrap();
+
+    let seen = seen.lock().unwrap().clone();
+    assert!(!seen.is_empty(), "nothing was sent");
+    assert!(seen.iter().all(|sent| sent.body == "original"), "{seen:?}");
+}
+
+#[tokio::test]
+async fn a_script_cannot_write_to_the_corpus_it_shares_with_the_next_iteration() {
+    let seen: Seen = Arc::default();
+    let address = serve(Arc::clone(&seen)).await;
+    let dir = tempfile::tempdir().unwrap();
+    with_corpus(
+        dir.path(),
+        address,
+        r#"function generate(ctx) corpus["a.txt"] = "mine" return { path = "/p" } end"#,
+        &[("a.txt", "shared")],
+    );
+    let plan = Plan::load(dir.path()).unwrap();
+    let report = run(plan, pending::<()>()).await.unwrap();
+
+    assert!(seen.lock().unwrap().is_empty(), "the write was allowed");
+    // A VM outlives the iteration that used it, so a script that could write to the
+    // corpus would be leaking one iteration's state into the next.
+    let step = &report.metrics.chains["chain"].steps["only"];
+    assert_eq!(step.errors[9], step.failed);
+    assert!(step.failed > 0);
+}
+
+#[tokio::test]
+async fn asking_for_a_file_that_is_not_there_says_what_is() {
+    let seen: Seen = Arc::default();
+    let address = serve(Arc::clone(&seen)).await;
+    let dir = tempfile::tempdir().unwrap();
+    with_corpus(
+        dir.path(),
+        address,
+        r#"function generate(ctx) return { path = "/p", body = corpus["b.txt"] } end"#,
+        &[("a.txt", "only this one")],
+    );
+    let plan = Plan::load(dir.path()).unwrap();
+    let report = run(plan, pending::<()>()).await.unwrap();
+
+    // Rather than a nil body reaching the service as a hole in the request.
+    assert!(seen.lock().unwrap().is_empty(), "a nil body was sent");
+    let step = &report.metrics.chains["chain"].steps["only"];
+    assert_eq!(step.errors[9], step.failed);
+}
+
+#[test]
+fn a_corpus_over_its_ceiling_is_refused_with_both_numbers() {
+    let dir = tempfile::tempdir().unwrap();
+    with_corpus(
+        dir.path(),
+        "127.0.0.1:1".parse().unwrap(),
+        r#"function generate(ctx) return { path = "/p" } end"#,
+        &[("big.txt", &"x".repeat(40 * 1024))],
+    );
+    edit(dir.path(), "mix.json", |doc| {
+        doc["generators"]["build"]["corpus"] = json!({"dir": "corpus", "max_kb": 16});
+    });
+    // A corpus is held in memory for the whole run, so the ceiling is what stops a
+    // plan pointing at a build directory from taking the box with it.
+    let error = Plan::load(dir.path()).map(drop).unwrap_err();
+    assert!(error.contains("16 KB"), "{error}");
+}
+
+#[test]
+fn a_corpus_outside_the_bundle_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    with_corpus(
+        dir.path(),
+        "127.0.0.1:1".parse().unwrap(),
+        r#"function generate(ctx) return { path = "/p" } end"#,
+        &[("a.txt", "x")],
+    );
+    edit(dir.path(), "mix.json", |doc| {
+        doc["generators"]["build"]["corpus"] = json!({"dir": "../elsewhere"});
+    });
+    fs::create_dir_all(dir.path().parent().unwrap().join("elsewhere")).unwrap();
+    let error = Plan::load(dir.path()).map(drop).unwrap_err();
+    assert!(error.contains("outside the bundle"), "{error}");
+}
+
+#[tokio::test]
+async fn a_script_with_no_corpus_has_no_corpus_globals() {
+    let seen: Seen = Arc::default();
+    let address = serve(Arc::clone(&seen)).await;
+    let dir = tempfile::tempdir().unwrap();
+    with_lua(
+        dir.path(),
+        address,
+        r#"function generate(ctx) return { path = "/p/" .. tostring(corpus == nil) } end"#,
+        json!({"method": "GET", "path": "/unused", "generate": {"generator": "build"}}),
+    );
+    let plan = Plan::load(dir.path()).unwrap();
+    run(plan, pending::<()>()).await.unwrap();
+
+    let seen = seen.lock().unwrap().clone();
+    assert!(!seen.is_empty(), "nothing was sent");
+    // Absent rather than empty: a plan that declared no corpus has none, and a script
+    // reading one is asking about something the plan never said existed.
+    assert!(seen.iter().all(|sent| sent.target == "/p/true"), "{seen:?}");
+}

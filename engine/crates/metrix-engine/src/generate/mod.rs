@@ -22,6 +22,7 @@
 //! - **Generation failure is its own error class**, never counted as a target error.
 //!   The service was never asked.
 
+pub(crate) mod corpus;
 pub(crate) mod exec;
 pub(crate) mod lua;
 pub(crate) mod plugin;
@@ -119,10 +120,11 @@ impl Generators {
                 Declared::Lua {
                     file,
                     entry,
+                    corpus,
                     prefetch,
                 } => {
                     refuse_prefetch(&at, *prefetch)?;
-                    Generator::Lua(lua::Script::load(&at, root, file, entry)?)
+                    Generator::Lua(lua::Script::load(&at, root, file, entry, corpus.as_ref())?)
                 }
                 Declared::Plugin { name, prefetch } => {
                     refuse_prefetch(&at, *prefetch)?;

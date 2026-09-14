@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use mlua::{Lua, LuaOptions, StdLib, Table, Value as LuaValue};
 
+use super::corpus::Corpus;
 use super::{Built, Context, require};
 use crate::random::Rng;
 
@@ -47,13 +48,21 @@ pub(crate) struct Script {
     name: Arc<str>,
     source: Arc<str>,
     entry: Arc<str>,
+    /// Read once, before the run, and shared by every VM that runs this script.
+    corpus: Arc<Corpus>,
 }
 
 /// How many scripts have been declared, so each gets a distinct thread-local slot.
 static SLOTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 impl Script {
-    pub fn load(at: &str, root: &Path, file: &Path, entry: &str) -> Result<Self, String> {
+    pub fn load(
+        at: &str,
+        root: &Path,
+        file: &Path,
+        entry: &str,
+        corpus: Option<&metrix_plan::Corpus>,
+    ) -> Result<Self, String> {
         let path = super::in_bundle(at, root, file)?;
         require(
             path.extension().and_then(|e| e.to_str()) == Some("lua"),
@@ -70,6 +79,10 @@ impl Script {
             name: file.display().to_string().into(),
             source: source.into(),
             entry: entry.into(),
+            corpus: Arc::new(match corpus {
+                Some(declared) => Corpus::load(at, root, declared)?,
+                None => Corpus::default(),
+            }),
         };
         // Compiled once here so a syntax error or a missing entry function is a
         // load-time error rather than a run that starts and immediately fails
@@ -87,6 +100,10 @@ impl Script {
         )
         .map_err(|error| format!("cannot start Lua — {error}"))?;
         sandbox(&lua).map_err(|error| format!("cannot sandbox Lua — {error}"))?;
+        // Before the script is loaded, so a corpus is already there for a script that
+        // reads one at the top level rather than inside its entry function.
+        self.publish_corpus(&lua)
+            .map_err(|error| format!("cannot publish the corpus — {error}"))?;
         lua.load(&*self.source)
             .set_name(&*self.name)
             .exec()
@@ -197,6 +214,35 @@ fn to_lua(prepared: &Prepared, context: &Context<'_>) -> Result<LuaValue, String
     build().map(LuaValue::Table).map_err(|e| e.to_string())
 }
 
+impl Script {
+    /// Put the corpus in the VM as two read-only globals.
+    ///
+    /// Lua strings, built once when the interpreter is: the files are already bytes
+    /// in memory, and a `read` call returning a fresh string per request would be an
+    /// allocation of a payload's size on the hot path — which is the cost the whole
+    /// load-once rule exists to avoid.
+    ///
+    /// Read-only because a VM outlives the iteration that used it. A script that
+    /// could write to the corpus would be leaking one iteration's state into the
+    /// next, which is the same mistake as sharing a variable scope between them.
+    fn publish_corpus(&self, lua: &Lua) -> mlua::Result<()> {
+        if self.corpus.is_empty() {
+            return Ok(());
+        }
+        let files = lua.create_table()?;
+        let names = lua.create_table()?;
+        for (index, (name, bytes)) in self.corpus.iter().enumerate() {
+            files.set(name, lua.create_string(&bytes[..])?)?;
+            names.set(index + 1, name)?;
+        }
+        let known = self.corpus.names().join(", ");
+        let globals = lua.globals();
+        globals.set("corpus", read_only(lua, files, Some(known))?)?;
+        globals.set("corpus_names", read_only(lua, names, None)?)?;
+        Ok(())
+    }
+}
+
 impl Prepared {
     /// `ctx.rng:int(low, high)`, drawing from whatever stream is in the cell.
     ///
@@ -282,6 +328,45 @@ fn scalar(value: &LuaValue) -> Option<String> {
         LuaValue::Boolean(flag) => Some(flag.to_string()),
         _ => None,
     }
+}
+
+/// A table a script can read and cannot change.
+///
+/// `__len` so `#corpus_names` works, and `__metatable` so a script cannot reach
+/// through `getmetatable` to the table underneath. When `known` is given, asking for
+/// a name that is not there fails naming what is — a nil substituted into a request
+/// would reach the service as a hole in the body.
+fn read_only(lua: &Lua, inner: Table, known: Option<String>) -> mlua::Result<Table> {
+    let proxy = lua.create_table()?;
+    let metatable = lua.create_table()?;
+    let held = inner.clone();
+    metatable.set(
+        "__index",
+        lua.create_function(move |_, (_proxy, key): (Table, LuaValue)| {
+            let found: LuaValue = held.get(key.clone())?;
+            if let (LuaValue::Nil, Some(known)) = (&found, &known) {
+                let name = key.to_string().unwrap_or_default();
+                return Err(mlua::Error::runtime(format!(
+                    "the corpus has no {name}; it holds {known}"
+                )));
+            }
+            Ok(found)
+        })?,
+    )?;
+    metatable.set(
+        "__newindex",
+        lua.create_function(|_, ()| -> mlua::Result<()> {
+            Err(mlua::Error::runtime("the corpus is read-only"))
+        })?,
+    )?;
+    let counted = inner.clone();
+    metatable.set(
+        "__len",
+        lua.create_function(move |_, _proxy: Table| Ok(counted.raw_len()))?,
+    )?;
+    metatable.set("__metatable", false)?;
+    proxy.set_metatable(Some(metatable))?;
+    Ok(proxy)
 }
 
 /// One line of a Lua error, without the traceback.
