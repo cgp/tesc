@@ -771,3 +771,7 @@ behaviour changed; `scripts/check.sh engine` passes cold.
 Measure pending-deadline-to-timer-wake and wake-to-dispatch delays independently through a preallocated bounded atomic ring. Emit count-supported timing histograms/percentiles, coalescing and diagnostic loss, skip-batch frequencies and phase-end accounting as summary annotations and final stderr diagnostics. Keep warmup/measure totals separate and scheduling, admission and event schemas unchanged. Tests cover concurrent publication, bounded loss, deferred samples, synthetic executor stalls, phase separation and output conservation.
 
 Validation: `bash scripts/check.sh engine`, `bash scripts/check.sh contract`, and real emitted NDJSON schema validation all pass on Windows.
+
+## Snapshot execution-loop diagnostics
+
+Measure aggregation, window construction, complete flush and output-packet construction separately. Emit per-snapshot durations, count-supported target/step totals and stderr maxima to diagnose recurring quarter-second dispatch stalls. Keep queue admission and writer serialization outside packet construction, and omit construction samples when capacity refuses a packet before work starts. Test execution explicitly waived by the user for this instrumentation change.

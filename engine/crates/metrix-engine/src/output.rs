@@ -334,6 +334,16 @@ impl Output {
         }
     }
 
+    pub(crate) fn snapshot_totals(&self, timing: &metrix_metrics::aggregation::SnapshotTiming) {
+        fn evidence(d: &metrix_metrics::aggregation::Distribution) -> serde_json::Value {
+            serde_json::json!({"histogram":d.snapshot(),"overflow":d.overflow,"percentiles":percentiles(d)})
+        }
+        self.note("snapshot_timing_total", Severity::Info, serde_json::json!({
+            "aggregation":evidence(&timing.aggregation), "window_construction":evidence(&timing.window_construction),
+            "flush_total":evidence(&timing.flush_total),"output_packet":evidence(&timing.output_packet),"scope":"all phases of this target/step"
+        }));
+    }
+
     pub(crate) fn arrival_totals(&self, measure: &ArrivalTiming, warmup: &ArrivalTiming) {
         self.note("arrival_timing_total", if measure.telemetry_dropped + warmup.telemetry_dropped > 0 { Severity::Warn } else { Severity::Info }, serde_json::json!({"measure":arrival_evidence(measure),"warmup":arrival_evidence(warmup)}));
     }
@@ -431,24 +441,29 @@ impl Output {
         diagnostics: &crate::Diagnostics,
         closing: bool,
         partial: bool,
-    ) {
-        if self.summary.sender.capacity() <= RESERVED
-            || self
-                .summary
-                .sender
-                .try_send(Packet::Summary {
-                    identity: self.identity.borrow().clone(),
-                    t_ms: self.elapsed(),
-                    phase,
-                    window: Box::new(window.clone()),
-                    diagnostics: Box::new(*diagnostics),
-                    closing,
-                    partial,
-                })
-                .is_err()
-        {
+    ) -> Option<Duration> {
+        if self.summary.sender.capacity() <= RESERVED {
+            self.losses.summaries.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+        let started = Instant::now();
+        let mut packet = Packet::Summary {
+            identity: self.identity.borrow().clone(),
+            t_ms: self.elapsed(),
+            window: Box::new(window.clone()),
+            diagnostics: Box::new(*diagnostics),
+            closing,
+            partial,
+            phase,
+        };
+        let elapsed = started.elapsed();
+        if let Packet::Summary { window, .. } = &mut packet {
+            window.snapshot.output_packet = Some(elapsed);
+        }
+        if self.summary.sender.try_send(packet).is_err() {
             self.losses.summaries.fetch_add(1, Ordering::Relaxed);
         }
+        Some(elapsed)
     }
 
     fn selected(&self, iteration: u64) -> bool {
@@ -916,6 +931,7 @@ fn write_stream(
                     window.scheduler_lag = Duration::ZERO;
                     window.scheduler_lag_samples = 0;
                     window.arrival = None;
+                    window.snapshot = Default::default();
                     write_summary(
                         &mut writer,
                         &mut buffer,
@@ -991,6 +1007,16 @@ fn write_summary(
     window: &Window,
     dropped: u64,
 ) -> io::Result<()> {
+    if let Some(total) = window.snapshot.flush_total {
+        write_record(writer, buffer, &Record::Annotation(Annotation {
+            t_ms, target_id: Some(identity.target.clone()), code: "snapshot_timing".into(), severity: Severity::Info,
+            phase: Some(phase), from_ms: t_ms.saturating_sub(millis(window.to.saturating_sub(window.from))), to_ms: Some(t_ms),
+            message: "Execution-loop snapshot work; output-packet time excludes queue admission and writer serialization.".into(),
+            detail: Some(serde_json::json!({"sample_count":1,"aggregation_us":window.snapshot.aggregation.as_micros(),
+                "window_construction_us":window.snapshot.window_construction.as_micros(),"flush_total_us":total.as_micros(),
+                "output_packet_us":window.snapshot.output_packet.map(|d|d.as_micros())})),
+        }))?;
+    }
     if let Some(timing) = &window.arrival {
         write_record(writer, buffer, &Record::Annotation(Annotation {
             t_ms, target_id: Some(identity.target.clone()), code: "arrival_timing".into(),

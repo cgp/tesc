@@ -623,8 +623,26 @@ impl ArrivalTiming {
     }
 }
 
+/// Completed stages of one snapshot; total is populated after consumer handoff.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SnapshotSample {
+    pub aggregation: Duration,
+    pub window_construction: Duration,
+    pub flush_total: Option<Duration>,
+    pub output_packet: Option<Duration>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SnapshotTiming {
+    pub aggregation: Distribution,
+    pub window_construction: Distribution,
+    pub flush_total: Distribution,
+    pub output_packet: Distribution,
+}
+
 #[derive(Clone, Debug)]
 pub struct Window {
+    pub snapshot: SnapshotSample,
     pub arrival: Option<Box<ArrivalTiming>>,
     pub phase: events::Phase,
     pub warmup_metrics: Option<Box<Accumulator>>,

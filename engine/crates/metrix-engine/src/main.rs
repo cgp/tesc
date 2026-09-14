@@ -231,6 +231,18 @@ fn execute(args: Args) -> Result<ExitCode, String> {
         report.scheduler_lag_samples,
         report.interrupted
     );
+    let snapshot = &report.snapshot_timing;
+    eprintln!(
+        "snapshot_aggregation_samples={} snapshot_aggregation_max_ms={:.3} snapshot_window_samples={} snapshot_window_max_ms={:.3} snapshot_flush_samples={} snapshot_flush_max_ms={:.3} snapshot_output_packet_samples={} snapshot_output_packet_max_ms={:.3}",
+        snapshot.aggregation.count(),
+        snapshot.aggregation.max_us().unwrap_or(0) as f64 / 1000.0,
+        snapshot.window_construction.count(),
+        snapshot.window_construction.max_us().unwrap_or(0) as f64 / 1000.0,
+        snapshot.flush_total.count(),
+        snapshot.flush_total.max_us().unwrap_or(0) as f64 / 1000.0,
+        snapshot.output_packet.count(),
+        snapshot.output_packet.max_us().unwrap_or(0) as f64 / 1000.0
+    );
     let timing = &report.arrival_timing;
     eprintln!(
         "arrival_timer_wakes={} arrival_timer_wake_samples={} arrival_timer_wake_max_ms={:.3} arrival_dispatch_samples={} arrival_dispatch_max_ms={:.3} arrival_coalesced_wakes={} arrival_telemetry_dropped={} arrival_dispatches_with_skips={} arrival_max_skipped_per_dispatch={} arrival_phase_end_skipped={}",

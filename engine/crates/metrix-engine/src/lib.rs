@@ -41,6 +41,7 @@ use http::SendState;
 
 #[derive(Debug, Default)]
 pub struct Report {
+    pub snapshot_timing: metrix_metrics::aggregation::SnapshotTiming,
     pub arrival_timing: metrix_metrics::aggregation::ArrivalTiming,
     pub warmup_arrival_timing: metrix_metrics::aggregation::ArrivalTiming,
     /// One verdict per bound, merged across every target and rate step the run made
@@ -272,6 +273,7 @@ fn flush(
     active: usize,
     consumer: Option<&mpsc::Sender<Window>>,
 ) {
+    let flush_started = std::time::Instant::now();
     let Recording {
         slots,
         workers,
@@ -291,6 +293,8 @@ fn flush(
     report
         .diagnostics
         .sync(&report.metrics, &report.warmup_metrics);
+    let aggregation = flush_started.elapsed();
+    let window_started = std::time::Instant::now();
     let warmup_active = if active == 0 {
         0
     } else {
@@ -319,7 +323,11 @@ fn flush(
     } else {
         report.arrival_timing.merge(&lag.arrival);
     }
-    let window = Window {
+    let mut window = Window {
+        snapshot: metrix_metrics::aggregation::SnapshotSample {
+            aggregation,
+            ..Default::default()
+        },
         arrival: (lag.arrival.timer_wakes > 0 || lag.arrival.skipped_arrivals > 0)
             .then(|| Box::new(lag.arrival.clone())),
         phase,
@@ -346,17 +354,31 @@ fn flush(
             interval.clone()
         },
     };
+    window.snapshot.window_construction = window_started.elapsed();
     if let Some(consumer) = consumer {
         if consumer.try_send(window.clone()).is_err() {
             report.windows_dropped += 1;
         }
     }
     report.windows += 1;
-    report.last_window = Some(window);
     *last = now;
     lag.max = Duration::ZERO;
     lag.samples = 0;
     lag.arrival.reset();
+    window.snapshot.flush_total = Some(flush_started.elapsed());
+    report
+        .snapshot_timing
+        .aggregation
+        .record(window.snapshot.aggregation);
+    report
+        .snapshot_timing
+        .window_construction
+        .record(window.snapshot.window_construction);
+    report
+        .snapshot_timing
+        .flush_total
+        .record(window.snapshot.flush_total.expect("completed flush"));
+    report.last_window = Some(window);
 }
 
 fn cause(failure: Failure) -> Cause {
