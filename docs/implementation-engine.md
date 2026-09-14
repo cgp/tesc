@@ -106,6 +106,8 @@ Buildable and testable with nothing but a shell, a bundle, and the mock target.
 
 **Done when:** the `examples/plans/checkout-mixed` bundle runs end to end — six chains at declared percentages, XML and JSON, extraction between steps, a Lua generator, OAuth with refresh, and a deliberately-failing chain whose 401s count as passes.
 
+*Status:* every one of those behaviours runs together, proved by `tests/checkout_mixed.rs`, which uses the example's own calls, generator and dataset against servers a test can start. The committed bundle itself does not yet load, and none of the reasons are B3's: it declares two targets with `shuffle`, a `gap` and a `host_header` (B4.1, B4.2), and an `slo` block (B4.6). It is pointed at fictional ECS tasks, so it could not have run offline regardless. B3's behaviours are complete; the bundle becomes executable as written when B4 lands.
+
 *Sequencing note:* calls before chains before the mixture, so each layer is testable alone. Lua before the exec sidecar — it is the default tier, and building the escape hatch first tends to make the escape hatch the default.
 
 ### B4 — Many targets, and limits
