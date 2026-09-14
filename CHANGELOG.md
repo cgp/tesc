@@ -726,3 +726,7 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 ## B4.1 — Sequential targets
 
 Run every target in resolved or seed-shuffled order with full independent phase timelines and cancellable gaps. Add --targets, upfront target validation, and ordered target identity on bounded output queues. Three-target integration coverage verifies windows and gaps. B4.1 complete.
+
+## B4.2 — Direct container addressing
+
+Separate socket destination from Host and TLS identity. Verify certificates against SNI (falling back to Host), support explicit insecure TLS with an annotation, and retain handshake signature checks. Echo target attributes at setup. B4.2 complete.

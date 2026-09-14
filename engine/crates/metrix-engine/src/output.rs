@@ -343,7 +343,29 @@ impl Output {
             index: index as u32 + 1,
             total: plan.targets.list.len() as u32,
         }));
+        self.note("target_metadata", Severity::Info, serde_json::json!({"attributes": plan.target.attributes, "address": plan.target.address, "host_header": plan.target.host_header, "sni": plan.target.tls.sni}));
+        if plan.target.tls.insecure_skip_verify {
+            self.note(
+                "insecure_skip_verify",
+                Severity::Warn,
+                serde_json::json!({"certificate_verification": "disabled"}),
+            );
+        }
         Ok(())
+    }
+    pub(crate) fn note(&self, code: &str, severity: Severity, detail: serde_json::Value) {
+        let t_ms = self.elapsed();
+        self.lifecycle(Record::Annotation(Annotation {
+            t_ms: self.elapsed(),
+            target_id: Some(self.identity.borrow().target.clone()),
+            code: code.into(),
+            severity,
+            phase: None,
+            from_ms: t_ms,
+            to_ms: None,
+            message: code.replace('_', " "),
+            detail: Some(detail),
+        }));
     }
     pub(crate) fn target_finish(&self, completed: bool) {
         self.lifecycle(Record::TargetFinished(TargetFinished {

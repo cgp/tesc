@@ -244,13 +244,25 @@ impl Plan {
                     && !target.address.contains('@'),
                 &format!("targets.json#/list/{i}/address: expected host:port or [IPv6]:port"),
             )?;
+            if let Some(host) = &target.host_header {
+                require(
+                    hyper::header::HeaderValue::from_str(host).is_ok()
+                        && host.parse::<hyper::http::uri::Authority>().is_ok(),
+                    &format!("targets.json#/list/{i}/host_header: invalid Host authority"),
+                )?;
+            }
+            if let Some(sni) = &target.tls.sni {
+                require(
+                    target.tls.enabled
+                        && rustls::pki_types::ServerName::try_from(sni.clone()).is_ok(),
+                    &format!(
+                        "targets.json#/list/{i}/tls/sni: requires TLS and a valid server name"
+                    ),
+                )?;
+            }
             require(
-                target.host_header.is_none()
-                    && target.tls.sni.is_none()
-                    && !target.tls.insecure_skip_verify,
-                &format!(
-                    "targets.json#/list/{i}: Host/SNI overrides and insecure TLS are not implemented (B4.2)"
-                ),
+                !target.tls.insecure_skip_verify || target.tls.enabled,
+                &format!("targets.json#/list/{i}/tls/insecure_skip_verify: requires TLS"),
             )?;
         }
         let target = targets.list[target_index].clone();

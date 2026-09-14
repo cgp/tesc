@@ -62,7 +62,19 @@ impl Endpoint {
             .parse::<hyper::http::uri::Authority>()
             .map_err(|_| Failure::Connect)?;
         let host = authority.host().trim_matches(['[', ']']);
-        let name = ServerName::try_from(host.to_owned()).map_err(|_| Failure::Tls)?;
+        let host_name = target
+            .host_header
+            .as_deref()
+            .unwrap_or(host)
+            .parse::<hyper::http::uri::Authority>()
+            .map_err(|_| Failure::Tls)?;
+        let tls_name = target
+            .tls
+            .sni
+            .as_deref()
+            .unwrap_or(host_name.host())
+            .trim_matches(['[', ']']);
+        let name = ServerName::try_from(tls_name.to_owned()).map_err(|_| Failure::Tls)?;
         let addresses: Vec<_> =
             tokio::net::lookup_host((host, authority.port_u16().ok_or(Failure::Connect)?))
                 .await
@@ -75,7 +87,13 @@ impl Endpoint {
             let roots = RootCertStore {
                 roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
             };
-            Arc::new(tls_config(roots, target.http_version))
+            let mut config = tls_config(roots, target.http_version);
+            if target.tls.insecure_skip_verify {
+                config
+                    .dangerous()
+                    .set_certificate_verifier(Arc::new(SkipCertificateVerification));
+            }
+            Arc::new(config)
         });
         Ok(Self {
             addresses,
@@ -544,5 +562,52 @@ impl UriPath {
             )
             .build()
             .expect("compiled path")
+    }
+}
+
+/// Skip trust/name checks only; handshake signatures still prove key possession.
+#[derive(Debug)]
+struct SkipCertificateVerification;
+impl rustls::client::danger::ServerCertVerifier for SkipCertificateVerification {
+    fn verify_server_cert(
+        &self,
+        _: &rustls::pki_types::CertificateDer<'_>,
+        _: &[rustls::pki_types::CertificateDer<'_>],
+        _: &ServerName<'_>,
+        _: &[u8],
+        _: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+        )
+    }
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+        )
+    }
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        rustls::crypto::ring::default_provider()
+            .signature_verification_algorithms
+            .supported_schemes()
     }
 }

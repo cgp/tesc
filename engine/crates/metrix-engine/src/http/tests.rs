@@ -434,3 +434,36 @@ async fn truncated_and_stalled_response_bodies_are_failures_and_close_http1() {
         task.abort();
     }
 }
+
+#[tokio::test]
+async fn direct_ip_uses_host_for_tls_and_explicit_sni_takes_precedence() {
+    let server = TlsTarget::start(&[b"http/1.1"]).await;
+    let mut target: Target = serde_json::from_value(serde_json::json!({
+        "id": "direct", "address": server.address.to_string(), "host_header": "localhost",
+        "tls": {"enabled": true}
+    }))
+    .unwrap();
+    let mut endpoint = Endpoint::resolve(&target).await.unwrap();
+    assert_eq!(endpoint.name, ServerName::try_from("localhost").unwrap());
+    endpoint.tls = Some(Arc::new(tls_config(
+        server.roots.clone(),
+        HttpVersion::Auto,
+    )));
+    assert!(endpoint.connect().await.is_ok());
+    target.tls.sni = Some("wrong.example".into());
+    let mut endpoint = Endpoint::resolve(&target).await.unwrap();
+    endpoint.tls = Some(Arc::new(tls_config(
+        server.roots.clone(),
+        HttpVersion::Auto,
+    )));
+    assert!(matches!(endpoint.connect().await, Err(Failure::Tls)));
+    target.tls.insecure_skip_verify = true;
+    assert!(
+        Endpoint::resolve(&target)
+            .await
+            .unwrap()
+            .connect()
+            .await
+            .is_ok()
+    );
+}

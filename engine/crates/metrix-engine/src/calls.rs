@@ -673,7 +673,7 @@ pub(crate) fn compile(
     )?;
 
     let scheme = if target.tls.enabled { "https" } else { "http" };
-    let host = HeaderValue::from_str(authority.as_str())
+    let host = HeaderValue::from_str(target.host_header.as_deref().unwrap_or(authority.as_str()))
         .map_err(|_| "target: invalid HTTP authority".to_owned())?;
 
     let mut compiled = RequestTemplate {

@@ -114,11 +114,11 @@ fn rejects_invalid_and_future_features_before_network_io() {
         ),
         (
             "targets.json",
-            json!({"list": [{"id": "a", "address": "localhost:1", "tls": {"enabled": true, "insecure_skip_verify": true}}]}),
+            json!({"list": [{"id": "a", "address": "localhost:1", "tls": {"enabled": false, "insecure_skip_verify": true}}]}),
         ),
         (
             "targets.json",
-            json!({"list": [{"id": "a", "address": "localhost:1", "host_header": "other"}]}),
+            json!({"list": [{"id": "a", "address": "localhost:1", "host_header": "bad\r\nHost: injected"}]}),
         ),
     ] {
         let dir = tempfile::tempdir().unwrap();
