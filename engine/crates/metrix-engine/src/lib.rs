@@ -1,5 +1,6 @@
 //! Fixed-rate load execution independent of the control plane.
 
+mod assertions;
 mod bundle;
 mod calibration;
 mod calls;

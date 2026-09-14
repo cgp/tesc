@@ -18,10 +18,12 @@ use std::{sync::Arc, time::Duration};
 
 use tokio::time::Instant;
 
+use crate::assertions;
 use crate::calls::RequestTemplate;
-use crate::extract;
+use crate::extract::{self, Extractor};
 use crate::http::{Endpoint, Lease, Observation, SendState, Timing, send};
 use crate::template::{Scope, Unbound};
+use metrix_plan::OnFailure;
 
 /// One step, ready to run.
 ///
@@ -35,6 +37,24 @@ pub(crate) struct Step {
     /// which step was slow or which request it sent.
     pub call: &'static str,
     pub request: Arc<RequestTemplate>,
+    /// What to do when this step does not succeed. Aborting is the default because
+    /// the steps after it were going to act on something that did not happen.
+    pub on_failure: OnFailure,
+    /// The async-job pattern: keep asking until the answer says it is done.
+    pub repeat_until: Option<Repeat>,
+}
+
+/// Poll a step until a value in its response says the work finished.
+///
+/// A loop without a loop construct: the plan says what to look for, how often, and
+/// how many times, and nothing about it is open-ended. Every attempt is a real
+/// request and is counted as one -- what must not contaminate request latency is the
+/// waiting between them, which lands in the chain's end-to-end duration instead.
+pub(crate) struct Repeat {
+    pub extractor: Extractor,
+    pub equals: String,
+    pub max_attempts: u32,
+    pub interval: Duration,
 }
 
 /// One chain, ready to run, shared by every slot that runs it.
@@ -57,12 +77,36 @@ pub(crate) struct Outcome {
     /// Index into the chain's steps, so the caller need not match on names.
     pub index: usize,
     pub observation: Observation,
+    /// How the answer itself fell short, if it did. The request succeeded; what is
+    /// wrong is the answer, and the two are counted apart.
+    pub verdict: Option<Verdict>,
+}
+
+/// A response that arrived and was not the one the plan asked for.
+#[derive(Clone, Copy)]
+pub(crate) enum Verdict {
+    /// The assertion at this index in the call did not hold.
+    Assertion(usize),
+    /// `repeat_until` ran out of attempts and the value never said finished. A step
+    /// that polled five times and gave up has not seen the job complete, and calling
+    /// that a success would report a service that finishes nothing as healthy.
+    Unfinished,
+}
+
+impl Verdict {
+    /// The assertion index, for the count the report keys by index.
+    pub fn assertion(self) -> Option<usize> {
+        match self {
+            Self::Assertion(index) => Some(index),
+            Self::Unfinished => None,
+        }
+    }
 }
 
 /// Why an iteration ended before its last step.
 pub(crate) enum Stopped {
-    /// A request failed. The default failure policy is to abort the chain (§5);
-    /// `on_failure` arrives in B3.4.
+    /// A step did not succeed and its `on_failure` was not `continue`. Abort is the
+    /// default (§5), and a retry that failed twice lands here too.
     Failed,
     /// A step needed a value that no response before it provided. Distinct from a
     /// failed request because nothing was sent: the plan asked for something it had
@@ -169,6 +213,7 @@ pub(crate) async fn run(job: Option<Job>) -> Completion {
     let mut truncated = false;
 
     for (index, step) in job.chain.steps.iter().enumerate() {
+        let mut attempts = 0;
         // The first step is the one the schedule is measured against: it is the
         // arrival that was due. A later step is late because the service was slow,
         // which is the measurement rather than a fault in the generator.
@@ -188,26 +233,78 @@ pub(crate) async fn run(job: Option<Job>) -> Completion {
             }
         };
 
-        let observation = send(
-            &mut job.lease,
-            &job.endpoint,
-            &step.request,
-            rendered.as_ref(),
-            timing,
-            &job.send_state,
-        )
-        .await;
+        let mut retried = false;
+        let outcome = loop {
+            attempts += 1;
+            let observation = send(
+                &mut job.lease,
+                &job.endpoint,
+                &step.request,
+                rendered.as_ref(),
+                timing,
+                &job.send_state,
+            )
+            .await;
+            truncated |= observation
+                .response
+                .as_ref()
+                .is_some_and(|captured| captured.truncated);
 
-        let failed = observation.error.is_some();
-        truncated |= observation
-            .response
-            .as_ref()
-            .is_some_and(|captured| captured.truncated);
+            // The transport first, then the answer: a step that never got a reply
+            // has nothing for an assertion to be about.
+            let mut verdict = if observation.error.is_some() {
+                None
+            } else {
+                judge(step, &observation).map(Verdict::Assertion)
+            };
+            let failed = observation.error.is_some() || verdict.is_some();
+
+            if failed && step.on_failure == OnFailure::Retry && !retried {
+                // Once. The format says `retry` without a number, and a generator
+                // that decided on its own how many times to hammer a failing service
+                // would be choosing the load rather than running the plan.
+                retried = true;
+                steps.push(Outcome {
+                    index,
+                    observation,
+                    verdict,
+                });
+                continue;
+            }
+
+            if let (false, Some(repeat)) = (failed, &step.repeat_until) {
+                match poll(repeat, &observation) {
+                    Poll::Finished => {}
+                    Poll::Again if attempts < repeat.max_attempts => {
+                        steps.push(Outcome {
+                            index,
+                            observation,
+                            verdict,
+                        });
+                        // Outside the request: what must not contaminate request
+                        // latency is the waiting between attempts, which belongs to
+                        // the chain's end-to-end duration instead.
+                        tokio::time::sleep(repeat.interval).await;
+                        continue;
+                    }
+                    Poll::Again => verdict = Some(Verdict::Unfinished),
+                }
+            }
+
+            break Outcome {
+                index,
+                observation,
+                verdict,
+            };
+        };
+
+        let failed = outcome.observation.error.is_some() || outcome.verdict.is_some();
         if !failed {
-            capture(step, &observation, &mut scope);
+            capture(step, &outcome.observation, &mut scope);
         }
-        steps.push(Outcome { index, observation });
-        if failed {
+        let policy = step.on_failure;
+        steps.push(outcome);
+        if failed && policy != OnFailure::Continue {
             stopped = Some(Stopped::Failed);
             break;
         }
@@ -222,6 +319,45 @@ pub(crate) async fn run(job: Option<Job>) -> Completion {
         truncated,
         stopped,
     }
+}
+
+/// Whether this answer said the work is done.
+enum Poll {
+    Finished,
+    Again,
+}
+
+/// Read the state the plan is waiting on out of one answer.
+///
+/// A response the selector cannot find is not finished either: it is a job still
+/// running that has not published its state yet. Whether there is another attempt
+/// left is the caller's question, because running out is a different outcome from
+/// being told to wait.
+fn poll(repeat: &Repeat, observation: &Observation) -> Poll {
+    let Some(captured) = &observation.response else {
+        return Poll::Again;
+    };
+    let response = extract::Response::new(&captured.headers, &captured.body);
+    if response.read(&repeat.extractor).as_deref() == Some(repeat.equals.as_str()) {
+        Poll::Finished
+    } else {
+        Poll::Again
+    }
+}
+
+/// What the plan says this answer had to look like.
+fn judge(step: &Step, observation: &Observation) -> Option<usize> {
+    if step.request.assertions.is_empty() {
+        return None;
+    }
+    let captured = observation.response.as_ref();
+    let response = captured.map(|c| extract::Response::new(&c.headers, &c.body));
+    assertions::evaluate(
+        &step.request.assertions,
+        observation.status,
+        observation.request_duration,
+        response.as_ref(),
+    )
 }
 
 /// Build the request, or nothing when the call never varies.

@@ -23,8 +23,9 @@ use hyper::{
     header::{HeaderName, HeaderValue},
     http::uri::Authority,
 };
-use metrix_plan::{Body, Call, Defaults, Mix, SessionPolicy, Target};
+use metrix_plan::{Body, Call, Defaults, Mix, OnFailure, RepeatUntil, SessionPolicy, Target};
 
+use crate::assertions::Check;
 use crate::extract::Extractor;
 use crate::template::{Scope, Template, Unbound};
 
@@ -41,6 +42,34 @@ const TRANSPORT_MANAGED: &[&str] = &[
     "te",
     "trailer",
 ];
+
+/// What a step reads out of a response on top of its call's own extractors.
+///
+/// Part of a compiled request's identity: two steps naming the same call but reading
+/// its answer differently are the same request and different captures, and the cache
+/// that shares compiled calls between steps has to tell them apart.
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct Reads {
+    body: bool,
+    headers: bool,
+}
+
+impl Reads {
+    /// What a polling selector needs kept.
+    fn of(extractor: Option<&Extractor>) -> Self {
+        match extractor {
+            None => Self::default(),
+            Some(Extractor::Header(_)) => Self {
+                body: false,
+                headers: true,
+            },
+            Some(_) => Self {
+                body: true,
+                headers: false,
+            },
+        }
+    }
+}
 
 /// A request, ready to send.
 pub(crate) struct Prepared {
@@ -59,6 +88,14 @@ pub(crate) struct RequestTemplate {
     body_max: usize,
     /// What this call captures out of its response, in the order it was written.
     pub extract: Vec<(String, Extractor)>,
+    /// What the response has to look like, in the order the call wrote them.
+    pub assertions: Vec<Check>,
+    /// What a step reads out of the answer beyond what the call itself declares —
+    /// today, a `repeat_until` selector. Part of the request because capture is
+    /// decided here: a polling step whose body was never kept would read nothing,
+    /// find nothing, and poll to its ceiling against a service that answered
+    /// correctly the first time.
+    reads: Reads,
     /// The whole request, when nothing in it depends on the scope. The ordinary
     /// case, and the one that must cost nothing per send.
     fixed: Option<Prepared>,
@@ -82,9 +119,12 @@ impl RequestTemplate {
     /// Asked per call rather than assumed: a load generator that buffers every
     /// response it receives is measuring its own allocator as much as the service.
     pub fn reads_body(&self) -> bool {
-        self.extract
-            .iter()
-            .any(|(_, extractor)| !matches!(extractor, Extractor::Header(_)))
+        self.reads.body
+            || self
+                .extract
+                .iter()
+                .any(|(_, extractor)| !matches!(extractor, Extractor::Header(_)))
+            || self.assertions.iter().any(Check::reads_body)
     }
 
     /// How many bytes of a response body may be kept.
@@ -94,9 +134,12 @@ impl RequestTemplate {
 
     /// True when the response's headers are read.
     pub fn reads_headers(&self) -> bool {
-        self.extract
-            .iter()
-            .any(|(_, extractor)| matches!(extractor, Extractor::Header(_)))
+        self.reads.headers
+            || self
+                .extract
+                .iter()
+                .any(|(_, extractor)| matches!(extractor, Extractor::Header(_)))
+            || self.assertions.iter().any(Check::reads_headers)
     }
 
     /// Build this request from one iteration's scope.
@@ -147,6 +190,8 @@ impl RequestTemplate {
             timeout,
             body_max: 64 * 1024,
             extract: Vec::new(),
+            assertions: Vec::new(),
+            reads: Reads::default(),
             fixed: Some(Prepared { uri, headers, body }),
             origin: String::new(),
             path: Template::parse("test", "/").expect("a literal path"),
@@ -175,6 +220,14 @@ impl RequestTemplate {
 pub(crate) struct Step {
     pub id: String,
     pub call: String,
+    /// The request this step sends. Shared with every other step that names the same
+    /// call and reads its answer the same way, so a chain of ten steps over three
+    /// calls compiles three requests.
+    pub request: Arc<RequestTemplate>,
+    pub on_failure: OnFailure,
+    /// Compiled here rather than at the chain, because a selector that will not
+    /// parse is a load-time error like any other.
+    pub repeat_until: Option<crate::chain::Repeat>,
 }
 
 /// One chain, with its steps resolved to calls that exist.
@@ -189,21 +242,22 @@ pub(crate) struct Chain {
 }
 
 /// What the mix asked for, resolved against what the calls document defines.
+///
+/// Only the calls some step names are compiled: a call nobody invokes is read and
+/// parsed, and refusing the run over a path it declares would be refusing over a
+/// request that is never sent.
 pub(crate) struct Resolved {
     pub chains: Vec<Chain>,
-    /// Call name to the request it compiles to. Only the calls some step names: a
-    /// call nobody invokes is read and parsed, and refusing the run over a path it
-    /// declares would be refusing over a request that is never sent.
-    pub requests: BTreeMap<String, Arc<RequestTemplate>>,
 }
 
 impl Resolved {
     /// The longest any single request may take. The drain window has to be able to
     /// outlast it, so the timeline needs to know before it is built.
     pub fn longest_timeout(&self) -> Duration {
-        self.requests
-            .values()
-            .map(|request| request.timeout)
+        self.chains
+            .iter()
+            .flat_map(|chain| &chain.steps)
+            .map(|step| step.request.timeout)
             .max()
             .unwrap_or_default()
     }
@@ -218,6 +272,8 @@ pub(crate) fn resolve(
 ) -> Result<Resolved, String> {
     let mut chains = Vec::new();
     let mut seen_chains: BTreeMap<&str, usize> = BTreeMap::new();
+    // Compiled once per call-and-capture, shared by every step that wants it.
+    let mut compiled: BTreeMap<(String, Reads), Arc<RequestTemplate>> = BTreeMap::new();
 
     for (index, chain) in mix.chains.iter().enumerate() {
         let at = format!("mix.json/chains/{index}");
@@ -253,9 +309,35 @@ pub(crate) fn resolve(
                 defined.contains_key(&step.call),
                 &format!("{at}/call: no call named {:?} is defined", step.call),
             )?;
+            let repeat_until = step
+                .repeat_until
+                .as_ref()
+                .map(|repeat| compile_repeat(&at, repeat))
+                .transpose()?;
+            let reads = Reads::of(repeat_until.as_ref().map(|repeat| &repeat.extractor));
+            let key = (step.call.clone(), reads);
+            let request = match compiled.get(&key) {
+                Some(request) => Arc::clone(request),
+                None => {
+                    let request = Arc::new(compile(
+                        &step.call,
+                        &defined[&step.call],
+                        &mix.defaults,
+                        mix.capture.body_max_kb as usize * 1024,
+                        reads,
+                        target,
+                        authority,
+                    )?);
+                    compiled.insert(key, Arc::clone(&request));
+                    request
+                }
+            };
             steps.push(Step {
                 id: step.id.clone(),
                 call: step.call.clone(),
+                request,
+                on_failure: step.on_failure.unwrap_or_default(),
+                repeat_until,
             });
         }
         chains.push(Chain {
@@ -267,27 +349,25 @@ pub(crate) fn resolve(
         });
     }
 
-    let mut requests = BTreeMap::new();
-    for chain in &chains {
-        for step in &chain.steps {
-            if requests.contains_key(&step.call) {
-                continue;
-            }
-            let call = &defined[&step.call];
-            let compiled = compile(
-                &step.call,
-                call,
-                &mix.defaults,
-                mix.capture.body_max_kb as usize * 1024,
-                target,
-                authority,
-            )?;
-            requests.insert(step.call.clone(), Arc::new(compiled));
-        }
-    }
+    check_bindings(&chains)?;
+    Ok(Resolved { chains })
+}
 
-    check_bindings(&chains, &requests)?;
-    Ok(Resolved { chains, requests })
+/// One `repeat_until` block, with its selector compiled and its ceiling checked.
+fn compile_repeat(at: &str, repeat: &RepeatUntil) -> Result<crate::chain::Repeat, String> {
+    require(
+        repeat.max_attempts > 0,
+        &format!("{at}/repeat_until/max_attempts: must be at least one"),
+    )?;
+    Ok(crate::chain::Repeat {
+        extractor: Extractor::compile(&format!("{at}/repeat_until"), &repeat.selector)?,
+        equals: match &repeat.equals {
+            serde_json::Value::String(text) => text.clone(),
+            other => other.to_string(),
+        },
+        max_attempts: repeat.max_attempts,
+        interval: Duration::from_millis(repeat.interval_ms),
+    })
 }
 
 /// Every variable a step reads must have been written by a step before it.
@@ -296,14 +376,11 @@ pub(crate) fn resolve(
 /// chain whose second step reads `{{ order_id }}` that nothing captures fails every
 /// time it runs, and reporting that as thousands of failed requests buries the one
 /// fact that explains all of them.
-fn check_bindings(
-    chains: &[Chain],
-    requests: &BTreeMap<String, Arc<RequestTemplate>>,
-) -> Result<(), String> {
+fn check_bindings(chains: &[Chain]) -> Result<(), String> {
     for (index, chain) in chains.iter().enumerate() {
         let mut available: Vec<&str> = Vec::new();
         for (position, step) in chain.steps.iter().enumerate() {
-            let request = &requests[&step.call];
+            let request = &step.request;
             for name in request.variables() {
                 require(
                     available.contains(&name),
@@ -326,14 +403,11 @@ fn compile(
     call: &Call,
     defaults: &Defaults,
     body_max: usize,
+    reads: Reads,
     target: &Target,
     authority: &Authority,
 ) -> Result<RequestTemplate, String> {
     let at = format!("call {name:?}");
-    require(
-        call.assertions.is_empty(),
-        &format!("{at}: assertions are not implemented (B3.4)"),
-    )?;
 
     let body = match &call.body {
         None => Template::parse(&format!("{at}/body"), "")?,
@@ -378,6 +452,11 @@ fn compile(
         extract.push((variable.clone(), Extractor::compile(&at, selector)?));
     }
 
+    let mut assertions = Vec::new();
+    for (index, assertion) in call.assertions.iter().enumerate() {
+        assertions.push(Check::compile(&format!("{at}/assert/{index}"), assertion)?);
+    }
+
     let timeout = Duration::from_millis(call.timeout_ms.or(defaults.timeout_ms).unwrap_or(5000));
     require(
         !timeout.is_zero() && std::time::Instant::now().checked_add(timeout).is_some(),
@@ -393,6 +472,8 @@ fn compile(
         timeout,
         body_max,
         extract,
+        assertions,
+        reads,
         fixed: None,
         origin: format!("{scheme}://{authority}"),
         path,

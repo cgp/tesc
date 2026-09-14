@@ -223,6 +223,7 @@ impl Plan {
         // they will use is a property of the document, and is checked as one.
         let resolved = calls::resolve(&mix, &defined, &target, &authority)?;
 
+        let timeout = resolved.longest_timeout();
         // Percentages are a claim about what the service was asked for, so they
         // have to add up before anything is sent. Named as a shortfall or an excess
         // and never renormalized: adjusting five chains to accommodate a typo in the
@@ -255,12 +256,9 @@ impl Plan {
             )?;
             for (position, written) in mix.chains[index].steps.iter().enumerate() {
                 require(
-                    written.overrides.is_none()
-                        && written.delay_ms.is_none()
-                        && written.on_failure.is_none()
-                        && written.repeat_until.is_none(),
+                    written.overrides.is_none() && written.delay_ms.is_none(),
                     &format!(
-                        "mix.json/chains/{index}/steps/{position}: overrides, delays and failure/repeat policies are not implemented (B3.4)"
+                        "mix.json/chains/{index}/steps/{position}: step overrides and think time are not implemented"
                     ),
                 )?;
             }
@@ -268,26 +266,28 @@ impl Plan {
 
         // Leaked deliberately: these name the chains and their steps for the life of
         // the process, and every accumulator map is keyed by them.
+        let weights: Vec<f64> = resolved.chains.iter().map(|chain| chain.percent).collect();
         let chains: Vec<_> = resolved
             .chains
-            .iter()
+            .into_iter()
             .map(|chain| {
                 Arc::new(crate::chain::Compiled {
-                    name: String::leak(chain.name.clone()),
+                    name: String::leak(chain.name),
                     steps: chain
                         .steps
-                        .iter()
+                        .into_iter()
                         .map(|step| crate::chain::Step {
-                            id: String::leak(step.id.clone()),
-                            call: String::leak(step.call.clone()),
-                            request: Arc::clone(&resolved.requests[&step.call]),
+                            request: step.request,
+                            id: String::leak(step.id),
+                            call: String::leak(step.call),
+                            on_failure: step.on_failure,
+                            repeat_until: step.repeat_until,
                         })
                         .collect(),
                 })
             })
             .collect();
-        let weights: Vec<f64> = resolved.chains.iter().map(|chain| chain.percent).collect();
-        let timeout = resolved.longest_timeout();
+
         require(
             span.checked_add(timeout)
                 .and_then(|d| std::time::Instant::now().checked_add(d))

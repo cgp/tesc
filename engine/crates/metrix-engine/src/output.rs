@@ -892,7 +892,11 @@ fn summary_record(
                                 .map(|(status, count)| (status.to_string(), *count))
                                 .collect(),
                             errors: error_counts(&step.errors),
-                            assertion_failures: BTreeMap::new(),
+                            assertion_failures: step
+                                .assertion_failures
+                                .iter()
+                                .map(|(index, count)| (index.to_string(), *count))
+                                .collect(),
                             total: step.total.snapshot(),
                             ttfb: step.ttfb.snapshot(),
                         },
@@ -947,11 +951,11 @@ fn summary_record(
 }
 
 /// The error counter array as the names the frozen schema uses.
-fn error_counts(errors: &[u64; 8]) -> BTreeMap<String, u64> {
+fn error_counts(errors: &[u64; 9]) -> BTreeMap<String, u64> {
     // Indexed by `Cause`. Several map to `other` because the transport cannot always
     // tell them apart, and inventing a distinction it did not observe would be worse
     // than saying so.
-    const NAMES: [&str; 8] = [
+    const NAMES: [&str; 9] = [
         "dns_failure",
         "other",
         "tls_failure",
@@ -960,6 +964,7 @@ fn error_counts(errors: &[u64; 8]) -> BTreeMap<String, u64> {
         "other",
         "other",
         "extraction",
+        "assertion",
     ];
     let mut counted: BTreeMap<String, u64> = BTreeMap::new();
     for (index, count) in errors.iter().enumerate() {

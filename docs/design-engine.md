@@ -355,8 +355,9 @@ checkout-mixed/
 Each chain is a sequential chain executed by one virtual user with its own variable scope.
 
 - **Extraction:** JSONPath for JSON, XPath for XML, plus header and regex extractors. Response `Content-Type` picks the default parser; an explicit extractor type overrides it.
-- **Failure policy:** per-step `on_failure` of `abort` (default — record the chain as failed at this step), `continue`, or `retry: n`. Aborted chains are counted separately from failed requests, so one upstream 500 doesn't inflate the error rate three times over.
-- **`repeat_until`** covers the async-job pattern (POST returns 202, poll for completion) without a loop construct. Polling time is recorded separately so it doesn't contaminate request latency.
+- **Failure policy:** per-step `on_failure` of `abort` (default — record the chain as failed at this step), `continue`, or `retry` (once). Aborted chains are counted separately from failed requests, so one upstream 500 doesn't inflate the error rate three times over.
+- **`repeat_until`** covers the async-job pattern (POST returns 202, poll for completion) without a loop construct. Every attempt is a real request and is counted as one; the waiting between them is kept out of request latency and lands in the chain's end-to-end duration. Exhausting `max_attempts` without the value ever matching fails the step — a step that gave up has not seen the job finish, and calling that a success reports a service that completes nothing as healthy.
+- **A failed assertion is not a transport failure.** The request happened and the service answered; what is wrong is the answer. Counted under its own class and named by the assertion's index in the call, for the same reason aborted chains are counted apart: one upstream problem should appear once. A chain that expects a 401 therefore *passes* when it gets one.
 - **Think time:** optional `delay_ms` between steps, fixed or distribution-based. Off by default — in short windows you usually want the chain tight.
 - **Chain latency is reported end-to-end as well as per step.** Per-step numbers find the slow endpoint; end-to-end is what a user actually feels.
 

@@ -222,7 +222,14 @@ pub(crate) async fn run(
                         ttfb: observation.ttfb,
                         drift: None,
                         status: observation.status,
-                        error: observation.error.map(cause),
+                        // An answer that failed an assertion is a failure of this
+                        // step, under its own class: the request happened and what
+                        // came back was not what the plan expects.
+                        error: observation
+                            .error
+                            .map(cause)
+                            .or(outcome.verdict.map(|_| metrix_metrics::aggregation::Cause::Assertion)),
+                        assertion: outcome.verdict.and_then(chain::Verdict::assertion),
                         bytes_sent: if observation.sent.is_some() { observation.bytes_sent } else { 0 },
                         bytes_received: observation.bytes_received,
                         connections_opened: observation.connections_opened,
@@ -232,6 +239,8 @@ pub(crate) async fn run(
                     if let Some(error) = observation.error {
                         report.failed += 1;
                         report.timed_out += u64::from(error == crate::Failure::Timeout);
+                    } else if outcome.verdict.is_some() {
+                        report.failed += 1;
                     } else { report.responses += 1; }
                 }
                 if let Some((step_id, variable)) = completion.unbound() {
@@ -243,6 +252,7 @@ pub(crate) async fn run(
                         request_duration: None, send_delay: Duration::ZERO,
                         ttfb: None, drift: None, status: None,
                         error: Some(metrix_metrics::aggregation::Cause::Extraction),
+                        assertion: None,
                         bytes_sent: 0, bytes_received: 0,
                         connections_opened: 0, connection_reused: false,
                     });

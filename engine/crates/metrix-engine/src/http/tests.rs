@@ -213,6 +213,8 @@ async fn tls_handshake_wait_is_queued_until_a_pre_send_timeout() {
                 steps: vec![crate::chain::Step {
                     id: "only",
                     call: "only",
+                    on_failure: metrix_plan::OnFailure::Abort,
+                    repeat_until: None,
                     request: template(
                         &format!("https://{address}/echo"),
                         Duration::from_millis(500),

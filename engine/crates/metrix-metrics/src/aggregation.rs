@@ -114,6 +114,9 @@ pub enum Cause {
     /// built. Ours rather than theirs: nothing was sent, and counting it as a
     /// transport failure would point at the service.
     Extraction,
+    /// The request happened and the answer was not the one the plan expects. Apart
+    /// from the transport failures because it is a different fact about the run.
+    Assertion,
 }
 
 #[derive(Clone, Debug)]
@@ -128,7 +131,7 @@ pub struct Counters {
     pub connections_opened: u64,
     pub connections_reused: u64,
     pub statuses: [u64; 1000],
-    pub errors: [u64; 8],
+    pub errors: [u64; 9],
 }
 
 impl Default for Counters {
@@ -144,7 +147,7 @@ impl Default for Counters {
             connections_opened: 0,
             connections_reused: 0,
             statuses: [0; 1000],
-            errors: [0; 8],
+            errors: [0; 9],
         }
     }
 }
@@ -181,6 +184,10 @@ pub struct StepSample {
     pub drift: Option<Duration>,
     pub status: Option<u16>,
     pub error: Option<Cause>,
+    /// Which assertion the response failed, if one did. Travels beside `error`
+    /// rather than inside it: the request succeeded and the answer was wrong, and
+    /// the two are different facts about the run.
+    pub assertion: Option<usize>,
     pub bytes_sent: u64,
     pub bytes_received: u64,
     pub connections_opened: u64,
@@ -214,7 +221,11 @@ pub struct StepStats {
     pub completed: u64,
     pub failed: u64,
     pub statuses: BTreeMap<u16, u64>,
-    pub errors: [u64; 8],
+    pub errors: [u64; 9],
+    /// Which assertion failed, by its index in the call. Named by index because that
+    /// is what the call document is indexed by, and a message would be a second
+    /// place for the assertion's meaning to live.
+    pub assertion_failures: BTreeMap<usize, u64>,
     pub total: Distribution,
     pub ttfb: Distribution,
 }
@@ -230,6 +241,9 @@ impl StepStats {
         for (left, right) in self.errors.iter_mut().zip(other.errors) {
             *left += right;
         }
+        for (index, count) in &other.assertion_failures {
+            *self.assertion_failures.entry(*index).or_default() += count;
+        }
         self.total.merge(&other.total);
         self.ttfb.merge(&other.ttfb);
     }
@@ -241,7 +255,8 @@ impl StepStats {
         // Cleared rather than dropped: the same statuses recur every window, and a
         // map that is emptied and refilled once a second allocates for nothing.
         self.statuses.clear();
-        self.errors = [0; 8];
+        self.assertion_failures.clear();
+        self.errors = [0; 9];
         self.total.reset();
         self.ttfb.reset();
     }
@@ -354,6 +369,9 @@ impl Accumulator {
         }
         if let Some(status) = sample.status {
             *step.statuses.entry(status).or_default() += 1;
+        }
+        if let Some(index) = sample.assertion {
+            *step.assertion_failures.entry(index).or_default() += 1;
         }
         if let Some(total) = sample.request_duration {
             step.total.record(total);

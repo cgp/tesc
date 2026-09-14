@@ -118,6 +118,31 @@ impl<'a> Response<'a> {
         }
     }
 
+    /// The same value an extractor reads, with the length that means something for
+    /// its shape. Used by assertions: `min_length: 1` on a JSON array is asking how
+    /// many items it holds, not how long its serialisation is.
+    pub fn select(&self, extractor: &Extractor) -> Option<crate::assertions::Selected> {
+        use crate::assertions::Selected;
+        if let Extractor::Json(path) = extractor {
+            let value = path.query(self.json()?).first()?;
+            let length = match value {
+                Value::Array(items) => items.len(),
+                Value::Object(fields) => fields.len(),
+                Value::String(text) => text.chars().count(),
+                other => other.to_string().chars().count(),
+            };
+            return Some(Selected {
+                text: stringify(value),
+                length,
+            });
+        }
+        let text = self.read(extractor)?;
+        Some(Selected {
+            length: text.chars().count(),
+            text,
+        })
+    }
+
     fn xpath(&self, path: &str) -> Option<String> {
         let package = sxd_document::parser::parse(self.text()?).ok()?;
         let document = package.as_document();
