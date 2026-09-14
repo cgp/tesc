@@ -19,3 +19,10 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
+
+# Full debug info on Windows/MSVC means a separate PDB per crate, each 130+ MB;
+# they dominated the target directory. Line tables keep backtraces pointing at
+# real file:line -- which is all a panic in a load run is ever read for -- at a
+# fraction of the size.
+[profile.dev]
+debug = "line-tables-only"

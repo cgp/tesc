@@ -27,7 +27,11 @@ run() {
 if [[ $scope == all || $scope == engine ]]; then
     # cd rather than --manifest-path: that flag belongs to the subcommand, and
     # `cargo fmt` does not take it at all.
-    in_engine() { (cd "$root/engine" && "$@"); }
+    # A full check is a one-shot verification, not the edit loop, so the
+    # incremental caches it seeds are never read again -- and they are not small:
+    # they had grown to 25 GiB of dead per-crate session directories. Hand-run
+    # `cargo build`/`cargo check` still get incremental compilation.
+    in_engine() { (cd "$root/engine" && CARGO_INCREMENTAL=0 "$@"); }
     run "engine: fmt" in_engine cargo fmt --check
     run "engine: clippy" in_engine cargo clippy --all-targets --all-features -- -D warnings
     run "engine: test" in_engine cargo test --quiet

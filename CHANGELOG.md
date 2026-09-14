@@ -748,3 +748,20 @@ Run one full-duration midpoint probe after a bracketed failure; report a bracket
 Validate and evaluate inclusive SLO bounds independently for each target and rate step, aggregate the worst supported observation, retain every breach, and emit machine-readable verdicts naming the bound each one is about. Error rates read terminal request outcomes rather than chain counts, so a threshold and the stop condition beside it judge the same population. An unsupported threshold is advisory, and the annotation beside the verdicts carries the sample support that made it so. Accept API-owned `observe` declarations, annotated as unavailable, without an API dependency. B4.6 complete.
 
 What invalidates a result now depends on what was asked. A capacity search extrapolates from the window it measured, so send drift and a chain that broke both turn its number into a guess. A fixed run was asked for a timeline and either delivered it or did not: drift within it is a warning it already carries, and a chain that broke is a finding about the service, not a confession that the generator was too small. Counting extraction failures as `generator_limited` made a fixed run against a service returning the wrong body exit 3, which blamed the load generator and buried the breach behind an abort. Admission and cap failures are shares, and a share needs a denominator: at fifty arrivals in a one-second window, two missed to a busy box read as four percent, so below a hundred offered arrivals a share is no longer evidence -- the floor the error rate beside it already had. The reason a fixed run is invalid now rides on the `Invalid` annotation that names the evidence, rather than on `stopped_because`, because nothing stopped it. An output failure outranks every verdict, in the record as well as in the process exit code, because the verdict is what could not be written down.
+
+## Housekeeping — target directory size
+
+`engine/target` had reached 36.6 GiB across 51,645 files, which is not a build
+artifact so much as a working copy that no longer fits anywhere convenient. Two
+causes, both ours. The dev profile emitted full debug info, and on Windows/MSVC
+that means a separate PDB per crate at 130-140 MiB each; `[profile.dev] debug =
+"line-tables-only"` keeps the `file:line` that a panic in a load run is actually
+read for and drops the largest PDB to 53 MiB. And every full check seeded a fresh
+set of incremental compile sessions that nothing would ever read again, 25.6 GiB
+of them in 47,083 files; `check.sh` now runs the engine's fmt, clippy and test
+with `CARGO_INCREMENTAL=0`, because a verification pass is one-shot by
+definition. Hand-run `cargo build` and `cargo check` are untouched and still
+incremental -- the edit loop is exactly where that cache pays for itself.
+
+After a clean and a full rebuild the same tree is 2.32 GiB in 2,951 files. No
+behaviour changed; `scripts/check.sh engine` passes cold.
