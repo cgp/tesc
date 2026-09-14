@@ -37,6 +37,7 @@ impl WakeClock {
             .name("metrix-arrivals".into())
             .spawn(move || {
                 let end = start + duration;
+                let spin_margin = Duration::from_secs_f64((0.25 / rate).min(0.001));
                 let mut schedule = Schedule::new(start, rate, duration);
                 while !timer.stopped.load(Ordering::Acquire) {
                     let deadline = schedule.next_deadline().unwrap_or(end);
@@ -44,9 +45,14 @@ impl WakeClock {
                     if now < deadline {
                         // Rust's native sleep uses a high-resolution waitable timer on Windows.
                         // Small slices bound cancellation even when the next arrival is far away.
-                        std::thread::sleep(
-                            deadline.duration_since(now).min(Duration::from_millis(5)),
-                        );
+                        let remaining = deadline.duration_since(now);
+                        if remaining > spin_margin {
+                            std::thread::sleep(
+                                (remaining - spin_margin).min(Duration::from_millis(5)),
+                            );
+                        } else {
+                            std::hint::spin_loop();
+                        }
                         continue;
                     }
                     schedule.due(now);

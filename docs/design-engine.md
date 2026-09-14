@@ -86,7 +86,7 @@ lock. HTTP framing, headers and connection establishment still allocate inside t
 transport; the allocation-free rule applies to scheduling and aggregation state.
 One deadline thread uses native `std::thread::sleep` timers (high-resolution on
 current Windows); an atomic waker coalesces notifications when the scheduler is
-busy. It never waits for admission or request completion, and cancellation stops
+busy. It sleeps until a bounded margin before the deadline, then spins for at most min(1ms, one-quarter of the arrival interval), avoiding final-sleep overshoot without consuming a full core at high rates. It never waits for admission or request completion, and cancellation stops
 it within its bounded sleep slices. This avoids Tokio's coarse Windows timer
 wake-ups dropping traffic at the 75 RPS acceptance rate.
 The timeout (default 5000ms) covers connection/readiness, send and complete body
@@ -705,9 +705,9 @@ unreached phase transitions. Full phase support remains independent of an observ
 
 ### 11.1 Each step is its own measured window
 
-A step is a miniature run: its own warmup exclusion, its own histogram, its own host-metric snapshot, its own annotations. Step results are never pooled into one run-wide percentile — that would average a healthy 75 RPS step with a collapsing 900 RPS one and describe neither.
+A step is a miniature run: its own warmup exclusion, histogram and annotations. Only the first step has the baseline idle window; intermediate settle windows use `step_recovery`, and the final step uses the full settle window. The API can join host observations against these step timestamps. Step results are never pooled into one run-wide percentile — that would average a healthy 75 RPS step with a collapsing 900 RPS one and describe neither.
 
-`step_duration` defaults to 30s for the reason in §12.1: below that, a step's p99 is not worth acting on, and a breakpoint run that locates a knee using unsupported percentiles is worse than no run at all.
+`load.breakpoint` holds the search parameters shown above; `load.duration` remains required for document compatibility. `step_duration` is required (normally 30s) for the reason in §12.1: below that, a step's p99 is not worth acting on, and a breakpoint run that locates a knee using unsupported percentiles is worse than no run at all.
 
 `step_recovery` matters more than it looks. Without an idle gap, step N+1 inherits step N's queue backlog, and the search finds a false early cliff that is really just accumulated debt. The gap is observed, not slept through — it is a miniature settle phase.
 

@@ -27,7 +27,10 @@ use sha2::{Digest, Sha256};
 use crate::calls;
 use crate::schedule::Schedule;
 
+#[derive(Clone)]
 pub struct Plan {
+    pub(crate) breakpoint: Option<metrix_plan::mix::Breakpoint>,
+    pub(crate) iteration_base: u64,
     pub(crate) targets: Targets,
     pub(crate) target_index: usize,
     targets_override: Option<std::path::PathBuf>,
@@ -206,13 +209,22 @@ impl Plan {
             "mix.json#/version: only version 1 is supported",
         )?;
         require(
-            mix.load.mode == LoadMode::Fixed && mix.load.model == LoadModel::Open,
-            "mix.json#/load: B1.2 requires fixed, open-model load",
+            mix.load.model == LoadModel::Open
+                && mix.load.mode != LoadMode::Stages
+                && mix.load.stages.is_empty(),
+            "mix.json#/load: only open fixed or breakpoint load is supported",
         )?;
         require(
-            mix.load.stages.is_empty() && mix.load.breakpoint.is_none(),
-            "mix.json#/load: stages and breakpoint are not implemented",
+            (mix.load.mode == LoadMode::Breakpoint) == mix.load.breakpoint.is_some(),
+            "mix.json#/load/breakpoint: required exactly for breakpoint mode",
         )?;
+        if let Some(b) = &mix.load.breakpoint {
+            crate::breakpoint::rates(b)?;
+            require(
+                b.stop_on == metrix_plan::mix::StopOn::default() && !b.refine,
+                "mix.json#/load/breakpoint: stopping and refinement require B4.4/B4.5",
+            )?;
+        }
         require(
             mix.slo.is_empty() && mix.observe.is_none(),
             "mix.json#/slo: SLOs and observation are not available in B1.2",
@@ -269,9 +281,18 @@ impl Plan {
         let authority = target.address.parse().expect("validated authority");
         let rate = mix
             .load
-            .rate
+            .breakpoint
+            .as_ref()
+            .map(|b| b.start_rate)
+            .or(mix.load.rate)
             .ok_or("mix.json#/load/rate: required for fixed load")?;
-        let duration = mix.load.duration.as_duration();
+        let duration = mix
+            .load
+            .breakpoint
+            .as_ref()
+            .map_or(mix.load.duration.as_duration(), |b| {
+                b.step_duration.as_duration()
+            });
         Schedule::validate(rate, duration)?;
         let tolerance = mix.engine.rate_tolerance_pct.unwrap_or(2);
         let explicit_drift = mix.engine.send_drift_threshold_ms;
@@ -367,7 +388,18 @@ impl Plan {
             .transpose()?
             .flatten()
             .map(Arc::new);
-        unique_rows_suffice(&datasets, &resolved, rate, warmup + duration)?;
+        let (dataset_rate, dataset_duration) = if let Some(b) = &mix.load.breakpoint {
+            let steps = crate::breakpoint::rates(b)?.len() as u32 + u32::from(b.refine);
+            (
+                b.max_rate,
+                (warmup + duration)
+                    .checked_mul(steps)
+                    .ok_or("mix.json#/load/breakpoint: duration overflow")?,
+            )
+        } else {
+            (rate, warmup + duration)
+        };
+        unique_rows_suffice(&datasets, &resolved, dataset_rate, dataset_duration)?;
 
         let timeout = resolved.longest_timeout();
         // Percentages are a claim about what the service was asked for, so they
@@ -494,6 +526,8 @@ impl Plan {
             "mix.json#/load/rate: exceeds 90% of the calibrated generator ceiling; set engine/allow_generator_limited to true to run with an invalid annotation",
         )?;
         Ok(Self {
+            breakpoint: mix.load.breakpoint.clone(),
+            iteration_base: 0,
             targets,
             target_index,
             targets_override: targets_override.map(Path::to_path_buf),

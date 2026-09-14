@@ -123,6 +123,7 @@ pub(crate) async fn run(
                 .min(u128::from(u64::MAX)) as u64,
         )
     });
+    report.measured_from_ms = measure_from_ms;
     let mut timeline = Timeline::new(start, plan)?;
     if let Some(output) = output {
         output.phase(timeline.phase);
@@ -370,7 +371,7 @@ pub(crate) async fn run(
                             // The iteration number is settled before the job is built:
                             // it is what the iteration generates its values from, so a
                             // job carrying the previous one would send that one's row.
-                            slot.iteration = report.admitted;
+                            slot.iteration = plan.iteration_base + report.admitted;
                             let future = chain::run(Some(chain::Job { lease, endpoint, chain: running, datasets: Arc::clone(&plan.datasets), generators: Arc::clone(&plan.generators), auth: plan.auth.clone(), samples: Arc::clone(&plan.samples), sessions: Arc::clone(&plan.sessions), chain_index: running_index, seed: plan.seed, iteration: slot.iteration, vu, scheduled, admitted, send_state: Arc::clone(&slot.send_state) }));
                             assert!(slot.future.try_set(future).is_ok(), "request future layout changed");
                             slot.active = true;

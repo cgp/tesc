@@ -2,7 +2,9 @@
 
 mod assertions;
 mod auth;
+mod breakpoint;
 mod bundle;
+pub use breakpoint::{Search as BreakpointReport, Step as BreakpointStep};
 mod calibration;
 mod calls;
 mod chain;
@@ -38,6 +40,8 @@ use http::SendState;
 
 #[derive(Debug, Default)]
 pub struct Report {
+    pub measured_from_ms: Option<u64>,
+    pub breakpoint: Option<BreakpointReport>,
     pub offered: u64,
     pub admitted: u64,
     /// Sends among terminal attempts. In-flight cancellations are counted separately.
@@ -134,18 +138,28 @@ async fn run_sweep(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut last = Report::default();
-    for (position, current) in targets.iter().enumerate() {
+    for (position, current) in targets.into_iter().enumerate() {
         let target_plan = current.as_ref().unwrap_or(&plan);
         if let Some(output) = output {
             output.target_start(target_plan, position)?;
         }
-        let result = Box::pin(execution::run(
-            target_plan,
-            &mut shutdown,
-            snapshots.clone(),
-            output,
-        ))
-        .await;
+        let result = if target_plan.breakpoint.is_some() {
+            Box::pin(breakpoint::run(
+                target_plan.clone(),
+                &mut shutdown,
+                snapshots.clone(),
+                output,
+            ))
+            .await
+        } else {
+            Box::pin(execution::run(
+                target_plan,
+                &mut shutdown,
+                snapshots.clone(),
+                output,
+            ))
+            .await
+        };
         if let Some(output) = output {
             output.target_finish(result.as_ref().is_ok_and(|r| !r.interrupted));
         }

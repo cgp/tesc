@@ -319,6 +319,25 @@ impl Output {
         }
     }
 
+    pub(crate) fn step_start(&self, plan: &Plan) -> Result<(), String> {
+        let identity = Arc::new(Identity {
+            rate: plan.rate,
+            headroom_ratio: plan.headroom_ratio,
+            ..self.identity.borrow().as_ref().clone()
+        });
+        for stream in std::iter::once(&self.summary).chain(self.events.iter()) {
+            if stream
+                .sender
+                .try_send(Packet::Identity(Arc::clone(&identity)))
+                .is_err()
+            {
+                self.losses.failed.store(true, Ordering::Relaxed);
+                return Err("output backpressure prevented step identity delivery".into());
+            }
+        }
+        *self.identity.borrow_mut() = identity;
+        Ok(())
+    }
     pub(crate) fn target_start(&self, plan: &Plan, index: usize) -> Result<(), String> {
         let identity = Arc::new(Identity {
             target: plan.target.id.clone(),

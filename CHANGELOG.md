@@ -730,3 +730,7 @@ Run every target in resolved or seed-shuffled order with full independent phase 
 ## B4.2 — Direct container addressing
 
 Separate socket destination from Host and TLS identity. Verify certificates against SNI (falling back to Host), support explicit insecure TLS with an annotation, and retain handshake signature checks. Echo target attributes at setup. B4.2 complete.
+
+## B4.3 — Breakpoint steps
+
+Validate bounded additive/geometric ramps and measure each step with its own warmup, histograms, and observed recovery phase. Emit per-step statistics and carry iteration identity across steps. B4.3 complete.
