@@ -24,7 +24,7 @@ use tokio::{sync::mpsc, time::Instant};
 use tokio_util::sync::ReusableBoxFuture;
 
 pub(crate) async fn run(
-    plan: Plan,
+    plan: &Plan,
     shutdown: impl Future<Output = ()>,
     snapshots: Option<mpsc::Sender<Window>>,
     output: Option<&Output>,
@@ -123,7 +123,7 @@ pub(crate) async fn run(
                 .min(u128::from(u64::MAX)) as u64,
         )
     });
-    let mut timeline = Timeline::new(start, &plan)?;
+    let mut timeline = Timeline::new(start, plan)?;
     if let Some(output) = output {
         output.phase(timeline.phase);
     }

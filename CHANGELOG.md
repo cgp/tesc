@@ -722,3 +722,7 @@ This is a work log, not a reference — it records *what happened*, not *how thi
   targets with `shuffle` and a `gap`, a `host_header`, and an `slo` block. It is aimed
   at fictional ECS tasks and could never have run offline. Recorded here rather than
   ticked past.
+
+## B4.1 — Sequential targets
+
+Run every target in resolved or seed-shuffled order with full independent phase timelines and cancellable gaps. Add --targets, upfront target validation, and ordered target identity on bounded output queues. Three-target integration coverage verifies windows and gaps. B4.1 complete.

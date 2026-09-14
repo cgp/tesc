@@ -28,6 +28,9 @@ use crate::calls;
 use crate::schedule::Schedule;
 
 pub struct Plan {
+    pub(crate) targets: Targets,
+    pub(crate) target_index: usize,
+    targets_override: Option<std::path::PathBuf>,
     root: std::path::PathBuf,
     pub(crate) name: String,
     pub(crate) hash: String,
@@ -101,7 +104,7 @@ impl Plan {
     }
 
     pub fn load(root: &Path) -> Result<Self, String> {
-        Self::load_inner(root, true)
+        Self::load_inner(root, true, 0, None)
     }
 
     /// Run one chain of the mixture on its own.
@@ -153,16 +156,51 @@ impl Plan {
     /// Calibration replaces a stale local profile, so it deliberately ignores one while
     /// compiling the plan shape.
     pub fn load_for_calibration(root: &Path) -> Result<Self, String> {
-        Self::load_inner(root, false)
+        Self::load_inner(root, false, 0, None)
     }
 
-    fn load_inner(root: &Path, load_machine_profile: bool) -> Result<Self, String> {
+    pub fn load_with_targets(root: &Path, targets: &Path) -> Result<Self, String> {
+        Self::load_inner(root, true, 0, Some(targets))
+    }
+    pub(crate) fn for_target(&self, index: usize) -> Result<Self, String> {
+        let mut plan = Self::load_inner(&self.root, true, index, self.targets_override.as_deref())?;
+        plan.set_seed(self.seed);
+        if let Some(chain) = &self.only {
+            plan.only_chain(chain)?;
+        }
+        Ok(plan)
+    }
+    pub(crate) fn target_order(&self) -> Vec<usize> {
+        let mut order: Vec<_> = (0..self.targets.list.len()).collect();
+        if self.targets.order == metrix_plan::targets::TargetOrder::Shuffle {
+            let mut rng = crate::random::Rng::seeded(self.seed, 0);
+            for i in (1..order.len()).rev() {
+                let j = rng.next_u64() as usize % (i + 1);
+                order.swap(i, j);
+            }
+        }
+        order
+    }
+    fn load_inner(
+        root: &Path,
+        load_machine_profile: bool,
+        target_index: usize,
+        targets_override: Option<&Path>,
+    ) -> Result<Self, String> {
         let root = root
             .canonicalize()
             .map_err(|_| "--plan: cannot open bundle directory")?;
         let mut documents = BTreeMap::new();
         let mix: Mix = read(&root, Path::new("mix.json"), &mut documents)?;
-        let targets: Targets = read(&root, Path::new("targets.json"), &mut documents)?;
+        let targets: Targets = if let Some(path) = targets_override {
+            let bytes = fs::read(path).map_err(|_| "--targets: cannot read document")?;
+            let targets = serde_json::from_slice(&bytes)
+                .map_err(|_| "--targets: invalid targets document")?;
+            documents.insert("targets.json".into(), bytes);
+            targets
+        } else {
+            read(&root, Path::new("targets.json"), &mut documents)?
+        };
         require(
             mix.version == 1,
             "mix.json#/version: only version 1 is supported",
@@ -188,30 +226,35 @@ impl Plan {
             "mix.json#/engine/pin_cores: core pinning is not implemented",
         )?;
         require(
-            targets.list.len() == 1 && targets.gap.is_none_or(|d| d.is_zero()),
-            "targets.json: B1.2 requires exactly one target and no inter-target gap",
+            !targets.list.is_empty(),
+            "targets.json#/list: must not be empty",
         )?;
-        let target = targets.list.into_iter().next().expect("checked length");
-        require(
-            !target.id.is_empty(),
-            "targets.json#/list/0/id: must not be empty",
-        )?;
-        require(
-            target.host_header.is_none()
-                && target.tls.sni.is_none()
-                && !target.tls.insecure_skip_verify,
-            "targets.json#/list/0: Host/SNI overrides and insecure TLS are not implemented (B4.2)",
-        )?;
-        let authority: hyper::http::uri::Authority = target
-            .address
-            .parse()
-            .map_err(|_| "targets.json#/list/0/address: expected host:port or [IPv6]:port")?;
-        require(
-            authority.port_u16().is_some_and(|p| p > 0)
-                && !authority.host().is_empty()
-                && !target.address.contains('@'),
-            "targets.json#/list/0/address: expected host:port or [IPv6]:port",
-        )?;
+        let mut ids = std::collections::BTreeSet::new();
+        for (i, target) in targets.list.iter().enumerate() {
+            require(
+                !target.id.is_empty() && ids.insert(&target.id),
+                &format!("targets.json#/list/{i}/id: must be nonempty and unique"),
+            )?;
+            let authority: hyper::http::uri::Authority = target.address.parse().map_err(|_| {
+                format!("targets.json#/list/{i}/address: expected host:port or [IPv6]:port")
+            })?;
+            require(
+                authority.port_u16().is_some_and(|p| p > 0)
+                    && !authority.host().is_empty()
+                    && !target.address.contains('@'),
+                &format!("targets.json#/list/{i}/address: expected host:port or [IPv6]:port"),
+            )?;
+            require(
+                target.host_header.is_none()
+                    && target.tls.sni.is_none()
+                    && !target.tls.insecure_skip_verify,
+                &format!(
+                    "targets.json#/list/{i}: Host/SNI overrides and insecure TLS are not implemented (B4.2)"
+                ),
+            )?;
+        }
+        let target = targets.list[target_index].clone();
+        let authority = target.address.parse().expect("validated authority");
         let rate = mix
             .load
             .rate
@@ -439,6 +482,9 @@ impl Plan {
             "mix.json#/load/rate: exceeds 90% of the calibrated generator ceiling; set engine/allow_generator_limited to true to run with an invalid annotation",
         )?;
         Ok(Self {
+            targets,
+            target_index,
+            targets_override: targets_override.map(Path::to_path_buf),
             root,
             name: mix.name.clone(),
             hash: bundle_hash(&documents),

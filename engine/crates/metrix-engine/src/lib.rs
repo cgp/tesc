@@ -112,8 +112,53 @@ async fn run_internal(
     snapshots: Option<mpsc::Sender<Window>>,
     output: Option<&Output>,
 ) -> Result<Report, String> {
-    // Keep the phase accumulators off the Windows CLI's small main-thread stack.
-    Box::pin(execution::run(plan, shutdown, snapshots, output)).await
+    Box::pin(run_sweep(plan, shutdown, snapshots, output)).await
+}
+
+async fn run_sweep(
+    plan: Plan,
+    shutdown: impl Future<Output = ()>,
+    snapshots: Option<mpsc::Sender<Window>>,
+    output: Option<&Output>,
+) -> Result<Report, String> {
+    tokio::pin!(shutdown);
+    let order = plan.target_order();
+    let targets = order
+        .iter()
+        .map(|&i| {
+            if i == plan.target_index {
+                Ok(None)
+            } else {
+                plan.for_target(i).map(Some)
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut last = Report::default();
+    for (position, current) in targets.iter().enumerate() {
+        let target_plan = current.as_ref().unwrap_or(&plan);
+        if let Some(output) = output {
+            output.target_start(target_plan, position)?;
+        }
+        let result = Box::pin(execution::run(
+            target_plan,
+            &mut shutdown,
+            snapshots.clone(),
+            output,
+        ))
+        .await;
+        if let Some(output) = output {
+            output.target_finish(result.as_ref().is_ok_and(|r| !r.interrupted));
+        }
+        last = result?;
+        if last.interrupted {
+            break;
+        }
+        if position + 1 < order.len() {
+            tokio::select! { biased; _ = &mut shutdown => { last.interrupted = true; break; }
+            _ = tokio::time::sleep(plan.targets.gap.map_or(Duration::ZERO, |d| d.as_duration())) => {} }
+        }
+    }
+    Ok(last)
 }
 
 #[derive(Default)]

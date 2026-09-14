@@ -112,7 +112,7 @@ Buildable and testable with nothing but a shell, a bundle, and the mock target.
 
 ### B4 — Many targets, and limits
 
-- [ ] **B4.1** — Sequential multi-target execution: target list, ordering, inter-target gap (§3.5)
+- [x] **B4.1** — Sequential multi-target execution: target list, ordering, inter-target gap (§3.5)
 - [ ] **B4.2** — Direct container addressing: Host override, SNI, `insecure_skip_verify` annotation (§3.4)
 - [ ] **B4.3** — Breakpoint mode: stepped ramp, per-step statistics, `step_recovery` (§11)
 - [ ] **B4.4** — Stop conditions incl. generator-vs-target discrimination and `generator_limited` (§11.3)

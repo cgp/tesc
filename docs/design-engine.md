@@ -170,7 +170,7 @@ The API resolves a profile (§3.1) into that file; by hand, it is written out or
 - Each target gets its own complete phased run (§10.1), baseline and settle included. Per-target initial conditions are the point: a container that was already hot is visible before its numbers are read.
 - Order is as-resolved or randomized. Randomizing decouples results from sweep position, since the first target pays cold-cache costs on shared dependencies that the rest do not.
 - An optional inter-run gap lets shared dependencies settle between targets.
-- Output is a **sweep**: a set of runs sharing plan, sweep id, and time window, differing only in target.
+- Output is a **sweep**: one `run_id` groups the targets in a single monotonic time window. `run_started.targets` records seed-determined order; each target has its own start/finish and phase records. Histograms and sessions are independent, and gaps are cancellable. Every target is compiled before traffic begins.
 
 The comparison this enables is the valuable part — same plan, same conditions, different container. You are looking for the odd one out: a task on a noisy neighbor, an instance of a different type, a container still running an older image digest. The sweep view ranks targets on each headline metric and flags any target outside the sweep's own spread, which is the §17.4 measured-noise-floor logic applied across targets instead of across time.
 

@@ -15,6 +15,9 @@ struct Args {
         conflicts_with = "emit_schemas"
     )]
     plan: Option<PathBuf>,
+    /// Replace the bundle targets document.
+    #[arg(long)]
+    targets: Option<PathBuf>,
     /// Write JSON Schemas generated from the shared Rust types.
     #[arg(long)]
     emit_schemas: Option<PathBuf>,
@@ -95,6 +98,8 @@ fn execute(args: Args) -> Result<ExitCode, String> {
     let plan_path = args.plan.expect("clap requires --plan");
     let mut plan = if args.calibrate {
         Plan::load_for_calibration(&plan_path)?
+    } else if let Some(targets) = &args.targets {
+        Plan::load_with_targets(&plan_path, targets)?
     } else {
         Plan::load(&plan_path)?
     };

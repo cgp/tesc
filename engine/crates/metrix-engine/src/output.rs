@@ -35,6 +35,7 @@ struct Losses {
     failed: AtomicBool,
 }
 
+#[derive(Clone)]
 struct Identity {
     target: String,
     /// Every chain in the mixture. A run-wide annotation covers all of them, and
@@ -75,6 +76,7 @@ struct RequestData {
 }
 
 enum Packet {
+    Identity(Arc<Identity>),
     Fence(completion::Sender<()>),
     Record(Box<Record>),
     Summary {
@@ -97,7 +99,7 @@ enum Packet {
 impl Packet {
     fn time(&self) -> u64 {
         match self {
-            Self::Fence(_) => unreachable!("fences do not produce records"),
+            Self::Identity(_) | Self::Fence(_) => unreachable!("fences do not produce records"),
             Self::Summary { t_ms, .. } => *t_ms,
             Self::Percentiles { t_ms, .. } => *t_ms,
             Self::Request(request) => request.t_ms,
@@ -133,7 +135,7 @@ pub struct OutputReport {
 pub struct Output {
     summary: Stream,
     events: Option<Stream>,
-    identity: Arc<Identity>,
+    identity: std::cell::RefCell<Arc<Identity>>,
     losses: Arc<Losses>,
     start: Instant,
     sample_rate: f64,
@@ -193,7 +195,7 @@ impl Output {
         let output = Self {
             summary,
             events,
-            identity,
+            identity: std::cell::RefCell::new(identity),
             losses,
             start,
             sample_rate,
@@ -218,14 +220,12 @@ impl Output {
                 .machine_profile
                 .as_ref()
                 .map(|profile| profile.id.clone()),
-            targets: vec![plan.target.id.clone()],
+            targets: plan
+                .target_order()
+                .iter()
+                .map(|&i| plan.targets.list[i].id.clone())
+                .collect(),
             histogram_encoding: HISTOGRAM_ENCODING.into(),
-        }));
-        output.lifecycle(Record::TargetStarted(TargetStarted {
-            t_ms: 0,
-            target_id: plan.target.id.clone(),
-            index: 1,
-            total: 1,
         }));
         if let Some(chain) = plan.narrowed_to() {
             // Said out loud, because a run of one chain out of six is not a run of
@@ -319,6 +319,39 @@ impl Output {
         }
     }
 
+    pub(crate) fn target_start(&self, plan: &Plan, index: usize) -> Result<(), String> {
+        let identity = Arc::new(Identity {
+            target: plan.target.id.clone(),
+            rate: plan.rate,
+            headroom_ratio: plan.headroom_ratio,
+            ..self.identity.borrow().as_ref().clone()
+        });
+        for stream in std::iter::once(&self.summary).chain(self.events.iter()) {
+            if stream
+                .sender
+                .try_send(Packet::Identity(Arc::clone(&identity)))
+                .is_err()
+            {
+                self.losses.failed.store(true, Ordering::Relaxed);
+                return Err("output backpressure prevented target identity delivery".into());
+            }
+        }
+        *self.identity.borrow_mut() = identity;
+        self.lifecycle(Record::TargetStarted(TargetStarted {
+            t_ms: self.elapsed(),
+            target_id: plan.target.id.clone(),
+            index: index as u32 + 1,
+            total: plan.targets.list.len() as u32,
+        }));
+        Ok(())
+    }
+    pub(crate) fn target_finish(&self, completed: bool) {
+        self.lifecycle(Record::TargetFinished(TargetFinished {
+            t_ms: self.elapsed(),
+            target_id: self.identity.borrow().target.clone(),
+            completed,
+        }));
+    }
     fn lifecycle(&self, record: Record) {
         // Reserved slots cover all lifecycle records even if the writer never reads.
         for stream in std::iter::once(&self.summary).chain(self.events.iter()) {
@@ -335,7 +368,7 @@ impl Output {
     pub(crate) fn phase(&self, phase: Phase) {
         self.lifecycle(Record::PhaseChanged(PhaseChanged {
             t_ms: self.elapsed(),
-            target_id: self.identity.target.clone(),
+            target_id: self.identity.borrow().target.clone(),
             phase,
         }));
     }
@@ -523,7 +556,7 @@ impl Output {
         };
         self.lifecycle(Record::Annotation(Annotation {
             t_ms: self.elapsed(),
-            target_id: Some(self.identity.target.clone()),
+            target_id: Some(self.identity.borrow().target.clone()),
             code: if generation {
                 "generation_failed".into()
             } else {
@@ -544,7 +577,6 @@ impl Output {
 
     /// Wait once with a shared deadline. Stalled writers are detached, never joined.
     pub fn finish(self, mut exit_code: i32, stopped_because: Option<String>) -> OutputReport {
-        let target_completed = exit_code == 0;
         let deadline = Instant::now() + Duration::from_millis(500);
         let mut fences = Vec::new();
         for stream in std::iter::once(&self.summary).chain(self.events.iter()) {
@@ -570,11 +602,6 @@ impl Output {
             exit_code = 1;
         }
         let t_ms = self.elapsed();
-        self.lifecycle(Record::TargetFinished(TargetFinished {
-            t_ms,
-            target_id: self.identity.target.clone(),
-            completed: target_completed,
-        }));
         self.lifecycle(Record::RunFinished(RunFinished {
             t_ms,
             exit_code,
@@ -649,7 +676,7 @@ fn spawn_writer(
     std::thread::Builder::new()
         .name("metrix-output".into())
         .spawn(move || {
-            let result = write_stream(writer, receiver, &identity, &losses, sampled);
+            let result = write_stream(writer, receiver, identity, &losses, sampled);
             if result.is_err() {
                 losses.failed.store(true, Ordering::Relaxed);
             }
@@ -662,7 +689,7 @@ fn spawn_writer(
 fn write_stream(
     mut writer: Box<dyn Write + Send>,
     mut receiver: mpsc::Receiver<Packet>,
-    identity: &Identity,
+    mut identity: Arc<Identity>,
     losses: &Losses,
     sampled: bool,
 ) -> io::Result<()> {
@@ -672,6 +699,11 @@ fn write_stream(
     let mut detectors = [crate::detectors::Seen::default(); 2];
     while let Some(packet) = receiver.blocking_recv() {
         let packet = match packet {
+            Packet::Identity(next) => {
+                identity = next;
+                detectors = [crate::detectors::Seen::default(); 2];
+                continue;
+            }
             Packet::Fence(sender) => {
                 let _ = sender.send(());
                 continue;
@@ -719,7 +751,7 @@ fn write_stream(
             last_losses = current;
         }
         let record = match packet {
-            Packet::Fence(_) => unreachable!("fences handled above"),
+            Packet::Identity(_) | Packet::Fence(_) => unreachable!("fences handled above"),
             Packet::Record(record) => *record,
             Packet::Percentiles {
                 t_ms,
@@ -807,7 +839,7 @@ fn write_stream(
                 write_summary(
                     &mut writer,
                     &mut buffer,
-                    identity,
+                    &identity,
                     t_ms,
                     phase,
                     &window,
@@ -822,7 +854,7 @@ fn write_stream(
                     write_summary(
                         &mut writer,
                         &mut buffer,
-                        identity,
+                        &identity,
                         t_ms,
                         Phase::Warmup,
                         &window,
