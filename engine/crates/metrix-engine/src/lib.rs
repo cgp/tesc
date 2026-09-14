@@ -40,6 +40,10 @@ use http::SendState;
 
 #[derive(Debug, Default)]
 pub struct Report {
+    /// Scalars and histograms here describe the last target; NDJSON retains every target.
+    pub target: String,
+    pub generator_limited: bool,
+    pub stopped_because: Option<String>,
     pub measured_from_ms: Option<u64>,
     pub breakpoint: Option<BreakpointReport>,
     pub offered: u64,
@@ -161,10 +165,15 @@ async fn run_sweep(
             .await
         };
         if let Some(output) = output {
-            output.target_finish(result.as_ref().is_ok_and(|r| !r.interrupted));
+            output.target_finish(
+                result
+                    .as_ref()
+                    .is_ok_and(|r| !r.interrupted && !r.generator_limited),
+            );
         }
         last = result?;
-        if last.interrupted {
+        last.target = target_plan.target.id.clone();
+        if last.interrupted || last.generator_limited {
             break;
         }
         if position + 1 < order.len() {
@@ -304,6 +313,7 @@ fn cause(failure: Failure) -> Cause {
     match failure {
         Failure::Dns => Cause::Dns,
         Failure::Connect => Cause::Connect,
+        Failure::LocalResource => Cause::Generation,
         Failure::Tls => Cause::Tls,
         Failure::Protocol => Cause::Protocol,
         Failure::Send => Cause::Send,

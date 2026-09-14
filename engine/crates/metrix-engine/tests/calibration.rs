@@ -51,6 +51,18 @@ fn calibration_persists_a_matching_profile_and_refuses_excess_demand_before_outp
         !summary.exists(),
         "refusal must precede output and target setup"
     );
+    edit(dir.path(), "mix.json", |doc| {
+        doc["load"]["rate"] = json!(ceiling * 0.6);
+        doc["chains"][0]["steps"][0]["repeat_until"] =
+            json!({"json":"$.done", "equals":true, "max_attempts":2, "interval_ms":1});
+    });
+    assert!(
+        Plan::load(dir.path())
+            .err()
+            .unwrap()
+            .contains("exceeds 90%"),
+        "polling demand must use requests rather than chain iterations"
+    );
 }
 
 #[test]

@@ -115,7 +115,7 @@ Buildable and testable with nothing but a shell, a bundle, and the mock target.
 - [x] **B4.1** — Sequential multi-target execution: target list, ordering, inter-target gap (§3.5)
 - [x] **B4.2** — Direct container addressing: Host override, SNI, `insecure_skip_verify` annotation (§3.4)
 - [x] **B4.3** — Breakpoint mode: stepped ramp, per-step statistics, `step_recovery` (§11)
-- [ ] **B4.4** — Stop conditions incl. generator-vs-target discrimination and `generator_limited` (§11.3)
+- [x] **B4.4** — Stop conditions incl. generator-vs-target discrimination and `generator_limited` (§11.3)
 - [ ] **B4.5** — Refinement pass; report with knee / cliff / max-sustained / limiting resource
 - [ ] **B4.6** — SLO evaluation and exit codes for CI (§16)
 - [ ] **B4.7** — Static build, `engine/dist` bundle, ship-and-run over SSH (§2.2)

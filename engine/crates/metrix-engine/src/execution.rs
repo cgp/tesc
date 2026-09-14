@@ -57,7 +57,16 @@ pub(crate) async fn run(
     let pool = tokio::select! {
         biased;
         _ = &mut shutdown => { report.interrupted = true; return Ok(report); }
-        pool = Pool::prepare(&plan.target, plan.connections.min(plan.concurrency), plan.request_timeout()) => pool.map_err(|e| format!("target setup failed: {e}"))?,
+        pool = Pool::prepare(&plan.target, plan.connections.min(plan.concurrency), plan.request_timeout()) => match pool {
+            Ok(pool) => pool,
+            Err(crate::Failure::LocalResource) => {
+                report.generator_limited = true;
+                report.stopped_because = Some("generator_limited".into());
+                if let Some(output) = output { output.note("generator_limited", metrix_metrics::Severity::Invalid, serde_json::json!({"cause":"local_socket_exhaustion", "during":"setup"})); }
+                return Ok(report);
+            }
+            Err(error) => return Err(format!("target setup failed: {error}")),
+        },
     };
     let mut slots = Vec::new();
     slots
@@ -223,6 +232,17 @@ pub(crate) async fn run(
                 flush(Recording { slots: &mut slots, workers: &mut workers, warmup_workers: &mut warmup_workers, warmup_interval: &mut warmup_interval, lag: &mut lag, phase, auth: plan.auth.as_ref().map(|auth| auth.snapshot()) },
                     &mut interval_metrics, &mut report, &mut last_snapshot, start.elapsed(), active, snapshots.as_ref());
                 if let Some(output) = output { output.summary(report.last_window.as_ref().expect("flushed window"), phase, &report.diagnostics, timeline.ready(Instant::now(), active) || report.interrupted, report.interrupted); }
+                if phase == Phase::Measure && report.stopped_because.is_none() {
+                    if let Some(b) = &plan.breakpoint {
+                        if let Some(reason) = crate::breakpoint::assess(&report, b.stop_on, plan.breakpoint_baseline_p99) {
+                            report.generator_limited = reason == "generator_limited";
+                            report.stopped_because = Some(reason.clone());
+                            report.diagnostics.measure.end = start.elapsed();
+                            timeline.stop(Instant::now(), plan.final_settle);
+                            if let Some(output) = output { output.note(&reason, if report.generator_limited { metrix_metrics::Severity::Invalid } else { metrix_metrics::Severity::Warn }, serde_json::json!({"rate":plan.rate})); }
+                        }
+                    }
+                }
             }
             (index, completion) = poll_fn(|cx| {
                 for (index, slot) in slots.iter_mut().enumerate() {
@@ -392,7 +412,7 @@ pub(crate) async fn run(
         output.percentiles(
             &report.metrics,
             measure_from_ms.expect("output clock"),
-            report.interrupted,
+            report.interrupted || report.stopped_because.is_some(),
         );
     }
     Ok(report)

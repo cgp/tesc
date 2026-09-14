@@ -713,7 +713,7 @@ A step is a miniature run: its own warmup exclusion, histogram and annotations. 
 
 ### 11.2 Stop conditions
 
-The search halts at the first triggered condition, records which one fired, and proceeds directly to drain and settle (§10.1) — the recovery curve after a deliberate overload is one of the more useful things this mode produces.
+After a one-second measurement grace, the search checks cumulative conditions on each 250ms tick (error-rate decisions require at least 100 terminal requests). The search halts at the first triggered condition, records which one fired, and proceeds directly to drain and settle (§10.1) — the recovery curve after a deliberate overload is one of the more useful things this mode produces.
 
 | Condition | Meaning |
 |---|---|
@@ -727,9 +727,11 @@ The search halts at the first triggered condition, records which one fired, and 
 
 The failure mode that makes a breakpoint run worthless: offered rate stops climbing, latency rises, and the run reports a target limit that is actually the generator's limit.
 
-Before attributing any shortfall to the target, the engine checks its own state (§9.6, §13.2): send-schedule drift, queue depth, generator CPU, body-generation latency, socket and ephemeral-port exhaustion. If any of those are degraded at the same step, the run **aborts with a `generator_limited` annotation and reports no breakpoint**. It does not guess, and it does not publish a number with a caveat attached — a caveated number gets quoted without the caveat.
+Before attributing any shortfall to the target, the engine checks its own state (§9.6, §13.2): send-schedule drift, queue depth, generator CPU, body-generation latency, socket and ephemeral-port exhaustion. The implemented probes are drift, missed arrivals, concurrency-cap occupancy, connection admission and body-generation failures/cost. Recognized local socket memory/FD/address exhaustion is distinguished from target refusal. OS CPU/FD gauges remain explicitly unavailable, so the engine makes no claim from their sentinel zeros. If any measured probe is degraded at the same step, the run **aborts with a `generator_limited` annotation and reports no breakpoint**. It does not guess, and it does not publish a number with a caveat attached — a caveated number gets quoted without the caveat.
 
-The pre-run headroom check (§13.2) also caps `max_rate` at the calibrated generator ceiling by default, so most such runs are prevented rather than detected.
+The headroom check (§13.2) converts chain iterations to request demand using weighted chain depth, declared polling limits and one failure retry, then caps `max_rate` at 90% of the calibrated request ceiling by default, so most such runs are prevented rather than detected.
+
+A full step with unsupported configured p99 thresholds stops as `insufficient_samples` and publishes no capacity scalars. Error rate counts transport and assertion failures, preserving expected-failure calls.
 
 ### 11.4 Refinement
 
@@ -738,7 +740,7 @@ With `refine: true`, once the cliff is bracketed between the last good rate and 
 ### 11.5 The breakpoint report
 
 - **Max sustained rate** — highest step where every SLO held for the full step
-- **Knee** — lowest rate where p99 exceeded the configured multiple of its baseline-phase value
+- **Knee** — lowest rate where p99 exceeded the configured multiple of the first measured step’s supported p99 (idle baseline contains no requests)
 - **Cliff** — lowest rate where errors or shortfall crossed the threshold
 - **Limiting resource** — which host metric was nearest saturation at the last good step (CPU, iowait, connection count, pool queue depth), from §9.7
 - **Failure mode** — what the errors actually were at the cliff: timeouts, refused connections, 5xx, listen-queue drops. "It broke" and "it began refusing connections at the listen queue" are different findings.

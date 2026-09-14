@@ -1149,6 +1149,7 @@ fn error_message(failure: Failure) -> &'static str {
     match failure {
         Failure::Dns => "DNS resolution failed",
         Failure::Connect => "connection failed",
+        Failure::LocalResource => "local socket resources exhausted",
         Failure::Tls => "TLS failed",
         Failure::Protocol => "HTTP protocol failed",
         Failure::Send => "request send failed",

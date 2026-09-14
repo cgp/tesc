@@ -167,6 +167,7 @@ pub(crate) fn classify(
         return Some(match failure {
             crate::Failure::Dns => ErrorClass::DnsFailure,
             crate::Failure::Connect => ErrorClass::ConnectionRefused,
+            crate::Failure::LocalResource => ErrorClass::Generation,
             crate::Failure::Tls => ErrorClass::TlsFailure,
             crate::Failure::Timeout => ErrorClass::ReadTimeout,
             crate::Failure::Protocol => ErrorClass::UnexpectedEof,

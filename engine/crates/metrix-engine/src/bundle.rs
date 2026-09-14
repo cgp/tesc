@@ -29,6 +29,7 @@ use crate::schedule::Schedule;
 
 #[derive(Clone)]
 pub struct Plan {
+    pub(crate) breakpoint_baseline_p99: Option<u64>,
     pub(crate) breakpoint: Option<metrix_plan::mix::Breakpoint>,
     pub(crate) iteration_base: u64,
     pub(crate) targets: Targets,
@@ -65,6 +66,7 @@ pub struct Plan {
     pub(crate) baseline: Duration,
     pub(crate) warmup: Duration,
     pub(crate) settle: Duration,
+    pub(crate) final_settle: Duration,
     pub(crate) concurrency: usize,
     pub(crate) connections: usize,
     pub worker_threads: usize,
@@ -76,6 +78,15 @@ pub struct Plan {
 }
 
 impl Plan {
+    pub(crate) fn request_factor(&self) -> f64 {
+        request_factor(&self.chains, &self.weights)
+    }
+    pub(crate) fn headroom_for(&self, rate: f64) -> Option<f64> {
+        self.machine_profile
+            .as_ref()
+            .map(|profile| rate * self.request_factor() / profile.ceiling(self.worker_threads))
+    }
+
     pub fn bundle_root(&self) -> &Path {
         &self.root
     }
@@ -139,6 +150,12 @@ impl Plan {
             self.concurrency,
             self.chain_sessions[index].1,
         )]);
+        self.headroom_ratio = self.headroom_for(self.rate);
+        require(
+            self.headroom_ratio
+                .is_none_or(|ratio| ratio <= 0.9 || self.allow_generator_limited),
+            "mix.json#/load/rate: selected chain exceeds 90% of the calibrated request ceiling",
+        )?;
         self.only = Some(name.to_owned());
         Ok(())
     }
@@ -220,10 +237,7 @@ impl Plan {
         )?;
         if let Some(b) = &mix.load.breakpoint {
             crate::breakpoint::rates(b)?;
-            require(
-                b.stop_on == metrix_plan::mix::StopOn::default() && !b.refine,
-                "mix.json#/load/breakpoint: stopping and refinement require B4.4/B4.5",
-            )?;
+            require(!b.refine, "mix.json#/load/breakpoint/refine: requires B4.5")?;
         }
         require(
             mix.slo.is_empty() && mix.observe.is_none(),
@@ -517,9 +531,9 @@ impl Plan {
         } else {
             None
         };
-        let headroom_ratio = machine_profile
-            .as_ref()
-            .map(|profile| rate / profile.ceiling(worker_threads));
+        let headroom_ratio = machine_profile.as_ref().map(|profile| {
+            rate * request_factor(&chains, &weights) / profile.ceiling(worker_threads)
+        });
         let allow_generator_limited = mix.engine.allow_generator_limited.unwrap_or(false);
         require(
             headroom_ratio.is_none_or(|ratio| ratio <= 0.9 || allow_generator_limited),
@@ -527,6 +541,7 @@ impl Plan {
         )?;
         Ok(Self {
             breakpoint: mix.load.breakpoint.clone(),
+            breakpoint_baseline_p99: None,
             iteration_base: 0,
             targets,
             target_index,
@@ -550,6 +565,7 @@ impl Plan {
             baseline,
             warmup,
             settle,
+            final_settle: settle,
             concurrency,
             connections,
             worker_threads,
@@ -686,4 +702,25 @@ pub(crate) fn require(condition: bool, message: &str) -> Result<(), String> {
     } else {
         Err(message.into())
     }
+}
+
+fn request_factor(chains: &[Arc<crate::chain::Compiled>], weights: &[f64]) -> f64 {
+    chains
+        .iter()
+        .zip(weights)
+        .map(|(chain, weight)| {
+            let requests: f64 = chain
+                .steps
+                .iter()
+                .map(|step| {
+                    f64::from(
+                        step.repeat_until
+                            .as_ref()
+                            .map_or(1, |repeat| repeat.max_attempts),
+                    ) + f64::from(step.on_failure == metrix_plan::OnFailure::Retry)
+                })
+                .sum();
+            requests * weight / PERCENT_TOTAL
+        })
+        .sum()
 }

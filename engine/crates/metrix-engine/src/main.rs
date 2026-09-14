@@ -212,7 +212,8 @@ fn execute(args: Args) -> Result<ExitCode, String> {
     );
     let report = result?;
     eprintln!(
-        "offered={} admitted={} sent={} sent_finished={} responses={} failed={} timed_out={} cancelled={} skipped_late={} skipped_concurrency={} skipped_connections={} peak_in_flight={} max_send_drift_ms={:.3} drift_samples={} max_scheduler_lag_ms={:.3} scheduler_lag_samples={} interrupted={}",
+        "target={} offered={} admitted={} sent={} sent_finished={} responses={} failed={} timed_out={} cancelled={} skipped_late={} skipped_concurrency={} skipped_connections={} peak_in_flight={} max_send_drift_ms={:.3} drift_samples={} max_scheduler_lag_ms={:.3} scheduler_lag_samples={} interrupted={}",
+        report.target,
         report.offered,
         report.admitted,
         report.sent,

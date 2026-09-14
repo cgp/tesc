@@ -46,6 +46,13 @@ impl Timeline {
         Ok(timeline)
     }
 
+    pub(crate) fn stop(&mut self, now: Instant, settle: Duration) {
+        self.schedule = None;
+        self.clock = None;
+        self.measure_end = now;
+        self.settle = settle;
+    }
+
     pub fn deadline(&self) -> Option<Instant> {
         match self.phase {
             Phase::Baseline => Some(self.baseline_end),

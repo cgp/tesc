@@ -35,6 +35,7 @@ mod tests;
 pub enum Failure {
     Dns,
     Connect,
+    LocalResource,
     Tls,
     Protocol,
     Send,
@@ -106,7 +107,7 @@ impl Endpoint {
     async fn connect(&self) -> Result<Connection, Failure> {
         let socket = TcpStream::connect(self.addresses.as_slice())
             .await
-            .map_err(|_| Failure::Connect)?;
+            .map_err(connection_failure)?;
         socket.set_nodelay(true).map_err(|_| Failure::Connect)?;
         if let Some(config) = &self.tls {
             let stream = TlsConnector::from(Arc::clone(config))
@@ -609,5 +610,44 @@ impl rustls::client::danger::ServerCertVerifier for SkipCertificateVerification 
         rustls::crypto::ring::default_provider()
             .signature_verification_algorithms
             .supported_schemes()
+    }
+}
+
+fn connection_failure(error: std::io::Error) -> Failure {
+    let code = error.raw_os_error();
+    #[cfg(windows)]
+    let exhausted = matches!(code, Some(10024 | 10048 | 10049 | 10055));
+    #[cfg(target_os = "linux")]
+    let exhausted = matches!(code, Some(12 | 23 | 24 | 99 | 105));
+    #[cfg(not(any(windows, target_os = "linux")))]
+    let exhausted = matches!(code, Some(12 | 23 | 24 | 49 | 55));
+    if exhausted || error.kind() == std::io::ErrorKind::OutOfMemory {
+        Failure::LocalResource
+    } else {
+        Failure::Connect
+    }
+}
+
+#[cfg(test)]
+mod resource_tests {
+    use super::*;
+    #[test]
+    fn local_socket_exhaustion_is_distinct_from_target_refusal() {
+        assert_eq!(
+            connection_failure(std::io::Error::from(std::io::ErrorKind::ConnectionRefused)),
+            Failure::Connect
+        );
+        assert_eq!(
+            connection_failure(std::io::Error::from(std::io::ErrorKind::OutOfMemory)),
+            Failure::LocalResource
+        );
+        #[cfg(windows)]
+        let code = 10049;
+        #[cfg(not(windows))]
+        let code = 24;
+        assert_eq!(
+            connection_failure(std::io::Error::from_raw_os_error(code)),
+            Failure::LocalResource
+        );
     }
 }

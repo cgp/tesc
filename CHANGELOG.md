@@ -734,3 +734,7 @@ Separate socket destination from Host and TLS identity. Verify certificates agai
 ## B4.3 — Breakpoint steps
 
 Validate bounded additive/geometric ramps and measure each step with its own warmup, histograms, and observed recovery phase. Emit per-step statistics and carry iteration identity across steps. B4.3 complete.
+
+## B4.4 — Stop conditions and attribution
+
+Evaluate supported latency, errors and arrival shortfall on measurement ticks, drain under original deadlines and observe final settle after a stop. Generator drift, missed arrivals, cap occupancy, connection limits and generation cost take precedence; calibrated profiles cap search demand. Under-sampled latency searches report no capacity. B4.4 complete.
