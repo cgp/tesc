@@ -175,14 +175,13 @@ fn execute(args: Args) -> Result<ExitCode, String> {
                 // shareable across threads. It goes in with the run and the run's
                 // delivery report comes back out with it.
                 let code = match &result {
-                    Ok(report) if report.interrupted => 130,
-                    Ok(_) => 0,
+                    Ok(report) => i32::from(report.exit_code()),
                     Err(_) => 1,
                 };
                 let stopped = match &result {
                     Ok(report) if report.interrupted => Some("interrupted".into()),
                     Err(_) => Some("setup or internal failure".into()),
-                    _ => None,
+                    Ok(report) => report.stopped_because.clone(),
                 };
                 (result, code, output.finish(code, stopped))
             });
@@ -244,6 +243,6 @@ fn execute(args: Args) -> Result<ExitCode, String> {
     } else if delivery.failed {
         ExitCode::FAILURE
     } else {
-        ExitCode::SUCCESS
+        ExitCode::from(report.exit_code())
     })
 }

@@ -232,6 +232,14 @@
         "blocked_ms"
       ]
     },
+    "Bound": {
+      "description": "Which side of the threshold a verdict is about. A floor and a ceiling can carry\nthe same number, and a reader cannot act on a threshold whose direction it has\nto guess.",
+      "type": "string",
+      "enum": [
+        "min",
+        "max"
+      ]
+    },
     "ChainStats": {
       "type": "object",
       "properties": {
@@ -899,6 +907,9 @@
     "SloVerdict": {
       "type": "object",
       "properties": {
+        "bound": {
+          "$ref": "#/$defs/Bound"
+        },
         "chain": {
           "type": [
             "string",
@@ -926,6 +937,7 @@
       },
       "required": [
         "metric",
+        "bound",
         "passed",
         "observed",
         "threshold",

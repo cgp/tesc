@@ -253,3 +253,33 @@ async fn asking_for_a_chain_that_is_not_there_says_what_is() {
         "{stderr}"
     );
 }
+
+/// A run narrowed to one chain must not fail CI for a chain it was told not to run.
+#[tokio::test]
+async fn narrowing_to_one_chain_drops_the_thresholds_about_the_others() {
+    let address = serve().await;
+    let dir = tempfile::tempdir().unwrap();
+    mixture(dir.path(), address);
+    edit(dir.path(), "mix.json", |doc| {
+        doc["slo"] = json!([
+            {"metric": "achieved_rate", "chain": "browse", "min": 1},
+            {"metric": "achieved_rate", "chain": "checkout", "min": 1},
+        ])
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_metrix-engine"))
+        .arg("--plan")
+        .arg(dir.path())
+        .arg("--chain")
+        .arg("checkout")
+        .arg("--summary")
+        .arg(dir.path().join("summary.ndjson"))
+        .kill_on_drop(true)
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

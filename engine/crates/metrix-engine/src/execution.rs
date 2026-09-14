@@ -415,5 +415,45 @@ pub(crate) async fn run(
             report.interrupted || report.stopped_because.is_some(),
         );
     }
+    // A fixed run finishes the timeline it was given and then says whether the
+    // numbers it produced can be believed (§16). Nothing stopped it, so the reason
+    // is not a `stopped_because`; it is the Invalid annotation the rest of the
+    // system already reads for run validity, and the exit code.
+    if !report.interrupted && plan.breakpoint.is_none() {
+        let overridden =
+            plan.allow_generator_limited && plan.headroom_ratio.is_some_and(|ratio| ratio > 0.9);
+        if let Some(evidence) = overridden
+            .then_some("calibrated_ceiling")
+            .or_else(|| crate::breakpoint::limiting(&report, false))
+        {
+            report.generator_limited = true;
+            if let Some(output) = output {
+                output.note(
+                    "generator_limited",
+                    metrix_metrics::Severity::Invalid,
+                    serde_json::json!({"evidence": evidence, "rate": plan.rate}),
+                );
+            }
+        }
+    }
+    report.slo = crate::slo::evaluate(
+        &plan.slos,
+        &report.metrics,
+        report.diagnostics.measure.observed.as_secs_f64(),
+    );
+    if let Some(output) = output {
+        if !plan.slos.is_empty() {
+            let seconds = report.diagnostics.measure.observed.as_secs_f64();
+            output.note(
+                "slo_verdicts",
+                metrix_metrics::Severity::Info,
+                serde_json::json!({
+                    "rate": plan.rate, "from_ms": report.measured_from_ms, "seconds": seconds,
+                    "verdicts": report.slo,
+                    "evidence": crate::slo::evidence(&plan.slos, &report.metrics, seconds),
+                }),
+            );
+        }
+    }
     Ok(report)
 }

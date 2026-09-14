@@ -20,6 +20,7 @@ mod random;
 mod samples;
 mod schedule;
 mod session;
+mod slo;
 mod template;
 mod timeline;
 mod wake_clock;
@@ -40,6 +41,9 @@ use http::SendState;
 
 #[derive(Debug, Default)]
 pub struct Report {
+    /// One verdict per bound, merged across every target and rate step the run made
+    /// (§16). Unlike the scalars below, these describe the whole run.
+    pub slo: Vec<metrix_metrics::events::SloVerdict>,
     /// Scalars and histograms here describe the last target; NDJSON retains every target.
     pub target: String,
     pub generator_limited: bool,
@@ -75,6 +79,26 @@ pub struct Report {
     /// over (design-engine §5).
     pub chains_aborted: u64,
     pub diagnostics: Diagnostics,
+}
+
+impl Report {
+    /// §16. 0 pass or advisory, 1 a setup, internal or output failure (which only
+    /// `main` can see), 2 a breach, 3 a result the generator or the sample count
+    /// cannot support, 130 interrupted. A breach found by a run that was already
+    /// invalid is not a breach anyone can act on, so 3 outranks 2.
+    pub fn exit_code(&self) -> u8 {
+        if self.interrupted {
+            130
+        } else if self.generator_limited
+            || self.stopped_because.as_deref() == Some("insufficient_samples")
+        {
+            3
+        } else if self.slo.iter().any(|v| !v.passed) {
+            2
+        } else {
+            0
+        }
+    }
 }
 
 struct Slot {
@@ -141,6 +165,8 @@ async fn run_sweep(
             }
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let mut verdicts: Vec<metrix_metrics::events::SloVerdict> = Vec::new();
+    let mut insufficient = false;
     let mut last = Report::default();
     for (position, current) in targets.into_iter().enumerate() {
         let target_plan = current.as_ref().unwrap_or(&plan);
@@ -172,6 +198,11 @@ async fn run_sweep(
             );
         }
         last = result?;
+        crate::slo::merge(&mut verdicts, &last.slo);
+        // A sweep stops at a generator that could not keep up, but it runs on past a
+        // step whose samples were too few, and the next target would otherwise clear
+        // the reason the one before it could not answer.
+        insufficient |= last.stopped_because.as_deref() == Some("insufficient_samples");
         last.target = target_plan.target.id.clone();
         if last.interrupted || last.generator_limited {
             break;
@@ -180,6 +211,13 @@ async fn run_sweep(
             tokio::select! { biased; _ = &mut shutdown => { last.interrupted = true; break; }
             _ = tokio::time::sleep(plan.targets.gap.map_or(Duration::ZERO, |d| d.as_duration())) => {} }
         }
+    }
+    last.slo = verdicts;
+    if insufficient && !last.interrupted && !last.generator_limited {
+        last.stopped_because = Some("insufficient_samples".into());
+    }
+    if let Some(output) = output {
+        output.set_slo(&last.slo);
     }
     Ok(last)
 }

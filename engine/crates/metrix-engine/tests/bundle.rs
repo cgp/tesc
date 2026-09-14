@@ -91,7 +91,7 @@ fn rejects_invalid_and_future_features_before_network_io() {
         ),
         (
             "mix.json",
-            json!({"slo": [{"metric": "error_rate", "max": 0.1}]}),
+            json!({"slo": [{"metric": "unknown", "max": 0.1}]}),
         ),
         (
             // A selector with nothing asked of it: vacuously true, which is a plan

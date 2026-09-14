@@ -10,4 +10,4 @@
 {"type":"phase_changed","t_ms":100000,"target_id":"task-a1b2c3","phase":"drain"}
 {"type":"phase_changed","t_ms":102000,"target_id":"task-a1b2c3","phase":"settle"}
 {"type":"target_finished","t_ms":162000,"target_id":"task-a1b2c3","completed":true}
-{"type":"run_finished","t_ms":324000,"exit_code":1,"slo":[{"metric":"p99_latency_ms","chain":"search","passed":true,"observed":312.0,"threshold":400.0,"supported":true},{"metric":"error_rate","passed":false,"observed":0.0032,"threshold":0.001,"supported":true}],"stopped_because":"duration reached"}
+{"type":"run_finished","t_ms":324000,"exit_code":2,"slo":[{"metric":"p99_latency_ms","chain":"search","bound":"max","passed":true,"observed":312.0,"threshold":400.0,"supported":true},{"metric":"error_rate","bound":"max","passed":false,"observed":0.0032,"threshold":0.001,"supported":true}],"stopped_because":"duration reached"}

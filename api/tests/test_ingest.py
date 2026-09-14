@@ -326,9 +326,9 @@ class TestRecordedFixture:
         assert ingest.records == 13
         assert ingest.unplaced == 0
         assert ingest.windows == 2
-        # The fixture ends on a failed SLO, so the run finished and did not pass.
+        # The fixture ends on a failed SLO, which the engine reports as exit 2.
         row = store.get(db, recording)
-        assert row.engine_exit_code == 1
+        assert row.engine_exit_code == 2
         assert row.stopped_because == "duration reached"
 
     def test_it_produces_rows_a_chart_can_draw(self, db, recording) -> None:
@@ -501,7 +501,7 @@ class TestRoutes:
 
         assert body["ran"] is True
         assert body["windows"] == 2
-        assert body["engine_exit_code"] == 1, "the fixture ends on a failed SLO"
+        assert body["engine_exit_code"] == 2, "the fixture ends on a failed SLO"
         assert body["rows"]
         assert all("p95" not in row for row in body["rows"])
         assert any(row["step"] is None for row in body["rows"]), "the chain's own row"

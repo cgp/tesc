@@ -29,6 +29,8 @@ use crate::schedule::Schedule;
 
 #[derive(Clone)]
 pub struct Plan {
+    pub(crate) slos: Vec<metrix_plan::mix::Slo>,
+    pub(crate) observe: Option<metrix_plan::mix::Observe>,
     pub(crate) refinement: bool,
     pub(crate) breakpoint_baseline_p99: Option<u64>,
     pub(crate) breakpoint: Option<metrix_plan::mix::Breakpoint>,
@@ -146,6 +148,11 @@ impl Plan {
             })?;
         self.chains = vec![Arc::clone(&self.chains[index])];
         self.weights = vec![PERCENT_TOTAL];
+        // A threshold about a chain that is not running has nothing to measure, and
+        // an achieved rate of zero for traffic nobody sent is a CI failure about a
+        // decision the operator already made.
+        self.slos
+            .retain(|slo| slo.chain.as_deref().is_none_or(|scope| scope == name));
         self.sessions = Arc::new(vec![crate::session::Sessions::new(
             self.chain_sessions[index].0,
             self.concurrency,
@@ -239,10 +246,6 @@ impl Plan {
         if let Some(b) = &mix.load.breakpoint {
             crate::breakpoint::rates(b)?;
         }
-        require(
-            mix.slo.is_empty() && mix.observe.is_none(),
-            "mix.json#/slo: SLOs and observation are not available in B1.2",
-        )?;
         require(
             mix.defaults.follow_redirects != Some(true),
             "mix.json#/defaults/follow_redirects: redirects are not implemented",
@@ -415,6 +418,14 @@ impl Plan {
         };
         unique_rows_suffice(&datasets, &resolved, dataset_rate, dataset_duration)?;
 
+        crate::slo::validate(
+            &mix.slo,
+            &resolved
+                .chains
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+        )?;
         let timeout = resolved.longest_timeout();
         // Percentages are a claim about what the service was asked for, so they
         // have to add up before anything is sent. Named as a shortfall or an excess
@@ -569,6 +580,8 @@ impl Plan {
             "mix.json#/load/rate: exceeds 90% of the calibrated generator ceiling; set engine/allow_generator_limited to true to run with an invalid annotation",
         )?;
         Ok(Self {
+            slos: mix.slo.clone(),
+            observe: mix.observe.clone(),
             refinement: false,
             breakpoint: mix.load.breakpoint.clone(),
             breakpoint_baseline_p99: None,

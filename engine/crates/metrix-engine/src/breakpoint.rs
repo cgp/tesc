@@ -3,12 +3,17 @@ use crate::{Output, Plan, Report};
 use metrix_metrics::{
     Severity,
     aggregation::Window,
+    events::SloVerdict,
     stats::{Percentile, percentiles},
 };
 use metrix_plan::mix::{Breakpoint, StopOn};
 use serde::Serialize;
 use std::{future::Future, time::Duration};
 use tokio::sync::mpsc;
+
+/// The fewest observations a proportion may be drawn from. Below it, a share says
+/// more about the window than about the run (§12.1 draws the same line for tails).
+const SHARE_FLOOR: u64 = 100;
 
 #[derive(Debug, Serialize)]
 pub struct Step {
@@ -122,6 +127,7 @@ pub(crate) async fn run(
         ..Search::default()
     };
     let mut last = Report::default();
+    let mut verdicts: Vec<SloVerdict> = Vec::new();
     for (index, rate) in rates.iter().copied().enumerate() {
         plan.rate = rate;
         plan.headroom_ratio = plan.headroom_for(rate);
@@ -144,19 +150,14 @@ pub(crate) async fn run(
         ))
         .await?;
         let to_ms = output.map_or(clock.elapsed().as_millis() as u64, |o| o.elapsed());
+        crate::slo::merge(&mut verdicts, &last.slo);
         let mut step = summarize(&last, rate, from_ms, to_ms, plan.duration);
         step.stop = last
             .stopped_because
             .clone()
-            .or_else(|| assess(&last, b.stop_on, plan.breakpoint_baseline_p99));
-        if step.stop.is_none()
-            && (((b.stop_on.p99_latency_ms.is_some()
-                || b.stop_on.p99_multiple_of_baseline.is_some())
-                && step.p99.value_us.is_none())
-                || (b.stop_on.error_rate.is_some() && step.requests < 100))
-        {
-            step.stop = Some("insufficient_samples".into());
-        }
+            .or_else(|| assess(&last, b.stop_on, plan.breakpoint_baseline_p99))
+            .or_else(|| slo_stop(&last.slo))
+            .or_else(|| unsupported_stop(b.stop_on, &step));
         if index == 0 {
             plan.breakpoint_baseline_p99 = step.p99.value_us;
         }
@@ -218,17 +219,22 @@ pub(crate) async fn run(
                 ))
                 .await?;
                 let to_ms = output.map_or(clock.elapsed().as_millis() as u64, |o| o.elapsed());
+                crate::slo::merge(&mut verdicts, &last.slo);
                 let mut step = summarize(&last, midpoint, from_ms, to_ms, plan.duration);
                 step.refinement = true;
                 step.stop = last
                     .stopped_because
                     .clone()
-                    .or_else(|| assess(&last, b.stop_on, plan.breakpoint_baseline_p99));
+                    .or_else(|| assess(&last, b.stop_on, plan.breakpoint_baseline_p99))
+                    .or_else(|| slo_stop(&last.slo))
+                    .or_else(|| unsupported_stop(b.stop_on, &step));
                 last.generator_limited |= step.stop.as_deref() == Some("generator_limited");
                 if last.interrupted {
                     search.stopped_because = "interrupted".into();
                 } else if last.generator_limited {
                     search.stopped_because = "generator_limited".into();
+                } else if step.stop.as_deref() == Some("insufficient_samples") {
+                    search.stopped_because = "insufficient_samples".into();
                 } else if step.stop.is_none() {
                     search.max_sustained_rate = Some(midpoint);
                     search.bracket = Some([midpoint, high]);
@@ -265,7 +271,7 @@ pub(crate) async fn run(
             .steps
             .iter()
             .filter(|s| {
-                (s.requests >= 100
+                (s.requests >= SHARE_FLOOR
                     && s.error_rate
                         .zip(b.stop_on.error_rate)
                         .is_some_and(|(actual, limit)| actual > limit))
@@ -304,6 +310,7 @@ pub(crate) async fn run(
         );
     }
     last.stopped_because = Some(search.stopped_because.clone());
+    last.slo = verdicts;
     last.breakpoint = Some(search);
     Ok(last)
 }
@@ -311,6 +318,7 @@ pub(crate) async fn run(
 fn summarize(report: &Report, rate: f64, from_ms: u64, to_ms: u64, _duration: Duration) -> Step {
     let c = &report.metrics.counters;
     let h = report.diagnostics.measure;
+    let (requests, failed) = crate::slo::request_counts(&report.metrics);
     Step {
         rate,
         from_ms: report.measured_from_ms.unwrap_or(from_ms),
@@ -320,9 +328,9 @@ fn summarize(report: &Report, rate: f64, from_ms: u64, to_ms: u64, _duration: Du
         measured_seconds: report.diagnostics.measure.observed.as_secs_f64(),
         iterations: h.offered,
         completed: report.metrics.chains.values().map(|c| c.completed).sum(),
-        requests: c.completed,
-        failed: c.failed,
-        error_rate: (c.completed > 0).then(|| c.failed as f64 / c.completed as f64),
+        requests,
+        failed,
+        error_rate: (requests > 0).then(|| failed as f64 / requests as f64),
         achieved_rate: report
             .metrics
             .chains
@@ -374,32 +382,14 @@ pub(crate) fn assess(report: &Report, stop: StopOn, baseline_p99: Option<u64>) -
     if h.observed < Duration::from_secs(1) {
         return None;
     }
-    let tolerance = f64::from(report.diagnostics.config.rate_tolerance_pct);
-    let late_pct = h.skipped_late as f64 / h.offered.max(1) as f64 * 100.0;
-    let generation_bad = report
-        .metrics
-        .generation
-        .values()
-        .any(|g| g.failed > 0 || g.duration.overflow > 0)
-        || report.metrics.counters.errors[metrix_metrics::aggregation::Cause::Generation as usize]
-            > 0
-        || report.metrics.counters.errors[metrix_metrics::aggregation::Cause::Extraction as usize]
-            > 0;
-    let cap_pct = h.skipped_concurrency as f64 / h.offered.max(1) as f64 * 100.0;
-    if late_pct > tolerance
-        || cap_pct > tolerance
-        || h.max_drift > report.diagnostics.config.drift_threshold
-        || h.cap_duration.saturating_mul(4) > h.observed
-        || h.skipped_connections > 0
-        || generation_bad
-    {
+    if limiting(report, true).is_some() {
         return Some("generator_limited".into());
     }
-    let c = &report.metrics.counters;
-    if c.completed >= 100
+    let (requests, failed) = crate::slo::request_counts(&report.metrics);
+    if requests >= SHARE_FLOOR
         && stop
             .error_rate
-            .is_some_and(|n| c.failed as f64 / c.completed as f64 > n)
+            .is_some_and(|n| failed as f64 / requests as f64 > n)
     {
         return Some("error_rate".into());
     }
@@ -422,4 +412,188 @@ pub(crate) fn assess(report: &Report, stop: StopOn, baseline_p99: Option<u64>) -
         return Some("rate_shortfall_pct".into());
     }
     None
+}
+
+/// A step's verdicts, read as a reason to stop climbing.
+///
+/// A breach is a finding: the rate that produced it is past what the plan asked
+/// for. A threshold the samples cannot support is the absence of a finding, and a
+/// capacity claim resting on one would be a guess, so the search stops without
+/// claiming a rate (§16).
+fn slo_stop(verdicts: &[SloVerdict]) -> Option<String> {
+    if verdicts.iter().any(|verdict| !verdict.passed) {
+        Some("slo".into())
+    } else if verdicts.iter().any(|verdict| !verdict.supported) {
+        Some("insufficient_samples".into())
+    } else {
+        None
+    }
+}
+
+/// The step's own stop conditions, judged against what the step actually measured.
+/// A threshold with nothing to compare against has not been met and has not been
+/// missed.
+fn unsupported_stop(stop: StopOn, step: &Step) -> Option<String> {
+    let tail_wanted = stop.p99_latency_ms.is_some() || stop.p99_multiple_of_baseline.is_some();
+    ((tail_wanted && step.p99.value_us.is_none())
+        || (stop.error_rate.is_some() && step.requests < SHARE_FLOOR))
+        .then(|| "insufficient_samples".to_owned())
+}
+
+/// What makes a result untrustworthy, and the evidence that made it so (§16).
+///
+/// A capacity search and a fixed run are not asked the same question, so they are
+/// not invalidated by the same things. A search extrapolates a number from the
+/// window it measured, so send drift and a chain that broke both turn that number
+/// into a guess. A fixed run was asked for a timeline: it delivered it or it did
+/// not. Drift within it is a warning the run already carries, and a chain that
+/// broke is a finding about the service rather than about the generator that
+/// reported it.
+pub(crate) fn limiting(report: &Report, searching: bool) -> Option<&'static str> {
+    let h = report.diagnostics.measure;
+    if h.observed < Duration::from_secs(1) {
+        return None;
+    }
+    let tolerance = f64::from(report.diagnostics.config.rate_tolerance_pct);
+    // A share needs a denominator. Two missed arrivals out of fifty is 4% and is a
+    // scheduler tick on a busy box, not a generator that cannot sustain the rate --
+    // and this is the same floor a capacity search already puts under the error
+    // rate it stops on. Counts, durations and outright failures below need none: an
+    // exhausted socket is an exhausted socket at any sample size.
+    let over = |count: u64| {
+        h.offered >= SHARE_FLOOR && count as f64 / h.offered as f64 * 100.0 > tolerance
+    };
+    let errors = &report.metrics.counters.errors;
+    let generation_failed = report
+        .metrics
+        .generation
+        .values()
+        .any(|g| g.failed > 0 || g.duration.overflow > 0)
+        || errors[metrix_metrics::aggregation::Cause::Generation as usize] > 0;
+    Some(if over(h.skipped_late) {
+        "arrivals_missed"
+    } else if over(h.skipped_concurrency) {
+        "concurrency_cap"
+    } else if h.cap_duration.saturating_mul(4) > h.observed {
+        "held_at_the_cap"
+    } else if h.skipped_connections > 0 {
+        "connections_exhausted"
+    } else if generation_failed {
+        "generation_failed"
+    } else if searching && h.max_drift > report.diagnostics.config.drift_threshold {
+        "send_drift"
+    } else if searching && errors[metrix_metrics::aggregation::Cause::Extraction as usize] > 0 {
+        "chain_broken"
+    } else {
+        return None;
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::PhaseHealth;
+    use metrix_metrics::aggregation::Cause;
+
+    fn measured(health: PhaseHealth) -> Report {
+        let mut report = Report::default();
+        report.diagnostics.measure = PhaseHealth {
+            observed: Duration::from_secs(10),
+            offered: 1000,
+            ..health
+        };
+        report
+    }
+
+    /// The sentence §16 turns on: a fixed run was asked for a timeline and either
+    /// delivered it or did not. Drift within a delivered one is a warning the run
+    /// already carries, and a chain that broke is a finding about the service, not
+    /// a confession that the generator was too small.
+    #[test]
+    fn a_search_and_a_fixed_run_are_invalidated_by_different_evidence() {
+        let drifting = measured(PhaseHealth {
+            max_drift: Duration::from_millis(50),
+            ..PhaseHealth::default()
+        });
+        assert_eq!(limiting(&drifting, true), Some("send_drift"));
+        assert_eq!(limiting(&drifting, false), None);
+
+        let mut broken = measured(PhaseHealth::default());
+        broken.metrics.counters.errors[Cause::Extraction as usize] = 4;
+        assert_eq!(limiting(&broken, true), Some("chain_broken"));
+        assert_eq!(limiting(&broken, false), None);
+    }
+
+    /// Everything that means the generator, rather than the service, set the pace.
+    /// These invalidate either kind of run: the rate on the page was never offered.
+    #[test]
+    fn the_generator_falling_behind_invalidates_both() {
+        for (health, evidence) in [
+            (
+                PhaseHealth {
+                    skipped_late: 50,
+                    ..PhaseHealth::default()
+                },
+                "arrivals_missed",
+            ),
+            (
+                PhaseHealth {
+                    skipped_concurrency: 50,
+                    ..PhaseHealth::default()
+                },
+                "concurrency_cap",
+            ),
+            (
+                PhaseHealth {
+                    cap_duration: Duration::from_secs(3),
+                    ..PhaseHealth::default()
+                },
+                "held_at_the_cap",
+            ),
+            (
+                PhaseHealth {
+                    skipped_connections: 1,
+                    ..PhaseHealth::default()
+                },
+                "connections_exhausted",
+            ),
+        ] {
+            let report = measured(health);
+            assert_eq!(limiting(&report, true), Some(evidence));
+            assert_eq!(limiting(&report, false), Some(evidence));
+        }
+        let mut generating = measured(PhaseHealth::default());
+        generating.metrics.counters.errors[Cause::Generation as usize] = 1;
+        assert_eq!(limiting(&generating, true), Some("generation_failed"));
+        assert_eq!(limiting(&generating, false), Some("generation_failed"));
+    }
+
+    /// Under a busy CI box, one 1s window at 50/s missing two arrivals reads as
+    /// four percent, and four percent of nothing much is still nothing much. The
+    /// share gets the same floor the error rate beside it already has.
+    #[test]
+    fn a_share_drawn_from_too_few_arrivals_is_not_evidence() {
+        let mut report = measured(PhaseHealth {
+            skipped_late: 2,
+            ..PhaseHealth::default()
+        });
+        report.diagnostics.measure.offered = 50;
+        assert_eq!(limiting(&report, false), None);
+
+        report.diagnostics.measure.offered = SHARE_FLOOR;
+        report.diagnostics.measure.skipped_late = 4;
+        assert_eq!(limiting(&report, false), Some("arrivals_missed"));
+    }
+
+    /// A window too short to hold a judgement does not produce one.
+    #[test]
+    fn a_window_under_a_second_is_not_judged_at_all() {
+        let mut report = measured(PhaseHealth {
+            skipped_late: 500,
+            ..PhaseHealth::default()
+        });
+        assert_eq!(limiting(&report, false), Some("arrivals_missed"));
+        report.diagnostics.measure.observed = Duration::from_millis(999);
+        assert_eq!(limiting(&report, false), None);
+    }
 }

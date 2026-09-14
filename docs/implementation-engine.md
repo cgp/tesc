@@ -106,7 +106,7 @@ Buildable and testable with nothing but a shell, a bundle, and the mock target.
 
 **Done when:** the `examples/plans/checkout-mixed` bundle runs end to end — six chains at declared percentages, XML and JSON, extraction between steps, a Lua generator, OAuth with refresh, and a deliberately-failing chain whose 401s count as passes.
 
-*Status:* every one of those behaviours runs together, proved by `tests/checkout_mixed.rs`, which uses the example's own calls, generator and dataset against servers a test can start. The committed bundle itself does not yet load, and none of the reasons are B3's: it declares two targets with `shuffle`, a `gap` and a `host_header` (B4.1, B4.2), and an `slo` block (B4.6). It is pointed at fictional ECS tasks, so it could not have run offline regardless. B3's behaviours are complete; the bundle becomes executable as written when B4 lands.
+*Status:* every one of those behaviours runs together, proved by `tests/checkout_mixed.rs`, which uses the example's own calls, generator and dataset against servers a test can start. The committed bundle now loads as written -- its `shuffle`, `gap` and `host_header` landed with B4.1 and B4.2, its `slo` block with B4.6 -- and `tests/ci.rs` compiles it on every run. It is still pointed at fictional ECS tasks, so running it needs addresses that answer.
 
 *Sequencing note:* calls before chains before the mixture, so each layer is testable alone. Lua before the exec sidecar — it is the default tier, and building the escape hatch first tends to make the escape hatch the default.
 
@@ -117,7 +117,7 @@ Buildable and testable with nothing but a shell, a bundle, and the mock target.
 - [x] **B4.3** — Breakpoint mode: stepped ramp, per-step statistics, `step_recovery` (§11)
 - [x] **B4.4** — Stop conditions incl. generator-vs-target discrimination and `generator_limited` (§11.3)
 - [x] **B4.5** — Refinement pass; report with knee / cliff / max-sustained / limiting resource
-- [ ] **B4.6** — SLO evaluation and exit codes for CI (§16)
+- [x] **B4.6** — SLO evaluation and exit codes for CI (§16)
 - [ ] **B4.7** — Static build, `engine/dist` bundle, ship-and-run over SSH (§2.2)
 
 **Done when:** a hand-written bundle listing three mock targets runs all three in sequence; a breakpoint run finds a known ceiling within one step width; the same run against an under-provisioned generator aborts as `generator_limited` rather than reporting a number.

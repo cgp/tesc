@@ -145,6 +145,7 @@ pub struct OutputReport {
 
 /// Created once before execution. No I/O or request serialization occurs on its send path.
 pub struct Output {
+    slo: std::cell::RefCell<Vec<SloVerdict>>,
     summary: Stream,
     events: Option<Stream>,
     identity: std::cell::RefCell<Arc<Identity>>,
@@ -205,6 +206,7 @@ impl Output {
             })
             .transpose()?;
         let output = Self {
+            slo: std::cell::RefCell::new(Vec::new()),
             summary,
             events,
             identity: std::cell::RefCell::new(identity),
@@ -355,6 +357,13 @@ impl Output {
             total: plan.targets.list.len() as u32,
         }));
         self.note("target_metadata", Severity::Info, serde_json::json!({"attributes": plan.target.attributes, "address": plan.target.address, "host_header": plan.target.host_header, "sni": plan.target.tls.sni}));
+        if plan.observe.is_some() {
+            self.note(
+                "observation_unavailable",
+                Severity::Info,
+                serde_json::json!({"owner":"API observer"}),
+            );
+        }
         if plan.target.tls.insecure_skip_verify {
             self.note(
                 "insecure_skip_verify",
@@ -377,6 +386,9 @@ impl Output {
             detail: Some(detail),
         }));
     }
+    pub(crate) fn set_slo(&self, verdicts: &[SloVerdict]) {
+        *self.slo.borrow_mut() = verdicts.to_vec();
+    }
     pub(crate) fn target_finish(&self, completed: bool) {
         self.lifecycle(Record::TargetFinished(TargetFinished {
             t_ms: self.elapsed(),
@@ -385,7 +397,7 @@ impl Output {
         }));
     }
     fn lifecycle(&self, record: Record) {
-        // Reserved slots cover all lifecycle records even if the writer never reads.
+        // Reserved slots favor lifecycle records; prolonged backpressure can still drop them.
         for stream in std::iter::once(&self.summary).chain(self.events.iter()) {
             if stream
                 .sender
@@ -640,14 +652,17 @@ impl Output {
                 self.losses.failed.store(true, Ordering::Relaxed);
             }
         }
-        if self.losses.failed.load(Ordering::Relaxed) && exit_code == 0 {
+        // A recording that could not be written outranks anything the run concluded,
+        // because the conclusion is what could not be written down (§16). Only an
+        // interruption outranks it: the reader asked for the run to end.
+        if self.losses.failed.load(Ordering::Relaxed) && exit_code != 130 {
             exit_code = 1;
         }
         let t_ms = self.elapsed();
         self.lifecycle(Record::RunFinished(RunFinished {
             t_ms,
             exit_code,
-            slo: vec![],
+            slo: self.slo.borrow().clone(),
             stopped_because,
         }));
         let Self {

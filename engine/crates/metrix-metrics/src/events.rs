@@ -406,11 +406,22 @@ pub struct RunFinished {
     pub stopped_because: Option<String>,
 }
 
+/// Which side of the threshold a verdict is about. A floor and a ceiling can carry
+/// the same number, and a reader cannot act on a threshold whose direction it has
+/// to guess.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Bound {
+    Min,
+    Max,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SloVerdict {
     pub metric: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chain: Option<String>,
+    pub bound: Bound,
     pub passed: bool,
     pub observed: f64,
     pub threshold: f64,
