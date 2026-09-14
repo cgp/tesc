@@ -38,6 +38,8 @@ pub struct Plan {
     pub(crate) datasets: Arc<crate::dataset::Datasets>,
     /// Every generator the mix declares, compiled once and shared the same way.
     pub(crate) generators: Arc<crate::generate::Generators>,
+    /// The error-sample budget and the redaction rules, shared by every send.
+    pub(crate) samples: Arc<crate::samples::Samples>,
     /// What each chain's virtual users carry between requests, in chain order.
     pub(crate) sessions: crate::session::PerChain,
     /// The credential every request carries, and what keeps it fresh. `None` when the
@@ -317,6 +319,11 @@ impl Plan {
         // One set per chain, because the policy is the chain's: a plan whose checkout
         // is a first-time user and whose search is a returning one is the ordinary
         // case, not an exception.
+        let samples = Arc::new(crate::samples::Samples::new(
+            mix.capture.error_samples,
+            &mix.capture.redact,
+            mix.capture.body_max_kb as usize * 1024,
+        ));
         let sessions: crate::session::PerChain = Arc::new(
             resolved
                 .chains
@@ -384,6 +391,7 @@ impl Plan {
             chains,
             datasets,
             generators,
+            samples,
             sessions,
             auth,
             seed: 0,

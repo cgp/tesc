@@ -22,6 +22,7 @@ fn time(record: &Record) -> u64 {
         Record::TargetFinished(r) => r.t_ms,
         Record::Summary(r) => r.t_ms,
         Record::Request(r) => r.t_ms,
+        Record::ErrorSample(r) => r.t_ms,
         Record::Annotation(r) => r.t_ms,
         Record::RunFinished(r) => r.t_ms,
     }

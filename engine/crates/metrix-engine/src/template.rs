@@ -280,11 +280,44 @@ fn ambient(at: &str, text: &str) -> Result<Option<String>, String> {
     let bare = name.trim_start_matches("METRIX_SECRET_");
     require_env_name(at, kind, bare)?;
     match std::env::var(&name) {
-        Ok(value) => Ok(Some(value)),
+        Ok(value) => {
+            if kind == "secret" {
+                remember_secret(&value);
+            }
+            Ok(Some(value))
+        }
         Err(_) => Err(format!(
             "{at}: {{{{ {kind}.{bare} }}}} is not set; the engine reads it from {name} in              its own environment, because a credential in a plan is a credential in a              repository"
         )),
     }
+}
+
+/// Every `{{ secret.X }}` value this process has resolved.
+///
+/// A process-wide set rather than something threaded through every `Template::parse`
+/// call: which credentials this process was handed is a property of the process, and
+/// there is exactly one place that reads it — capture, where a secret must never
+/// reach a file (§6.1). Knowing the literal values is what makes that a mechanism
+/// rather than a promise about which fields somebody remembered to name.
+static SECRETS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn remember_secret(value: &str) {
+    if value.is_empty() {
+        return;
+    }
+    if let Ok(mut known) = SECRETS.lock()
+        && !known.iter().any(|held| held == value)
+    {
+        known.push(value.to_owned());
+    }
+}
+
+/// The secrets to take out of anything written down.
+pub(crate) fn resolved_secrets() -> Vec<String> {
+    SECRETS
+        .lock()
+        .map(|known| known.clone())
+        .unwrap_or_default()
 }
 
 fn require_env_name(at: &str, kind: &str, name: &str) -> Result<(), String> {

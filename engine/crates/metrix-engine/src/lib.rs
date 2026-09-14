@@ -15,6 +15,7 @@ mod execution;
 mod http;
 mod output;
 mod random;
+mod samples;
 mod schedule;
 mod session;
 mod template;

@@ -443,6 +443,24 @@ impl Output {
     /// explains all of them. The per-step failure count carries how often. A
     /// generator that failed is said once for the same reason — a script with a bug
     /// in it has the same bug on every call.
+    /// One errored call, kept in full (§9.3).
+    ///
+    /// On the events stream only. The summary stream feeds live charts and is read at
+    /// a quarter-second cadence; a sample carries request and response bodies, and
+    /// putting those on that stream would be sending bodies to a chart.
+    pub(crate) fn error_sample(&self, sample: metrix_metrics::events::ErrorSample) {
+        let Some(events) = &self.events else {
+            return;
+        };
+        if events
+            .sender
+            .try_send(Packet::Record(Box::new(Record::ErrorSample(sample))))
+            .is_err()
+        {
+            self.losses.failed.store(true, Ordering::Relaxed);
+        }
+    }
+
     pub(crate) fn not_sent(&self, iteration: u64, phase: Phase, what: NotSent<'_>) {
         let NotSent {
             chain,

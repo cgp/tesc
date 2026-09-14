@@ -101,7 +101,7 @@ Buildable and testable with nothing but a shell, a bundle, and the mock target.
 - [x] **B3.7** — Lua corpus loading: read-only, bundle-rooted, in-memory, size-ceilinged
 - [x] **B3.8** — `auth` block (§6): all modes, single-flight refresh, auth traffic excluded
 - [x] **B3.9** — Session policy per chain: `fresh` / `reuse` / `pool` (§4.2)
-- [ ] **B3.10** — Error-sample capture: first N per error class, redaction (§9.3)
+- [x] **B3.10** — Error-sample capture: first N per error class, redaction (§9.3)
 - [ ] **B3.11** — Validation errors with JSON Pointer paths; single-chain execution (`--chain`)
 
 **Done when:** the `examples/plans/checkout-mixed` bundle runs end to end — six chains at declared percentages, XML and JSON, extraction between steps, a Lua generator, OAuth with refresh, and a deliberately-failing chain whose 401s count as passes.

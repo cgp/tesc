@@ -36,6 +36,7 @@ pub enum Record {
     TargetFinished(TargetFinished),
     Summary(Summary),
     Request(RequestEvent),
+    ErrorSample(ErrorSample),
     Annotation(Annotation),
     RunFinished(RunFinished),
 }
@@ -308,6 +309,61 @@ pub enum ErrorClass {
     /// errors: a 401 storm is a different problem from a service returning 500s.
     Unauthorized,
     Other,
+}
+
+/// One errored call, kept in full (§9.3).
+///
+/// The first N per error class rather than N overall: one flood of connection-refused
+/// would otherwise evict the single 500 that actually explains the problem. First N
+/// rather than a random sample, deliberately — the first failures are the ones that
+/// show what changed at onset, and they cost nothing to collect. After N, that class
+/// only increments a counter.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ErrorSample {
+    pub t_ms: u64,
+    pub target_id: String,
+    pub phase: Phase,
+    pub chain: String,
+    pub step: String,
+    pub call: String,
+    pub iteration: u64,
+    pub class: ErrorClass,
+    /// Which of this class's kept samples it is, counting from one.
+    pub ordinal: u32,
+    /// Which assertion in the call did not hold, for an assertion failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assertion: Option<usize>,
+    /// The variable that was missing, or what a generator said. For the classes where
+    /// nothing was sent, this is the whole explanation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// The request as sent, including whatever a generator built.
+    pub request: SampledRequest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response: Option<SampledResponse>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SampledRequest {
+    pub method: String,
+    /// Path and query as they went on the wire.
+    pub target: String,
+    pub headers: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    /// True when the body was cut at `capture.body_max_kb`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub body_truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SampledResponse {
+    pub status: u16,
+    pub headers: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub body_truncated: bool,
 }
 
 /// A structured note attached to the run. Detectors emit these continuously.

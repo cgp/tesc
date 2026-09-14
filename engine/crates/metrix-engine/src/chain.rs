@@ -78,6 +78,9 @@ pub(crate) struct Job {
     pub generators: Arc<Generators>,
     /// The credential every request carries, with its tokens already fetched.
     pub auth: Option<Arc<crate::auth::Auth>>,
+    /// The error-sample budget, so a failing step knows whether to keep a copy of
+    /// what it sent.
+    pub samples: Arc<crate::samples::Samples>,
     /// This chain's sessions, and which of them this iteration is.
     pub sessions: crate::session::PerChain,
     pub chain_index: usize,
@@ -98,6 +101,10 @@ pub(crate) struct Outcome {
     /// Index into the chain's steps, so the caller need not match on names.
     pub index: usize,
     pub observation: Observation,
+    /// The request exactly as it went out, kept only when something failed and the
+    /// sample budget still had room for it (§9.3). `None` the rest of the time,
+    /// because holding a copy of every request is holding every request.
+    pub sent: Option<crate::calls::Prepared>,
     /// How the answer itself fell short, if it did. The request succeeded; what is
     /// wrong is the answer, and the two are counted apart.
     pub verdict: Option<Verdict>,
@@ -347,9 +354,11 @@ pub(crate) async fn run(job: Option<Job>) -> Completion {
                 && let Some(auth) = &job.auth
             {
                 if auth.fails_on_401() {
+                    let sent = keep(&job, true, &rendered, step);
                     break Outcome {
                         index,
                         observation,
+                        sent,
                         verdict: Some(Verdict::Unauthorized),
                     };
                 }
@@ -369,9 +378,14 @@ pub(crate) async fn run(job: Option<Job>) -> Completion {
                             .clone()
                             .expect("a request carrying a credential was rendered");
                         if let Ok(token) = auth.inject(&mut again, who).await {
+                            // A 401 that is about to be renewed and retried: the
+                            // request happened, and the sample is worth having even
+                            // though the step recovers.
+                            let sent = keep(&job, true, &rendered, step);
                             steps.push(Outcome {
                                 index,
                                 observation,
+                                sent,
                                 verdict: None,
                             });
                             rendered = Some(again);
@@ -396,9 +410,11 @@ pub(crate) async fn run(job: Option<Job>) -> Completion {
                 // that decided on its own how many times to hammer a failing service
                 // would be choosing the load rather than running the plan.
                 retried = true;
+                let sent = keep(&job, true, &rendered, step);
                 steps.push(Outcome {
                     index,
                     observation,
+                    sent,
                     verdict,
                 });
                 continue;
@@ -411,6 +427,7 @@ pub(crate) async fn run(job: Option<Job>) -> Completion {
                         steps.push(Outcome {
                             index,
                             observation,
+                            sent: None,
                             verdict,
                         });
                         // Outside the request: what must not contaminate request
@@ -423,9 +440,19 @@ pub(crate) async fn run(job: Option<Job>) -> Completion {
                 }
             }
 
+            // The same rule the sample is filed under, so the two cannot disagree:
+            // a 500 nobody asserted against is neither a transport error nor a failed
+            // verdict, and it is exactly the answer somebody will want to read.
+            let sent = keep(
+                &job,
+                crate::samples::classify(&observation, verdict).is_some(),
+                &rendered,
+                step,
+            );
             break Outcome {
                 index,
                 observation,
+                sent,
                 verdict,
             };
         };
@@ -458,6 +485,26 @@ pub(crate) async fn run(job: Option<Job>) -> Completion {
 ///
 /// Returns the request to send: `None` still means "send the call as compiled", which
 /// is the ordinary case for a plan with no auth and the one that must cost nothing.
+/// A copy of the request, when something failed and a sample might want it.
+///
+/// Cheap by construction: `Prepared` is a URI, a header map and a `Bytes`, and this
+/// is reached only on a failure while the budget still has room. Every other request
+/// keeps nothing, which is the point — a generator holding a copy of each request it
+/// sends is holding every request it sends.
+fn keep(
+    job: &Job,
+    failed: bool,
+    rendered: &Option<crate::calls::Prepared>,
+    step: &Step,
+) -> Option<crate::calls::Prepared> {
+    if !failed || !job.samples.wants_bodies() {
+        return None;
+    }
+    rendered
+        .clone()
+        .or_else(|| step.request.prepared().cloned())
+}
+
 /// The request as it actually goes out: what the session carries, on top of what the
 /// call says.
 ///

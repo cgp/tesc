@@ -70,7 +70,7 @@ pub(crate) async fn run(
             iteration: 0,
             admitted: Instant::now(),
             phase: Phase::Measure,
-            send_state: Arc::new(SendState::default()),
+            send_state: Arc::new(SendState::for_run(Arc::clone(&plan.samples))),
             send_recorded: false,
             chain: plan.chains[0].name,
             future: ReusableBoxFuture::new(chain::run(None)),
@@ -264,6 +264,33 @@ pub(crate) async fn run(
                         connections_opened: observation.connections_opened,
                         connection_reused: observation.connection_reused,
                     });
+                    // Kept in full while this class still has room (§9.3). Claimed
+                    // here rather than in the chain, because a sample is a record on
+                    // the output stream and the chain does not have one.
+                    if let (Some(output), Some(class)) = (output, crate::samples::classify(observation, outcome.verdict)) {
+                        if let Some(ordinal) = plan.samples.claim(class) {
+                            output.error_sample(metrix_metrics::events::ErrorSample {
+                                t_ms: output.elapsed(), target_id: plan.target.id.clone(),
+                                phase: admitted_phase, chain: chain_name.to_owned(),
+                                step: step_id.to_owned(), call: step.call.to_owned(),
+                                iteration, class, ordinal,
+                                assertion: outcome.verdict.and_then(chain::Verdict::assertion),
+                                detail: None,
+                                request: outcome.sent.as_ref().map_or_else(
+                                    || plan.samples.request(step.request.method.as_str(), "", &Default::default(), &[]),
+                                    |sent| plan.samples.request(
+                                        step.request.method.as_str(),
+                                        sent.uri.path_and_query().map_or("/", |part| part.as_str()),
+                                        &sent.headers,
+                                        &sent.body,
+                                    ),
+                                ),
+                                response: observation.response.as_ref().map(|captured| {
+                                    plan.samples.response(observation.status.unwrap_or(0), &captured.headers, &captured.body)
+                                }),
+                            });
+                        }
+                    }
                     if observation.sent.is_some() { report.sent_finished += 1; }
                     if let Some(error) = observation.error {
                         report.failed += 1;
@@ -292,7 +319,30 @@ pub(crate) async fn run(
                         connections_opened: 0, connection_reused: false,
                     });
                     report.failed += 1;
-                    if let Some(output) = output { output.not_sent(iteration, admitted_phase, crate::output::NotSent { chain: chain_name, step: step_id, cause, detail, truncated: completion.was_truncated() }); }
+                    if let Some(output) = output {
+                        output.not_sent(iteration, admitted_phase, crate::output::NotSent { chain: chain_name, step: step_id, cause, detail, truncated: completion.was_truncated() });
+                        // Nothing reached the wire, so there is no request or response
+                        // to keep -- the detail is the whole sample, and it is what
+                        // says which variable or which script.
+                        let class = if cause == metrix_metrics::aggregation::Cause::Generation {
+                            metrix_metrics::events::ErrorClass::Generation
+                        } else if cause == metrix_metrics::aggregation::Cause::Unauthorized {
+                            metrix_metrics::events::ErrorClass::Unauthorized
+                        } else {
+                            metrix_metrics::events::ErrorClass::Extraction
+                        };
+                        if let Some(ordinal) = plan.samples.claim(class) {
+                            output.error_sample(metrix_metrics::events::ErrorSample {
+                                t_ms: output.elapsed(), target_id: plan.target.id.clone(),
+                                phase: admitted_phase, chain: chain_name.to_owned(),
+                                step: step_id.to_owned(), call: String::new(),
+                                iteration, class, ordinal, assertion: None,
+                                detail: Some(detail.to_owned()),
+                                request: plan.samples.request("", "", &Default::default(), &[]),
+                                response: None,
+                            });
+                        }
+                    }
                 }
                 // The iteration's own duration, recorded whether or not it reached
                 // its last step: a chain that stopped early still took the time it
@@ -321,7 +371,7 @@ pub(crate) async fn run(
                             // it is what the iteration generates its values from, so a
                             // job carrying the previous one would send that one's row.
                             slot.iteration = report.admitted;
-                            let future = chain::run(Some(chain::Job { lease, endpoint, chain: running, datasets: Arc::clone(&plan.datasets), generators: Arc::clone(&plan.generators), auth: plan.auth.clone(), sessions: Arc::clone(&plan.sessions), chain_index: running_index, seed: plan.seed, iteration: slot.iteration, vu, scheduled, admitted, send_state: Arc::clone(&slot.send_state) }));
+                            let future = chain::run(Some(chain::Job { lease, endpoint, chain: running, datasets: Arc::clone(&plan.datasets), generators: Arc::clone(&plan.generators), auth: plan.auth.clone(), samples: Arc::clone(&plan.samples), sessions: Arc::clone(&plan.sessions), chain_index: running_index, seed: plan.seed, iteration: slot.iteration, vu, scheduled, admitted, send_state: Arc::clone(&slot.send_state) }));
                             assert!(slot.future.try_set(future).is_ok(), "request future layout changed");
                             slot.active = true;
                             slot.worker = report.admitted as usize % workers.len();

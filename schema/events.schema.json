@@ -86,6 +86,19 @@
       "properties": {
         "type": {
           "type": "string",
+          "const": "error_sample"
+        }
+      },
+      "$ref": "#/$defs/ErrorSample",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
           "const": "annotation"
         }
       },
@@ -291,6 +304,88 @@
           "type": "string",
           "const": "unauthorized"
         }
+      ]
+    },
+    "ErrorSample": {
+      "description": "One errored call, kept in full (§9.3).\n\nThe first N per error class rather than N overall: one flood of connection-refused\nwould otherwise evict the single 500 that actually explains the problem. First N\nrather than a random sample, deliberately — the first failures are the ones that\nshow what changed at onset, and they cost nothing to collect. After N, that class\nonly increments a counter.",
+      "type": "object",
+      "properties": {
+        "assertion": {
+          "description": "Which assertion in the call did not hold, for an assertion failure.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "call": {
+          "type": "string"
+        },
+        "chain": {
+          "type": "string"
+        },
+        "class": {
+          "$ref": "#/$defs/ErrorClass"
+        },
+        "detail": {
+          "description": "The variable that was missing, or what a generator said. For the classes where\nnothing was sent, this is the whole explanation.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "iteration": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "ordinal": {
+          "description": "Which of this class's kept samples it is, counting from one.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "phase": {
+          "$ref": "#/$defs/Phase"
+        },
+        "request": {
+          "description": "The request as sent, including whatever a generator built.",
+          "$ref": "#/$defs/SampledRequest"
+        },
+        "response": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SampledResponse"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "step": {
+          "type": "string"
+        },
+        "t_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "target_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "t_ms",
+        "target_id",
+        "phase",
+        "chain",
+        "step",
+        "call",
+        "iteration",
+        "class",
+        "ordinal",
+        "request"
       ]
     },
     "GenerationStats": {
@@ -727,6 +822,69 @@
         "seed",
         "targets",
         "histogram_encoding"
+      ]
+    },
+    "SampledRequest": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "body_truncated": {
+          "description": "True when the body was cut at `capture.body_max_kb`.",
+          "type": "boolean"
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "method": {
+          "type": "string"
+        },
+        "target": {
+          "description": "Path and query as they went on the wire.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "target",
+        "headers"
+      ]
+    },
+    "SampledResponse": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "body_truncated": {
+          "type": "boolean"
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "status",
+        "headers"
       ]
     },
     "Severity": {

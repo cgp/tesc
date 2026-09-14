@@ -304,19 +304,34 @@ impl Pool {
 
 /// Allocated once per reusable slot. Zero means not sent; one encodes zero drift.
 #[derive(Default)]
-pub(crate) struct SendState(AtomicU64);
+pub(crate) struct SendState {
+    drift: AtomicU64,
+    /// The error-sample budget, so a failed answer's body is kept only while
+    /// somebody still wants one. `None` for the auth transport, whose round trips are
+    /// not part of the run being measured.
+    pub samples: Option<Arc<crate::samples::Samples>>,
+}
 
 impl SendState {
+    /// A slot's state, holding the run's sample budget so an errored answer can be
+    /// kept without the send path reaching for anything global.
+    pub fn for_run(samples: Arc<crate::samples::Samples>) -> Self {
+        Self {
+            drift: AtomicU64::new(0),
+            samples: Some(samples),
+        }
+    }
+
     pub fn reset(&self) {
-        self.0.store(0, Ordering::Relaxed);
+        self.drift.store(0, Ordering::Relaxed);
     }
     pub fn drift(&self) -> Option<Duration> {
-        let value = self.0.load(Ordering::Relaxed);
+        let value = self.drift.load(Ordering::Relaxed);
         (value != 0).then(|| Duration::from_nanos(value - 1))
     }
     fn record(&self, drift: Duration) {
         let encoded = drift.as_nanos().min(u128::from(u64::MAX - 1)) as u64 + 1;
-        self.0.store(encoded, Ordering::Relaxed);
+        self.drift.store(encoded, Ordering::Relaxed);
     }
 }
 
@@ -456,10 +471,19 @@ async fn exchange(
     observation.ttfb = observation.sent.map(|sent| sent.elapsed());
     observation.status = Some(response.status().as_u16());
 
-    let keep_headers = template.reads_headers();
+    // An answer that failed is worth keeping in full while somebody is still
+    // collecting them (§9.3). Decided here, from the status line, before a single
+    // body frame has arrived — and only while a class still has budget, because a
+    // broken run produces errors by the thousand and the ceiling exists so the
+    // generator does not hold them all.
+    let failed = observation.status.is_some_and(|status| status >= 400)
+        && send_state
+            .samples
+            .as_ref()
+            .is_some_and(|s| s.wants_bodies());
+    let keep_headers = template.reads_headers() || failed;
     let headers = keep_headers.then(|| response.headers().clone());
-    let mut kept = template
-        .reads_body()
+    let mut kept = (template.reads_body() || failed)
         .then(|| Vec::with_capacity(template.body_ceiling().min(8 * 1024)));
     let ceiling = template.body_ceiling();
     let mut truncated = false;
