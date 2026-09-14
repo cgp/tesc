@@ -206,6 +206,12 @@ async fn tls_handshake_wait_is_queued_until_a_pre_send_timeout() {
             datasets: std::sync::Arc::new(crate::dataset::Datasets::default()),
             generators: std::sync::Arc::new(crate::generate::Generators::default()),
             auth: None,
+            sessions: std::sync::Arc::new(vec![crate::session::Sessions::new(
+                metrix_plan::SessionPolicy::Fresh,
+                1,
+                None,
+            )]),
+            chain_index: 0,
             seed: 0,
             iteration: 0,
             vu: 0,

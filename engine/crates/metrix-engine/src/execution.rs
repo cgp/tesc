@@ -314,13 +314,14 @@ pub(crate) async fn run(
                             slot.send_recorded = false;
                             let admitted = Instant::now();
                             let endpoint = Arc::clone(&pool.as_ref().expect("traffic pool").endpoint);
-                            let running = Arc::clone(&plan.chains[mixture.next()]);
+                            let running_index = mixture.next();
+                            let running = Arc::clone(&plan.chains[running_index]);
                             slot.chain = running.name;
                             // The iteration number is settled before the job is built:
                             // it is what the iteration generates its values from, so a
                             // job carrying the previous one would send that one's row.
                             slot.iteration = report.admitted;
-                            let future = chain::run(Some(chain::Job { lease, endpoint, chain: running, datasets: Arc::clone(&plan.datasets), generators: Arc::clone(&plan.generators), auth: plan.auth.clone(), seed: plan.seed, iteration: slot.iteration, vu, scheduled, admitted, send_state: Arc::clone(&slot.send_state) }));
+                            let future = chain::run(Some(chain::Job { lease, endpoint, chain: running, datasets: Arc::clone(&plan.datasets), generators: Arc::clone(&plan.generators), auth: plan.auth.clone(), sessions: Arc::clone(&plan.sessions), chain_index: running_index, seed: plan.seed, iteration: slot.iteration, vu, scheduled, admitted, send_state: Arc::clone(&slot.send_state) }));
                             assert!(slot.future.try_set(future).is_ok(), "request future layout changed");
                             slot.active = true;
                             slot.worker = report.admitted as usize % workers.len();

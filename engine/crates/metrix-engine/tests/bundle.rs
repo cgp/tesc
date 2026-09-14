@@ -54,7 +54,9 @@ fn rejects_invalid_and_future_features_before_network_io() {
         ("mix.json", "/engine/worker_threads", json!(0)),
         ("mix.json", "/engine/connections_per_host", json!(0)),
         ("mix.json", "/chains/0/percent", json!(99)),
-        ("mix.json", "/chains/0/session", json!("reuse")),
+        // A pooled chain with no population size: the pool is one session, which is
+        // `reuse` wearing a different name.
+        ("mix.json", "/chains/0/session", json!("pool")),
         ("mix.json", "/chains/0/steps/0/call", json!("missing")),
         ("mix.json", "/defaults/timeout_ms", json!(0)),
         ("targets.json", "/list/0/address", json!("localhost")),
@@ -80,8 +82,12 @@ fn rejects_invalid_and_future_features_before_network_io() {
     }
     for (file, edit_doc) in [
         (
+            // A credential injected into a header the transport owns.
             "mix.json",
-            json!({"auth": {"type": "bearer", "token": "secret"}}),
+            json!({"auth": {
+                "mode": "bearer", "token": "secret",
+                "inject": {"header": "Host", "format": "{{ token }}"},
+            }}),
         ),
         (
             "mix.json",
@@ -94,8 +100,9 @@ fn rejects_invalid_and_future_features_before_network_io() {
             json!({"ping": {"method": "GET", "path": "/", "assert": [{"json": "$.id"}]}}),
         ),
         (
+            // A call built by a generator the mix never declared.
             "calls/ping.json",
-            json!({"ping": {"method": "GET", "path": "/", "body": {"generator": "gen"}}}),
+            json!({"ping": {"method": "GET", "path": "/", "generate": {"generator": "gen"}}}),
         ),
         (
             "calls/ping.json",

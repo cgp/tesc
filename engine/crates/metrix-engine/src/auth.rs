@@ -223,10 +223,13 @@ impl Auth {
     }
 
     /// Which identity this iteration authenticates as.
-    fn slot_for(&self, vu: usize, iteration: u64, seed: u64, datasets: &Datasets) -> usize {
+    fn slot_for(&self, session: u64, iteration: u64, seed: u64, datasets: &Datasets) -> usize {
         match &self.identity {
             Identity::Shared => 0,
-            Identity::PerVu => vu % self.slots.len(),
+            // Cycled over the sessions rather than over the slots: with `fresh` every
+            // iteration is a new session, so consecutive iterations authenticate as
+            // different people, which is what `per_vu` plus `fresh` is asking for.
+            Identity::PerVu => (session % self.slots.len() as u64) as usize,
             // The same rule the request's own row is taken by, so the token and the
             // request it signs are the same tenant.
             Identity::FromDataset(index) => datasets.get(*index).row(iteration, seed),
@@ -242,7 +245,7 @@ impl Auth {
     /// one instead would make a refresh that has already happened look like it has
     /// not, and every straggler from the old token would trigger another.
     pub async fn inject(&self, prepared: &mut Prepared, who: Who<'_>) -> Result<String, String> {
-        let index = self.slot_for(who.vu, who.iteration, who.seed, who.datasets);
+        let index = self.slot_for(who.session, who.iteration, who.seed, who.datasets);
         let token = self.current(index).await?;
         let value = HeaderValue::from_str(&self.render(&token, who.iteration)?)
             .map_err(|_| "the credential does not fit in a header".to_owned())?;
@@ -269,7 +272,7 @@ impl Auth {
             return Retry::No;
         }
         self.counters.unauthorized.fetch_add(1, Ordering::Relaxed);
-        let index = self.slot_for(who.vu, who.iteration, who.seed, who.datasets);
+        let index = self.slot_for(who.session, who.iteration, who.seed, who.datasets);
         // Forced, with the value the target actually rejected: that token may be
         // nowhere near its stated expiry, and the service is the authority on whether
         // it works. Passing what was rejected rather than what is current is what
@@ -495,7 +498,10 @@ impl Auth {
 /// Which virtual user, on which iteration, is asking for a credential.
 #[derive(Clone, Copy)]
 pub(crate) struct Who<'a> {
-    pub vu: usize,
+    /// The session this iteration is, not the slot running it: the credential and
+    /// the cookie jar are the same identity (§4.2), so a fresh session gets a fresh
+    /// token and a pooled one comes back as somebody the service has seen.
+    pub session: u64,
     pub iteration: u64,
     pub seed: u64,
     pub datasets: &'a Datasets,

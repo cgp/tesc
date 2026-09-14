@@ -100,7 +100,7 @@ Buildable and testable with nothing but a shell, a bundle, and the mock target.
 - [x] **B3.6** — Generation tiers: **Lua via `mlua` first** (§7.2), then Rust plugin, then exec sidecar
 - [x] **B3.7** — Lua corpus loading: read-only, bundle-rooted, in-memory, size-ceilinged
 - [x] **B3.8** — `auth` block (§6): all modes, single-flight refresh, auth traffic excluded
-- [ ] **B3.9** — Session policy per chain: `fresh` / `reuse` / `pool` (§4.2)
+- [x] **B3.9** — Session policy per chain: `fresh` / `reuse` / `pool` (§4.2)
 - [ ] **B3.10** — Error-sample capture: first N per error class, redaction (§9.3)
 - [ ] **B3.11** — Validation errors with JSON Pointer paths; single-chain execution (`--chain`)
 

@@ -16,6 +16,7 @@ mod http;
 mod output;
 mod random;
 mod schedule;
+mod session;
 mod template;
 mod timeline;
 mod wake_clock;

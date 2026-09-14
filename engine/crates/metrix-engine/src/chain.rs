@@ -78,6 +78,9 @@ pub(crate) struct Job {
     pub generators: Arc<Generators>,
     /// The credential every request carries, with its tokens already fetched.
     pub auth: Option<Arc<crate::auth::Auth>>,
+    /// This chain's sessions, and which of them this iteration is.
+    pub sessions: crate::session::PerChain,
+    pub chain_index: usize,
     /// The run seed, recorded in the run's identity. Together with the iteration
     /// number it decides every generated value this iteration sends.
     pub seed: u64,
@@ -270,6 +273,12 @@ pub(crate) async fn run(job: Option<Job>) -> Completion {
     };
     let mut scope = Scope::new();
     let mut steps = Vec::with_capacity(job.chain.steps.len());
+    // Taken once for the iteration and held for it: a session is one virtual user
+    // working through one conversation, and swapping identities between two steps of
+    // one chain would be two people sharing a checkout.
+    let sessions = &job.sessions[job.chain_index];
+    let session = sessions.of(job.vu, job.iteration);
+    let mut jar = sessions.open(session).await;
     let mut stopped = None;
     let mut truncated = false;
     let mut generated = Vec::new();
@@ -301,7 +310,7 @@ pub(crate) async fn run(job: Option<Job>) -> Completion {
         // A request that carries a credential is not a fixed request, however fixed
         // the call is: the token changes when it is refreshed, so the finished
         // request has to be copied and stamped rather than sent as it was compiled.
-        let (mut rendered, mut carried) = match credential(step, built, &job).await {
+        let (mut rendered, mut carried) = match outgoing(step, built, &job, session, &jar).await {
             Ok(pair) => pair,
             Err(reason) => {
                 stopped = Some(Stopped::Credential { index, reason });
@@ -326,6 +335,11 @@ pub(crate) async fn run(job: Option<Job>) -> Completion {
                 .response
                 .as_ref()
                 .is_some_and(|captured| captured.truncated);
+            // What the service asked this session to remember. Read before the answer
+            // is judged, because a step that fails an assertion was still told it.
+            if let Some(captured) = &observation.response {
+                jar.absorb(&captured.headers);
+            }
 
             // Auth before the assertions: a 401 is the credential's business first,
             // and judging the body of a rejection would be judging the wrong thing.
@@ -342,7 +356,7 @@ pub(crate) async fn run(job: Option<Job>) -> Completion {
                 if !renewed {
                     renewed = true;
                     let who = auth::Who {
-                        vu: job.vu,
+                        session: session.id,
                         iteration: job.iteration,
                         seed: job.seed,
                         datasets: &job.datasets,
@@ -444,14 +458,29 @@ pub(crate) async fn run(job: Option<Job>) -> Completion {
 ///
 /// Returns the request to send: `None` still means "send the call as compiled", which
 /// is the ordinary case for a plan with no auth and the one that must cost nothing.
-async fn credential(
+/// The request as it actually goes out: what the session carries, on top of what the
+/// call says.
+///
+/// `None` still means "send the call exactly as it compiled", which is the ordinary
+/// case for a plan with no auth and no cookies and the one that must cost nothing.
+/// Anything a session adds forces a copy, because the compiled call is shared by
+/// every iteration and a credential is not.
+async fn outgoing(
     step: &Step,
     built: Option<crate::calls::Prepared>,
     job: &Job,
+    session: crate::session::Session,
+    jar: &crate::session::Jar,
 ) -> Result<(Option<crate::calls::Prepared>, Option<String>), String> {
-    let Some(auth) = &job.auth else {
+    let path = built
+        .as_ref()
+        .map(|prepared| prepared.uri.path())
+        .or_else(|| step.request.prepared().map(|prepared| prepared.uri.path()))
+        .unwrap_or("/");
+    let cookies = jar.header(path);
+    if job.auth.is_none() && cookies.is_none() {
         return Ok((built, None));
-    };
+    }
     let mut prepared = match built {
         Some(prepared) => prepared,
         None => step
@@ -460,11 +489,21 @@ async fn credential(
             .expect("a call that rendered nothing is a fixed call")
             .clone(),
     };
+    if let Some(header) = cookies
+        && let Ok(value) = hyper::header::HeaderValue::from_str(&header)
+    {
+        prepared.headers.insert(hyper::header::COOKIE, value);
+    }
+    let Some(auth) = &job.auth else {
+        return Ok((Some(prepared), None));
+    };
+    // Bound to the session rather than to the slot: a fresh session that reused a
+    // token would not be fresh in any way the service can tell (§4.2).
     let token = auth
         .inject(
             &mut prepared,
             auth::Who {
-                vu: job.vu,
+                session: session.id,
                 iteration: job.iteration,
                 seed: job.seed,
                 datasets: &job.datasets,

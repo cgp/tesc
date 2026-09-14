@@ -57,6 +57,20 @@ pub(crate) struct Reads {
 }
 
 impl Reads {
+    /// What a chain's session needs kept.
+    ///
+    /// Response headers, and only when something could read the cookies in them: a
+    /// single-step `fresh` chain has no later request to send one to, so its jar
+    /// could never be read and keeping the headers would be paying for nothing. Any
+    /// other shape can carry state forward, and the engine cannot know whether a
+    /// service sets a cookie without looking.
+    pub fn session(policy: SessionPolicy, steps: usize) -> Self {
+        Self {
+            body: false,
+            headers: steps > 1 || policy != SessionPolicy::Fresh,
+        }
+    }
+
     /// Everything, for a request whose whole answer is read: an auth response is
     /// small, arrives rarely, and every part of it may be what the plan asked for.
     pub fn all() -> Self {
@@ -85,6 +99,18 @@ impl Reads {
 /// True when a header belongs to the transport rather than to the plan.
 pub(crate) fn transport_managed(name: &str) -> bool {
     TRANSPORT_MANAGED.contains(&name.to_ascii_lowercase().as_str())
+}
+
+impl std::ops::BitOr for Reads {
+    type Output = Self;
+
+    /// Two requirements over one request: whatever either of them needs kept.
+    fn bitor(self, other: Self) -> Self {
+        Self {
+            body: self.body || other.body,
+            headers: self.headers || other.headers,
+        }
+    }
 }
 
 /// A request, ready to send.
@@ -454,7 +480,8 @@ pub(crate) fn resolve(
                 .as_ref()
                 .map(|repeat| compile_repeat(&at, repeat))
                 .transpose()?;
-            let reads = Reads::of(repeat_until.as_ref().map(|repeat| &repeat.extractor));
+            let reads = Reads::of(repeat_until.as_ref().map(|repeat| &repeat.extractor))
+                | Reads::session(chain.session, chain.steps.len());
             let key = (step.call.clone(), reads);
             let request = match compiled.get(&key) {
                 Some(request) => Arc::clone(request),

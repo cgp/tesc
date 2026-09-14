@@ -38,6 +38,8 @@ pub struct Plan {
     pub(crate) datasets: Arc<crate::dataset::Datasets>,
     /// Every generator the mix declares, compiled once and shared the same way.
     pub(crate) generators: Arc<crate::generate::Generators>,
+    /// What each chain's virtual users carry between requests, in chain order.
+    pub(crate) sessions: crate::session::PerChain,
     /// The credential every request carries, and what keeps it fresh. `None` when the
     /// plan declares no auth, which is not the same as `mode: none` costing nothing.
     pub(crate) auth: Option<Arc<crate::auth::Auth>>,
@@ -290,8 +292,14 @@ impl Plan {
                 ),
             )?;
             require(
-                chain.session == SessionPolicy::Fresh && chain.pool_size.is_none(),
-                &format!("mix.json/chains/{index}/session: stateless fresh sessions only (B3.9)"),
+                chain.session != SessionPolicy::Pool || chain.pool_size.is_some_and(|n| n > 0),
+                &format!(
+                    "mix.json/chains/{index}/pool_size: a pooled chain needs a population                      size; without one the pool is one session and the policy is `reuse`"
+                ),
+            )?;
+            require(
+                chain.session == SessionPolicy::Pool || chain.pool_size.is_none(),
+                &format!("mix.json/chains/{index}/pool_size: only a pooled chain has a population"),
             )?;
             for (position, written) in mix.chains[index].steps.iter().enumerate() {
                 require(
@@ -306,6 +314,18 @@ impl Plan {
         // Leaked deliberately: these name the chains and their steps for the life of
         // the process, and every accumulator map is keyed by them.
         let weights: Vec<f64> = resolved.chains.iter().map(|chain| chain.percent).collect();
+        // One set per chain, because the policy is the chain's: a plan whose checkout
+        // is a first-time user and whose search is a returning one is the ordinary
+        // case, not an exception.
+        let sessions: crate::session::PerChain = Arc::new(
+            resolved
+                .chains
+                .iter()
+                .map(|chain| {
+                    crate::session::Sessions::new(chain.session, concurrency, chain.pool_size)
+                })
+                .collect(),
+        );
         let chains: Vec<_> = resolved
             .chains
             .into_iter()
@@ -364,6 +384,7 @@ impl Plan {
             chains,
             datasets,
             generators,
+            sessions,
             auth,
             seed: 0,
             weights,
