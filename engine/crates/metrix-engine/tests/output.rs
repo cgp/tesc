@@ -487,3 +487,79 @@ async fn timeout_cancellation_and_setup_failure_have_terminal_records() {
         matches!(events.last(), Some(Record::RunFinished(end)) if end.exit_code == 1 && end.stopped_because.is_some())
     );
 }
+
+/// A blocked summary reader must not abort later targets or mislabel healthy events.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blocked_summary_keeps_all_target_identities_on_the_healthy_event_stream() {
+    use tokio::io::AsyncReadExt;
+    let server = MockServer::bind("127.0.0.1:0".parse().unwrap(), Config::default())
+        .await
+        .unwrap();
+    let address = server.local_addr().unwrap().to_string();
+    let task = tokio::spawn(server.run_until(std::future::pending()));
+    let dir = tempfile::tempdir().unwrap();
+    support::bundle(dir.path(), address.parse().unwrap(), "http1");
+    support::edit(dir.path(), "mix.json", |doc| {
+        doc["phases"]["settle"] = json!("1s");
+        doc["load"]["warmup"] = json!("1s");
+    });
+    support::write(
+        dir.path(),
+        "targets.json",
+        &json!({"list": [
+            {"id":"a","address":address}, {"id":"b","address":address}, {"id":"c","address":address}
+        ]}),
+    );
+    let path = dir.path().join("events.ndjson");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_metrix-engine"))
+        .arg("--plan")
+        .arg(dir.path())
+        .arg("--events")
+        .arg(&path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    // Keep stdout open but unread until the engine has finished.
+    let status = timeout(Duration::from_secs(20), child.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut stderr = Vec::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_end(&mut stderr)
+        .await
+        .unwrap();
+    assert_eq!(
+        status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&stderr)
+    );
+    let events = records(&fs::read(path).unwrap());
+    let mut active = String::new();
+    let mut completed = Vec::new();
+    let mut requests = std::collections::BTreeMap::new();
+    for record in events {
+        match record {
+            Record::TargetStarted(r) => active = r.target_id,
+            Record::TargetFinished(r) => {
+                assert!(r.completed);
+                completed.push(r.target_id);
+            }
+            Record::Request(r) => {
+                assert_eq!(r.target_id, active);
+                *requests.entry(r.target_id).or_insert(0usize) += 1;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(completed, ["a", "b", "c"]);
+    assert_eq!(requests.len(), 3);
+    assert!(requests.values().all(|n| *n > 0));
+    task.abort();
+}

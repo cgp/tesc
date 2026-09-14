@@ -145,7 +145,7 @@ async fn run_sweep(
     for (position, current) in targets.into_iter().enumerate() {
         let target_plan = current.as_ref().unwrap_or(&plan);
         if let Some(output) = output {
-            output.target_start(target_plan, position)?;
+            output.target_start(target_plan, position);
         }
         let result = if target_plan.breakpoint.is_some() {
             Box::pin(breakpoint::run(

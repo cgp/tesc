@@ -65,6 +65,9 @@ async fn an_underprovisioned_generator_aborts_instead_of_claiming_a_target_limit
         .await
         .unwrap();
     assert!(report.generator_limited);
+    let search = report.breakpoint.as_ref().unwrap();
+    assert!(search.max_sustained_rate.is_none());
+    assert!(search.knee.is_none() && search.cliff.is_none() && search.bracket.is_none());
     assert_eq!(
         report.breakpoint.unwrap().stopped_because,
         "generator_limited"

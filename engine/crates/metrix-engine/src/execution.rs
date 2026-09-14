@@ -234,7 +234,7 @@ pub(crate) async fn run(
                 if let Some(output) = output { output.summary(report.last_window.as_ref().expect("flushed window"), phase, &report.diagnostics, timeline.ready(Instant::now(), active) || report.interrupted, report.interrupted); }
                 if phase == Phase::Measure && report.stopped_because.is_none() {
                     if let Some(b) = &plan.breakpoint {
-                        if let Some(reason) = crate::breakpoint::assess(&report, b.stop_on, plan.breakpoint_baseline_p99) {
+                        if let Some(reason) = crate::breakpoint::assess(&report, if plan.refinement { metrix_plan::mix::StopOn::default() } else { b.stop_on }, plan.breakpoint_baseline_p99) {
                             report.generator_limited = reason == "generator_limited";
                             report.stopped_because = Some(reason.clone());
                             report.diagnostics.measure.end = start.elapsed();

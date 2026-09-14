@@ -738,3 +738,7 @@ Validate bounded additive/geometric ramps and measure each step with its own war
 ## B4.4 — Stop conditions and attribution
 
 Evaluate supported latency, errors and arrival shortfall on measurement ticks, drain under original deadlines and observe final settle after a stop. Generator drift, missed arrivals, cap occupancy, connection limits and generation cost take precedence; calibrated profiles cap search demand. Under-sampled latency searches report no capacity. B4.4 complete.
+
+## B4.5 — Refinement and capacity report
+
+Run one full-duration midpoint probe after a bracketed failure; report a bracket, max sustained rate, knee, cliff and failure statuses/classes. Suppress every capacity scalar on generator failure or interruption. Standalone host limiting-resource and recovery attribution are explicitly unavailable, for observer enrichment. B4.5 complete.

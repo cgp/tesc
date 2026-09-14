@@ -24,12 +24,22 @@ pub struct Step {
     pub achieved_rate: f64,
     pub p99: Percentile,
     pub stop: Option<String>,
+    pub refinement: bool,
+    pub statuses: std::collections::BTreeMap<String, u64>,
+    pub errors: std::collections::BTreeMap<String, u64>,
 }
 
 #[derive(Debug, Default, Serialize)]
 pub struct Search {
     pub steps: Vec<Step>,
     pub stopped_because: String,
+    pub max_sustained_rate: Option<f64>,
+    pub knee: Option<f64>,
+    pub cliff: Option<f64>,
+    pub bracket: Option<[f64; 2]>,
+    pub limiting_resource: Option<String>,
+    pub resource_attribution: String,
+    pub recovery_ms: Option<u64>,
 }
 
 pub(crate) fn rates(b: &Breakpoint) -> Result<Vec<f64>, String> {
@@ -103,6 +113,9 @@ pub(crate) async fn run(
     let rates = rates(&b)?;
     let baseline = plan.baseline;
     let settle = plan.settle;
+    if b.refine {
+        plan.final_settle = settle.max(b.step_recovery.map_or(Duration::ZERO, |d| d.as_duration()));
+    }
     let clock = tokio::time::Instant::now();
     let mut search = Search {
         stopped_because: "max_rate".into(),
@@ -115,12 +128,12 @@ pub(crate) async fn run(
         plan.duration = b.step_duration.as_duration();
         plan.baseline = if index == 0 { baseline } else { Duration::ZERO };
         plan.settle = if index + 1 == rates.len() {
-            settle
+            plan.final_settle
         } else {
             b.step_recovery.map_or(Duration::ZERO, |d| d.as_duration())
         };
         if let Some(output) = output {
-            output.step_start(&plan)?;
+            output.step_start(&plan);
         }
         let from_ms = output.map_or(clock.elapsed().as_millis() as u64, |o| o.elapsed());
         last = Box::pin(crate::execution::run(
@@ -167,6 +180,110 @@ pub(crate) async fn run(
             break;
         }
     }
+    let valid = !last.generator_limited
+        && !last.interrupted
+        && search.stopped_because != "insufficient_samples";
+    if valid {
+        search.max_sustained_rate = search
+            .steps
+            .iter()
+            .filter(|s| {
+                s.stop.is_none()
+                    && s.measured_seconds >= b.step_duration.as_duration().as_secs_f64()
+            })
+            .map(|s| s.rate)
+            .reduce(f64::max);
+        if let (Some(low), Some(bad)) = (
+            search.max_sustained_rate,
+            search.steps.last().filter(|s| s.stop.is_some()),
+        ) {
+            let high = bad.rate;
+            search.bracket = Some([low, high]);
+            if b.refine && low < high {
+                let midpoint = low + (high - low) / 2.0;
+                plan.rate = midpoint;
+                plan.headroom_ratio = plan.headroom_for(midpoint);
+                plan.refinement = true;
+                plan.baseline = Duration::ZERO;
+                plan.settle = settle;
+                if let Some(output) = output {
+                    output.step_start(&plan);
+                }
+                let from_ms = output.map_or(clock.elapsed().as_millis() as u64, |o| o.elapsed());
+                last = Box::pin(crate::execution::run(
+                    &plan,
+                    &mut shutdown,
+                    snapshots.clone(),
+                    output,
+                ))
+                .await?;
+                let to_ms = output.map_or(clock.elapsed().as_millis() as u64, |o| o.elapsed());
+                let mut step = summarize(&last, midpoint, from_ms, to_ms, plan.duration);
+                step.refinement = true;
+                step.stop = last
+                    .stopped_because
+                    .clone()
+                    .or_else(|| assess(&last, b.stop_on, plan.breakpoint_baseline_p99));
+                last.generator_limited |= step.stop.as_deref() == Some("generator_limited");
+                if last.interrupted {
+                    search.stopped_because = "interrupted".into();
+                } else if last.generator_limited {
+                    search.stopped_because = "generator_limited".into();
+                } else if step.stop.is_none() {
+                    search.max_sustained_rate = Some(midpoint);
+                    search.bracket = Some([midpoint, high]);
+                } else {
+                    search.bracket = Some([low, midpoint]);
+                }
+                if let Some(output) = output {
+                    output.note(
+                        "breakpoint_step",
+                        Severity::Info,
+                        serde_json::to_value(&step).unwrap(),
+                    );
+                }
+                search.steps.push(step);
+            }
+        }
+        search.knee = search
+            .steps
+            .iter()
+            .filter(|s| {
+                s.p99.value_us.is_some_and(|us| {
+                    b.stop_on
+                        .p99_latency_ms
+                        .is_some_and(|ms| us as f64 > ms as f64 * 1000.0)
+                        || b.stop_on
+                            .p99_multiple_of_baseline
+                            .zip(plan.breakpoint_baseline_p99)
+                            .is_some_and(|(factor, base)| us as f64 > base as f64 * factor)
+                })
+            })
+            .map(|s| s.rate)
+            .reduce(f64::min);
+        search.cliff = search
+            .steps
+            .iter()
+            .filter(|s| {
+                (s.requests >= 100
+                    && s.error_rate
+                        .zip(b.stop_on.error_rate)
+                        .is_some_and(|(actual, limit)| actual > limit))
+                    || s.stop.as_deref() == Some("rate_shortfall_pct")
+            })
+            .map(|s| s.rate)
+            .reduce(f64::min);
+    }
+    if last.generator_limited
+        || last.interrupted
+        || search.stopped_because == "insufficient_samples"
+    {
+        search.max_sustained_rate = None;
+        search.knee = None;
+        search.cliff = None;
+        search.bracket = None;
+    }
+    search.resource_attribution = "Unavailable in standalone engine; target host metrics and recovery require API observation.".into();
     if capped && search.stopped_because == "max_rate" {
         search.stopped_because = "calibrated_ceiling".into();
     }
@@ -215,6 +332,39 @@ fn summarize(report: &Report, rate: f64, from_ms: u64, to_ms: u64, _duration: Du
             / report.diagnostics.measure.observed.as_secs_f64().max(0.001),
         p99: percentiles(&report.metrics.total).p99,
         stop: None,
+        refinement: false,
+        statuses: c
+            .statuses
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| **n > 0)
+            .map(|(s, n)| (s.to_string(), *n))
+            .collect(),
+        errors: c
+            .errors
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| **n > 0)
+            .map(|(i, n)| {
+                (
+                    [
+                        "dns",
+                        "connect",
+                        "tls",
+                        "protocol",
+                        "send",
+                        "body",
+                        "timeout",
+                        "extraction",
+                        "assertion",
+                        "generation",
+                        "unauthorized",
+                    ][i]
+                        .to_owned(),
+                    *n,
+                )
+            })
+            .collect(),
     }
 }
 

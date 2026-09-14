@@ -29,6 +29,7 @@ use crate::schedule::Schedule;
 
 #[derive(Clone)]
 pub struct Plan {
+    pub(crate) refinement: bool,
     pub(crate) breakpoint_baseline_p99: Option<u64>,
     pub(crate) breakpoint: Option<metrix_plan::mix::Breakpoint>,
     pub(crate) iteration_base: u64,
@@ -237,7 +238,6 @@ impl Plan {
         )?;
         if let Some(b) = &mix.load.breakpoint {
             crate::breakpoint::rates(b)?;
-            require(!b.refine, "mix.json#/load/breakpoint/refine: requires B4.5")?;
         }
         require(
             mix.slo.is_empty() && mix.observe.is_none(),
@@ -252,7 +252,7 @@ impl Plan {
             "mix.json#/engine/pin_cores: core pinning is not implemented",
         )?;
         require(
-            !targets.list.is_empty(),
+            !targets.list.is_empty() && targets.list.len() <= u32::MAX as usize,
             "targets.json#/list: must not be empty",
         )?;
         let mut ids = std::collections::BTreeSet::new();
@@ -510,11 +510,40 @@ impl Plan {
             })
             .collect();
 
-        require(
+        let search_span = if let Some(b) = &mix.load.breakpoint {
+            let steps = crate::breakpoint::rates(b)?.len() as u32 + u32::from(b.refine);
+            (warmup + duration)
+                .checked_add(timeout)
+                .and_then(|d| d.checked_mul(steps))
+                .and_then(|d| {
+                    b.step_recovery
+                        .map_or(Duration::ZERO, |r| r.as_duration())
+                        .checked_mul(steps - 1)
+                        .and_then(|r| d.checked_add(r))
+                })
+                .and_then(|d| d.checked_add(baseline))
+                .and_then(|d| {
+                    settle
+                        .checked_mul(1 + u32::from(b.refine))
+                        .and_then(|s| d.checked_add(s))
+                })
+        } else {
             span.checked_add(timeout)
+        };
+        let sweep_span = search_span
+            .and_then(|d| d.checked_mul(targets.list.len() as u32))
+            .and_then(|d| {
+                targets
+                    .gap
+                    .map_or(Duration::ZERO, |g| g.as_duration())
+                    .checked_mul(targets.list.len() as u32 - 1)
+                    .and_then(|g| d.checked_add(g))
+            });
+        require(
+            sweep_span
                 .and_then(|d| std::time::Instant::now().checked_add(d))
                 .is_some(),
-            "mix.json#/phases: timeline duration including drain is not representable",
+            "mix.json#/phases: complete sweep, recovery and refinement timeline is not representable",
         )?;
         let calibration_shape = crate::calibration::Shape {
             request_body_bytes: calibration_body_bytes(&chains),
@@ -540,6 +569,7 @@ impl Plan {
             "mix.json#/load/rate: exceeds 90% of the calibrated generator ceiling; set engine/allow_generator_limited to true to run with an invalid annotation",
         )?;
         Ok(Self {
+            refinement: false,
             breakpoint: mix.load.breakpoint.clone(),
             breakpoint_baseline_p99: None,
             iteration_base: 0,

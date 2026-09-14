@@ -170,7 +170,7 @@ The API resolves a profile (§3.1) into that file; by hand, it is written out or
 - Each target gets its own complete phased run (§10.1), baseline and settle included. Per-target initial conditions are the point: a container that was already hot is visible before its numbers are read.
 - Order is as-resolved or randomized. Randomizing decouples results from sweep position, since the first target pays cold-cache costs on shared dependencies that the rest do not.
 - An optional inter-run gap lets shared dependencies settle between targets.
-- Output is a **sweep**: one `run_id` groups the targets in a single monotonic time window. `run_started.targets` records seed-determined order; each target has its own start/finish and phase records. Histograms and sessions are independent, and gaps are cancellable. Every target is compiled before traffic begins.
+- Output is a **sweep**: one `run_id` groups the targets in a single monotonic time window. `run_started.targets` records seed-determined order; each target has its own start/finish and phase records. Histograms and sessions are independent, and gaps are cancellable. Every target is compiled before traffic begins. Each queued packet retains its target and step identity, so losing lifecycle records under backpressure cannot relabel data or stop the sweep.
 
 The comparison this enables is the valuable part — same plan, same conditions, different container. You are looking for the odd one out: a task on a noisy neighbor, an instance of a different type, a container still running an older image digest. The sweep view ranks targets on each headline metric and flags any target outside the sweep's own spread, which is the §17.4 measured-noise-floor logic applied across targets instead of across time.
 
@@ -735,16 +735,16 @@ A full step with unsupported configured p99 thresholds stops as `insufficient_sa
 
 ### 11.4 Refinement
 
-With `refine: true`, once the cliff is bracketed between the last good rate and the first bad one, the engine runs one bisection pass at the midpoint for a full `step_duration`. One pass, not a full binary search: with 30s steps the added precision stops paying for its wall clock quickly, and run-to-run variance (§12.2) is soon wider than the remaining bracket. The report states the bracket, not a false-precision single number.
+With `refine: true`, once the cliff is bracketed between the last good rate and the first bad one, the engine runs one bisection pass at the midpoint for a full `step_duration`. Before refinement, the preceding drain/settle honors at least `step_recovery`, even when final settle was set to zero. The complete sweep timeline is checked for representability including gaps and refinement. The refinement probe runs its full measurement duration even after a target threshold is crossed; generator failure still aborts it. One pass, not a full binary search: with 30s steps the added precision stops paying for its wall clock quickly, and run-to-run variance (§12.2) is soon wider than the remaining bracket. The report states the bracket, not a false-precision single number.
 
 ### 11.5 The breakpoint report
 
 - **Max sustained rate** — highest step where every SLO held for the full step
 - **Knee** — lowest rate where p99 exceeded the configured multiple of the first measured step’s supported p99 (idle baseline contains no requests)
 - **Cliff** — lowest rate where errors or shortfall crossed the threshold
-- **Limiting resource** — which host metric was nearest saturation at the last good step (CPU, iowait, connection count, pool queue depth), from §9.7
+- **Limiting resource** — which host metric was nearest saturation at the last good step, from §9.7. Standalone output uses null with an explicit attribution-unavailable reason; the API owns host observations and can enrich it.
 - **Failure mode** — what the errors actually were at the cliff: timeouts, refused connections, 5xx, listen-queue drops. "It broke" and "it began refusing connections at the listen queue" are different findings.
-- **Recovery** — time to return to baseline after the overload, from the settle phase
+- **Recovery** — time to return to baseline after the overload, from the settle phase; null in standalone output because an idle HTTP window cannot measure host recovery.
 
 Knee, cliff, and max-sustained are stored as named scalars on the run, so a later breakpoint run against the same plan and target compares directly — the single most useful longitudinal number this tool produces.
 

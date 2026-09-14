@@ -56,6 +56,7 @@ pub(crate) struct NotSent<'a> {
 }
 
 struct RequestData {
+    identity: Arc<Identity>,
     /// Which chain and step this request was. Per record rather than from the run's
     /// identity: a mixture sends several chains, and a record that named the wrong
     /// one would be worse than one that named none.
@@ -76,10 +77,10 @@ struct RequestData {
 }
 
 enum Packet {
-    Identity(Arc<Identity>),
     Fence(completion::Sender<()>),
-    Record(Box<Record>),
+    Record(Arc<Identity>, Box<Record>),
     Summary {
+        identity: Arc<Identity>,
         t_ms: u64,
         phase: Phase,
         window: Box<Window>,
@@ -89,6 +90,7 @@ enum Packet {
     },
     Request(RequestData),
     Percentiles {
+        identity: Arc<Identity>,
         t_ms: u64,
         from_ms: u64,
         partial: bool,
@@ -97,19 +99,29 @@ enum Packet {
 }
 
 impl Packet {
+    fn identity(&self) -> Option<&Arc<Identity>> {
+        match self {
+            Self::Fence(_) => None,
+            Self::Record(identity, _)
+            | Self::Summary { identity, .. }
+            | Self::Percentiles { identity, .. } => Some(identity),
+            Self::Request(data) => Some(&data.identity),
+        }
+    }
     fn time(&self) -> u64 {
         match self {
-            Self::Identity(_) | Self::Fence(_) => unreachable!("fences do not produce records"),
+            Self::Fence(_) => unreachable!("fences do not produce records"),
             Self::Summary { t_ms, .. } => *t_ms,
             Self::Percentiles { t_ms, .. } => *t_ms,
             Self::Request(request) => request.t_ms,
-            Self::Record(record) => match record.as_ref() {
+            Self::Record(_, record) => match record.as_ref() {
                 Record::RunStarted(r) => r.t_ms,
                 Record::PhaseChanged(r) => r.t_ms,
                 Record::TargetStarted(r) => r.t_ms,
                 Record::TargetFinished(r) => r.t_ms,
                 Record::Annotation(r) => r.t_ms,
                 Record::RunFinished(r) => r.t_ms,
+                Record::ErrorSample(r) => r.t_ms,
                 _ => unreachable!("data records use typed packets"),
             },
         }
@@ -308,6 +320,7 @@ impl Output {
             .summary
             .sender
             .try_send(Packet::Percentiles {
+                identity: self.identity.borrow().clone(),
                 t_ms,
                 from_ms: from_ms.min(t_ms),
                 partial,
@@ -319,42 +332,21 @@ impl Output {
         }
     }
 
-    pub(crate) fn step_start(&self, plan: &Plan) -> Result<(), String> {
+    pub(crate) fn step_start(&self, plan: &Plan) {
         let identity = Arc::new(Identity {
             rate: plan.rate,
             headroom_ratio: plan.headroom_ratio,
             ..self.identity.borrow().as_ref().clone()
         });
-        for stream in std::iter::once(&self.summary).chain(self.events.iter()) {
-            if stream
-                .sender
-                .try_send(Packet::Identity(Arc::clone(&identity)))
-                .is_err()
-            {
-                self.losses.failed.store(true, Ordering::Relaxed);
-                return Err("output backpressure prevented step identity delivery".into());
-            }
-        }
         *self.identity.borrow_mut() = identity;
-        Ok(())
     }
-    pub(crate) fn target_start(&self, plan: &Plan, index: usize) -> Result<(), String> {
+    pub(crate) fn target_start(&self, plan: &Plan, index: usize) {
         let identity = Arc::new(Identity {
             target: plan.target.id.clone(),
             rate: plan.rate,
             headroom_ratio: plan.headroom_ratio,
             ..self.identity.borrow().as_ref().clone()
         });
-        for stream in std::iter::once(&self.summary).chain(self.events.iter()) {
-            if stream
-                .sender
-                .try_send(Packet::Identity(Arc::clone(&identity)))
-                .is_err()
-            {
-                self.losses.failed.store(true, Ordering::Relaxed);
-                return Err("output backpressure prevented target identity delivery".into());
-            }
-        }
         *self.identity.borrow_mut() = identity;
         self.lifecycle(Record::TargetStarted(TargetStarted {
             t_ms: self.elapsed(),
@@ -370,7 +362,6 @@ impl Output {
                 serde_json::json!({"certificate_verification": "disabled"}),
             );
         }
-        Ok(())
     }
     pub(crate) fn note(&self, code: &str, severity: Severity, detail: serde_json::Value) {
         let t_ms = self.elapsed();
@@ -398,7 +389,10 @@ impl Output {
         for stream in std::iter::once(&self.summary).chain(self.events.iter()) {
             if stream
                 .sender
-                .try_send(Packet::Record(Box::new(record.clone())))
+                .try_send(Packet::Record(
+                    self.identity.borrow().clone(),
+                    Box::new(record.clone()),
+                ))
                 .is_err()
             {
                 self.losses.failed.store(true, Ordering::Relaxed);
@@ -427,6 +421,7 @@ impl Output {
                 .summary
                 .sender
                 .try_send(Packet::Summary {
+                    identity: self.identity.borrow().clone(),
                     t_ms: self.elapsed(),
                     phase,
                     window: Box::new(window.clone()),
@@ -480,6 +475,7 @@ impl Output {
         observation: &Observation,
     ) {
         self.request_data(RequestData {
+            identity: self.identity.borrow().clone(),
             t_ms: self.elapsed(),
             phase,
             chain,
@@ -509,6 +505,7 @@ impl Output {
         elapsed: Duration,
     ) {
         self.request_data(RequestData {
+            identity: self.identity.borrow().clone(),
             t_ms: self.elapsed(),
             phase,
             chain,
@@ -546,7 +543,10 @@ impl Output {
         };
         if events
             .sender
-            .try_send(Packet::Record(Box::new(Record::ErrorSample(sample))))
+            .try_send(Packet::Record(
+                self.identity.borrow().clone(),
+                Box::new(Record::ErrorSample(sample)),
+            ))
             .is_err()
         {
             self.losses.failed.store(true, Ordering::Relaxed);
@@ -563,6 +563,7 @@ impl Output {
         } = what;
         let generation = cause == metrix_metrics::aggregation::Cause::Generation;
         self.request_data(RequestData {
+            identity: self.identity.borrow().clone(),
             t_ms: self.elapsed(),
             phase,
             chain,
@@ -739,12 +740,13 @@ fn write_stream(
     let mut started = false;
     let mut detectors = [crate::detectors::Seen::default(); 2];
     while let Some(packet) = receiver.blocking_recv() {
-        let packet = match packet {
-            Packet::Identity(next) => {
-                identity = next;
+        if let Some(source) = packet.identity() {
+            if !Arc::ptr_eq(&identity, source) {
+                identity = Arc::clone(source);
                 detectors = [crate::detectors::Seen::default(); 2];
-                continue;
             }
+        }
+        let packet = match packet {
             Packet::Fence(sender) => {
                 let _ = sender.send(());
                 continue;
@@ -792,9 +794,10 @@ fn write_stream(
             last_losses = current;
         }
         let record = match packet {
-            Packet::Identity(_) | Packet::Fence(_) => unreachable!("fences handled above"),
-            Packet::Record(record) => *record,
+            Packet::Fence(_) => unreachable!("fences handled above"),
+            Packet::Record(_, record) => *record,
             Packet::Percentiles {
+                identity: _,
                 t_ms,
                 from_ms,
                 partial,
@@ -848,6 +851,7 @@ fn write_stream(
             })
             }
             Packet::Summary {
+                identity: _,
                 t_ms,
                 phase,
                 mut window,
