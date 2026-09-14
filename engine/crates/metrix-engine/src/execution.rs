@@ -5,7 +5,8 @@
 //! 75 requests a second, and a scheduler that admitted requests rather than
 //! iterations would be running the mixture three times too fast.
 use crate::chain;
-use crate::{Lag, Output, Plan, Recording, Report, Slot, cause, flush, record_send};
+use crate::snapshot::{Aggregation, Completed, Cutoff};
+use crate::{Lag, Output, Plan, Report, Slot, cause, record_send};
 use crate::{
     http::{Pool, SendState},
     timeline::Timeline,
@@ -112,6 +113,24 @@ pub(crate) async fn run(
             }
         }
     }
+    let stop = plan.breakpoint.as_ref().map(|b| {
+        (
+            if plan.refinement {
+                metrix_plan::mix::StopOn::default()
+            } else {
+                b.stop_on
+            },
+            plan.breakpoint_baseline_p99,
+        )
+    });
+    let mut aggregation = Aggregation::new(
+        &workers,
+        &warmup_workers,
+        interval_metrics,
+        warmup_interval,
+        snapshots,
+        stop,
+    )?;
     // Which chain each arrival runs. Deterministic and exactly proportional: a
     // percentage is a claim about what the service was asked for, and a run that got
     // 19.3% of one chain because of sampling noise measured a mixture nobody wrote.
@@ -137,7 +156,6 @@ pub(crate) async fn run(
     if let Some(output) = output {
         output.phase(timeline.phase);
     }
-    let mut last_snapshot = Duration::ZERO;
     let mut snapshot_tick = tokio::time::interval_at(
         start + Duration::from_millis(250),
         Duration::from_millis(250),
@@ -173,41 +191,21 @@ pub(crate) async fn run(
                 report.skipped_late += late;
             }
             report.diagnostics.observe(start.elapsed(), active);
-            flush(
-                Recording {
-                    slots: &mut slots,
-                    workers: &mut workers,
-                    warmup_workers: &mut warmup_workers,
-                    warmup_interval: &mut warmup_interval,
-                    lag: &mut lag,
-                    phase,
-                    auth: plan.auth.as_ref().map(|auth| auth.snapshot()),
-                },
-                &mut interval_metrics,
+            checkpoint(
+                &mut aggregation,
+                &mut slots,
+                &mut workers,
+                &mut warmup_workers,
+                &mut lag,
                 &mut report,
-                &mut last_snapshot,
+                phase,
                 start.elapsed(),
                 active,
-                snapshots.as_ref(),
-            );
-            if let Some(output) = output {
-                if let Some(elapsed) = output.summary(
-                    report.last_window.as_ref().expect("flushed window"),
-                    phase,
-                    &report.diagnostics,
-                    timeline.ready(Instant::now(), active) || report.interrupted,
-                    report.interrupted,
-                ) {
-                    report.snapshot_timing.output_packet.record(elapsed);
-                    if let Some(flush) = report
-                        .last_window
-                        .as_ref()
-                        .and_then(|w| w.snapshot.flush_total)
-                    {
-                        report.snapshot_timing.paired.record(flush + elapsed);
-                    }
-                }
-            }
+                plan,
+                output,
+                true,
+            )
+            .await?;
             if !timeline.advance(Instant::now())? {
                 break;
             }
@@ -231,10 +229,8 @@ pub(crate) async fn run(
                     if let Some(output) = output { output.cancel(slot.iteration, slot.phase, slot.chain, slot.admitted.elapsed()); }
                 } }
                 report.diagnostics.observe(start.elapsed(), active);
-                flush(Recording { slots: &mut slots, workers: &mut workers, warmup_workers: &mut warmup_workers, warmup_interval: &mut warmup_interval, lag: &mut lag, phase, auth: plan.auth.as_ref().map(|auth| auth.snapshot()) },
-                    &mut interval_metrics, &mut report, &mut last_snapshot, start.elapsed(), 0, snapshots.as_ref());
-                if let Some(output) = output { if let Some(elapsed) = output.summary(report.last_window.as_ref().expect("flushed window"), phase, &report.diagnostics, timeline.ready(Instant::now(), active) || report.interrupted, report.interrupted) { report.snapshot_timing.output_packet.record(elapsed);
-                    if let Some(flush) = report.last_window.as_ref().and_then(|w| w.snapshot.flush_total) { report.snapshot_timing.paired.record(flush + elapsed); } } }
+                checkpoint(&mut aggregation, &mut slots, &mut workers, &mut warmup_workers,
+                    &mut lag, &mut report, phase, start.elapsed(), 0, plan, output, true).await?;
                 break;
             }
             _ = async { if let Some(deadline) = deadline { tokio::time::sleep_until(deadline).await; } else { std::future::pending::<()>().await; } } => {}
@@ -245,20 +241,27 @@ pub(crate) async fn run(
                 report.max_scheduler_lag = report.max_scheduler_lag.max(late);
                 report.scheduler_lag_samples += 1;
                 report.diagnostics.observe(start.elapsed(), active);
-                flush(Recording { slots: &mut slots, workers: &mut workers, warmup_workers: &mut warmup_workers, warmup_interval: &mut warmup_interval, lag: &mut lag, phase, auth: plan.auth.as_ref().map(|auth| auth.snapshot()) },
-                    &mut interval_metrics, &mut report, &mut last_snapshot, start.elapsed(), active, snapshots.as_ref());
-                if let Some(output) = output { if let Some(elapsed) = output.summary(report.last_window.as_ref().expect("flushed window"), phase, &report.diagnostics, timeline.ready(Instant::now(), active) || report.interrupted, report.interrupted) { report.snapshot_timing.output_packet.record(elapsed);
-                    if let Some(flush) = report.last_window.as_ref().and_then(|w| w.snapshot.flush_total) { report.snapshot_timing.paired.record(flush + elapsed); } } }
-                if phase == Phase::Measure && report.stopped_because.is_none() {
-                    if let Some(b) = &plan.breakpoint {
-                        if let Some(reason) = crate::breakpoint::assess(&report, if plan.refinement { metrix_plan::mix::StopOn::default() } else { b.stop_on }, plan.breakpoint_baseline_p99) {
-                            report.generator_limited = reason == "generator_limited";
-                            report.stopped_because = Some(reason.clone());
-                            report.diagnostics.measure.end = start.elapsed();
-                            if let Some(clock) = &mut timeline.clock { let checkpoint = clock.checkpoint(); clock.record(checkpoint, &mut lag.arrival); }
-                            timeline.stop(Instant::now(), plan.final_settle);
-                            if let Some(output) = output { output.note(&reason, if report.generator_limited { metrix_metrics::Severity::Invalid } else { metrix_metrics::Severity::Warn }, serde_json::json!({"rate":plan.rate})); }
-                        }
+                if aggregation.available() {
+                    submit(&mut aggregation, &mut slots, &mut workers, &mut warmup_workers,
+                        &mut lag, &mut report, phase, start.elapsed(), active, plan, false)?;
+                } else {
+                    // Retain all samples and the original interval start; only this
+                    // periodic publication is deferred. Arrival dispatch never waits.
+                    aggregation.coalesced += 1;
+                }
+            }
+            completed = aggregation.receive(), if aggregation.pending() => {
+                let completed = completed?;
+                let reason = publish(&completed, &mut report, output);
+                aggregation.recycle(completed);
+                if timeline.phase == Phase::Measure && report.stopped_because.is_none() {
+                    if let Some(reason) = reason {
+                        report.generator_limited = reason == "generator_limited";
+                        report.stopped_because = Some(reason.clone());
+                        report.diagnostics.measure.end = start.elapsed();
+                        if let Some(clock) = &mut timeline.clock { let checkpoint = clock.checkpoint(); clock.record(checkpoint, &mut lag.arrival); }
+                        timeline.stop(Instant::now(), plan.final_settle);
+                        if let Some(output) = output { output.note(&reason, if report.generator_limited { metrix_metrics::Severity::Invalid } else { metrix_metrics::Severity::Warn }, serde_json::json!({"rate":plan.rate})); }
                     }
                 }
             }
@@ -429,6 +432,18 @@ pub(crate) async fn run(
             }
         }
     }
+    let coalesced = aggregation.coalesced;
+    report.snapshot_coalesced_ticks = coalesced;
+    aggregation.finish(&mut report).await?;
+    if coalesced > 0 {
+        if let Some(output) = output {
+            output.note(
+                "snapshot_backpressure",
+                metrix_metrics::Severity::Warn,
+                serde_json::json!({"coalesced_ticks": coalesced, "samples_dropped": 0}),
+            );
+        }
+    }
     if let Some(output) = output {
         output.snapshot_totals(&report.snapshot_timing);
         output.arrival_totals(&report.arrival_timing, &report.warmup_arrival_timing);
@@ -479,4 +494,114 @@ pub(crate) async fn run(
         }
     }
     Ok(report)
+}
+
+// Only scalar reads and ownership swaps execute on the arrival loop.
+#[allow(clippy::too_many_arguments)]
+fn submit(
+    aggregation: &mut Aggregation,
+    slots: &mut [Slot],
+    workers: &mut Vec<Accumulator>,
+    warmup_workers: &mut Vec<Accumulator>,
+    lag: &mut Lag,
+    report: &mut Report,
+    phase: Phase,
+    now: Duration,
+    active: usize,
+    plan: &Plan,
+    closing: bool,
+) -> Result<(), String> {
+    let mut queue_depth = 0;
+    let mut warmup_active = 0;
+    let mut warmup_queue = 0;
+    for slot in slots {
+        record_send(slot, workers, warmup_workers, report);
+        if active > 0 && slot.active {
+            let queued = slot.send_state.drift().is_none();
+            queue_depth += usize::from(queued);
+            if slot.phase == Phase::Warmup {
+                warmup_active += 1;
+                warmup_queue += usize::from(queued);
+            }
+        }
+    }
+    aggregation.submit(
+        workers,
+        warmup_workers,
+        lag,
+        Cutoff {
+            phase,
+            now,
+            active,
+            queue_depth,
+            warmup_active,
+            warmup_queue,
+            auth: plan.auth.as_ref().map(|auth| auth.snapshot()),
+            diagnostics: report.diagnostics,
+            closing,
+            partial: report.interrupted,
+        },
+    )
+}
+
+fn publish(completed: &Completed, report: &mut Report, output: Option<&Output>) -> Option<String> {
+    report.last_window = Some(Arc::clone(&completed.window));
+    if let Some(output) = output {
+        if let Some(elapsed) = output.summary(
+            &completed.window,
+            completed.window.phase,
+            &completed.diagnostics,
+            completed.closing,
+            completed.partial,
+        ) {
+            report.snapshot_timing.output_packet.record(elapsed);
+            if let Some(flush) = completed.window.snapshot.flush_total {
+                report.snapshot_timing.paired.record(flush + elapsed);
+            }
+        }
+    }
+    completed.stop.clone()
+}
+
+// At a phase boundary no more arrivals belong to the ending phase. Finish its
+// finite internal work before publishing the next phase or final verdicts.
+#[allow(clippy::too_many_arguments)]
+async fn checkpoint(
+    aggregation: &mut Aggregation,
+    slots: &mut [Slot],
+    workers: &mut Vec<Accumulator>,
+    warmup_workers: &mut Vec<Accumulator>,
+    lag: &mut Lag,
+    report: &mut Report,
+    phase: Phase,
+    now: Duration,
+    active: usize,
+    plan: &Plan,
+    output: Option<&Output>,
+    closing: bool,
+) -> Result<(), String> {
+    while !aggregation.available() {
+        let completed = aggregation.receive().await?;
+        publish(&completed, report, output);
+        aggregation.recycle(completed);
+    }
+    submit(
+        aggregation,
+        slots,
+        workers,
+        warmup_workers,
+        lag,
+        report,
+        phase,
+        now,
+        active,
+        plan,
+        closing,
+    )?;
+    while aggregation.pending() {
+        let completed = aggregation.receive().await?;
+        publish(&completed, report, output);
+        aggregation.recycle(completed);
+    }
+    Ok(())
 }

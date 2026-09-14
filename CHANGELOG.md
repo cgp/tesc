@@ -779,3 +779,9 @@ Measure aggregation, window construction, complete flush and output-packet const
 ## Reduce snapshot dispatch work
 
 Add same-snapshot paired flush-plus-packet durations and supported totals. Skip empty histogram count-array merge/reset work while preserving overflow metadata. Share immutable snapshot windows with the output queue and perform writer-specific copying on the writer thread, removing a duplicate histogram clone from arrival dispatch. Owned snapshot consumers retain their copy. Tests explicitly waived while the user measures this path.
+
+### 2026-09-14 - Move snapshots off arrival dispatch
+
+- Moved histogram merge/reset, cumulative diagnostics and snapshot window construction to a dedicated aggregation thread using three preallocated reusable buffer sets. Periodic pool saturation coalesces windows without dropping measurements or waiting on snapshot consumers.
+- Preserved phase boundaries, cancellation accounting and SLO evaluation; breakpoint stop assessments use diagnostics captured with the same cumulative metric cutoff. Added `snapshot_coalesced_ticks` and a `snapshot_backpressure` annotation to identify deferred publication. Snapshot flush timings now measure aggregation-thread work.
+- Added bounded-pool, measurement conservation, stalled-consumer and cutoff-aligned stop tests. Full `bash scripts/check.sh` passed. The remaining B4 packaging step stays deferred.

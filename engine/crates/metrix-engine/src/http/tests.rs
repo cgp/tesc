@@ -193,7 +193,7 @@ async fn tls_handshake_wait_is_queued_until_a_pre_send_timeout() {
     });
     let now = Instant::now();
     let state = Arc::new(SendState::default());
-    let mut slots = vec![crate::Slot {
+    let mut slots = [crate::Slot {
         active: true,
         worker: 0,
         iteration: 0,
@@ -251,10 +251,18 @@ async fn tls_handshake_wait_is_queued_until_a_pre_send_timeout() {
     let mut report = crate::Report::default();
     let mut lag = crate::Lag::default();
     let mut last = Duration::ZERO;
+    crate::record_send(
+        &mut slots[0],
+        &mut workers,
+        &mut warmup_workers,
+        &mut report,
+    );
     crate::flush(
         crate::Recording {
             auth: None,
-            slots: &mut slots,
+            queue_depth: usize::from(slots[0].active && slots[0].send_state.drift().is_none()),
+            warmup_active: 0,
+            warmup_queue: 0,
             workers: &mut workers,
             warmup_workers: &mut warmup_workers,
             warmup_interval: &mut warmup_interval,
@@ -277,10 +285,18 @@ async fn tls_handshake_wait_is_queued_until_a_pre_send_timeout() {
     assert_eq!(observation.error, Some(Failure::Timeout));
     assert!(observation.sent.is_none());
     slots[0].active = false;
+    crate::record_send(
+        &mut slots[0],
+        &mut workers,
+        &mut warmup_workers,
+        &mut report,
+    );
     crate::flush(
         crate::Recording {
             auth: None,
-            slots: &mut slots,
+            queue_depth: usize::from(slots[0].active && slots[0].send_state.drift().is_none()),
+            warmup_active: 0,
+            warmup_queue: 0,
             workers: &mut workers,
             warmup_workers: &mut warmup_workers,
             warmup_interval: &mut warmup_interval,

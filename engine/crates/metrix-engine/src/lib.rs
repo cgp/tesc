@@ -21,6 +21,7 @@ mod samples;
 mod schedule;
 mod session;
 mod slo;
+mod snapshot;
 mod template;
 mod timeline;
 mod wake_clock;
@@ -41,6 +42,8 @@ use http::SendState;
 
 #[derive(Debug, Default)]
 pub struct Report {
+    /// Periodic ticks coalesced because aggregation had no reusable buffer available.
+    pub snapshot_coalesced_ticks: u64,
     pub snapshot_timing: metrix_metrics::aggregation::SnapshotTiming,
     pub arrival_timing: metrix_metrics::aggregation::ArrivalTiming,
     pub warmup_arrival_timing: metrix_metrics::aggregation::ArrivalTiming,
@@ -233,7 +236,9 @@ struct Lag {
 }
 
 struct Recording<'a> {
-    slots: &'a mut [Slot],
+    queue_depth: usize,
+    warmup_active: usize,
+    warmup_queue: usize,
     workers: &'a mut [Accumulator],
     warmup_workers: &'a mut [Accumulator],
     warmup_interval: &'a mut Accumulator,
@@ -275,7 +280,9 @@ fn flush(
 ) {
     let flush_started = std::time::Instant::now();
     let Recording {
-        slots,
+        queue_depth,
+        warmup_active,
+        warmup_queue,
         workers,
         warmup_workers,
         warmup_interval,
@@ -283,9 +290,6 @@ fn flush(
         lag,
         auth,
     } = recording;
-    for slot in &mut *slots {
-        record_send(slot, workers, warmup_workers, report);
-    }
     interval.merge_and_reset(workers);
     report.metrics.merge(interval);
     warmup_interval.merge_and_reset(warmup_workers);
@@ -295,22 +299,6 @@ fn flush(
         .sync(&report.metrics, &report.warmup_metrics);
     let aggregation = flush_started.elapsed();
     let window_started = std::time::Instant::now();
-    let warmup_active = if active == 0 {
-        0
-    } else {
-        slots
-            .iter()
-            .filter(|s| s.active && s.phase == Phase::Warmup)
-            .count()
-    };
-    let warmup_queue = if active == 0 {
-        0
-    } else {
-        slots
-            .iter()
-            .filter(|s| s.active && s.phase == Phase::Warmup && s.send_state.drift().is_none())
-            .count()
-    };
     let carry = phase != Phase::Warmup
         && (warmup_active > 0
             || warmup_interval.counters.completed > 0
@@ -337,14 +325,7 @@ fn flush(
         from: *last,
         to: now,
         in_flight: active,
-        queue_depth: if active == 0 {
-            0
-        } else {
-            slots
-                .iter()
-                .filter(|slot| slot.active && slot.send_state.drift().is_none())
-                .count()
-        },
+        queue_depth,
         scheduler_lag: lag.max,
         scheduler_lag_samples: lag.samples,
         auth,
