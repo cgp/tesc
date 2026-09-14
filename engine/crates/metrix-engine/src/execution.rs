@@ -1,11 +1,17 @@
 //! Phase execution with separate accumulators for warmup-admitted attempts.
+//!
+//! A slot holds one chain iteration, not one request. That is what makes `rate` mean
+//! iterations started per second (design-engine §5): a three-step chain at 25/s is
+//! 75 requests a second, and a scheduler that admitted requests rather than
+//! iterations would be running the mixture three times too fast.
+use crate::chain;
 use crate::{Lag, Output, Plan, Recording, Report, Slot, cause, flush, record_send};
 use crate::{
-    http::{Job, Pool, SendState, execute},
+    http::{Pool, SendState},
     timeline::Timeline,
 };
 use metrix_metrics::{
-    aggregation::{Accumulator, Sample, Window},
+    aggregation::{Accumulator, StepSample, Window},
     events::Phase,
 };
 use std::{
@@ -28,7 +34,7 @@ pub(crate) async fn run(
     let pool = tokio::select! {
         biased;
         _ = &mut shutdown => { report.interrupted = true; return Ok(report); }
-        pool = Pool::prepare(&plan.target, plan.connections.min(plan.concurrency), plan.request.timeout) => pool.map_err(|e| format!("target setup failed: {e}"))?,
+        pool = Pool::prepare(&plan.target, plan.connections.min(plan.concurrency), plan.request_timeout()) => pool.map_err(|e| format!("target setup failed: {e}"))?,
     };
     let mut slots = Vec::new();
     slots
@@ -43,15 +49,30 @@ pub(crate) async fn run(
             phase: Phase::Measure,
             send_state: Arc::new(SendState::default()),
             send_recorded: false,
-            future: ReusableBoxFuture::new(execute(None)),
+            chain: plan.chain_name(),
+            future: ReusableBoxFuture::new(chain::run(None)),
         });
     }
+    // Seeded with the plan's own chains and steps, so every window reports all of
+    // them: a chain that sent nothing during a window did nothing, which is a
+    // measurement rather than an absence.
+    let steps: Vec<&'static str> = plan.chain_steps.steps.iter().map(|step| step.id).collect();
     let mut workers: Vec<_> = (0..plan.worker_threads.min(plan.concurrency))
         .map(|_| Accumulator::default())
         .collect();
     let mut warmup_workers: Vec<_> = (0..workers.len()).map(|_| Accumulator::default()).collect();
     let mut interval_metrics = Accumulator::default();
     let mut warmup_interval = Accumulator::default();
+    // Declared in place rather than through a constructor taking one by value: an
+    // accumulator carries a thousand status counters, and moving one through a
+    // function is a kilobyte of stack copy per worker on a thread that has little.
+    for accumulator in workers
+        .iter_mut()
+        .chain(warmup_workers.iter_mut())
+        .chain([&mut interval_metrics, &mut warmup_interval])
+    {
+        accumulator.declare(plan.chain_name(), &steps);
+    }
     let mut lag = Lag::default();
     let start = Instant::now();
     report.diagnostics = crate::Diagnostics::new(
@@ -146,7 +167,7 @@ pub(crate) async fn run(
                 report.interrupted = true;
                 report.cancelled = active as u64;
                 for slot in &slots { if slot.active {
-                    if slot.phase == Phase::Warmup { warmup_workers[slot.worker].cancel(); } else { workers[slot.worker].cancel(); }
+                    if slot.phase == Phase::Warmup { warmup_workers[slot.worker].cancel_chain(slot.chain); } else { workers[slot.worker].cancel_chain(slot.chain); }
                     if let Some(output) = output { output.cancel(slot.iteration, slot.phase, slot.admitted.elapsed()); }
                 } }
                 report.diagnostics.observe(start.elapsed(), active);
@@ -178,24 +199,55 @@ pub(crate) async fn run(
                 record_send(&mut slots[index], &mut workers, &mut warmup_workers, &mut report);
                 slots[index].active = false;
                 active -= 1;
-                let observation = completion.observation;
                 let admitted_phase = slots[index].phase;
-                if let Some(output) = output { output.request(slots[index].iteration, admitted_phase, &observation, plan.request.body.len()); }
+                let iteration = slots[index].iteration;
                 let worker = if admitted_phase == Phase::Warmup { &mut warmup_workers[slots[index].worker] } else { &mut workers[slots[index].worker] };
-                worker.finish(Sample {
-                    chain_duration: observation.total, request_duration: observation.request_duration,
-                    admission_delay: observation.admission_delay, send_delay: observation.drift,
-                    ttfb: observation.ttfb, drift: None,
-                    status: observation.status, error: observation.error.map(cause),
-                    bytes_sent: if observation.sent.is_some() { plan.request.body.len() as u64 } else { 0 },
-                    bytes_received: observation.bytes_received,
-                    connections_opened: observation.connections_opened, connection_reused: observation.connection_reused,
-                });
-                if observation.sent.is_some() { report.sent_finished += 1; }
-                if let Some(error) = observation.error {
+                let chain_name = plan.chain_name();
+                for outcome in &completion.steps {
+                    let observation = &outcome.observation;
+                    let step_id = plan.step_name(outcome.index);
+                    if let Some(output) = output { output.request(iteration, admitted_phase, observation, observation.bytes_sent as usize); }
+                    worker.finish_step(&StepSample {
+                        chain: chain_name,
+                        step: step_id,
+                        request_duration: observation.request_duration,
+                        send_delay: observation.drift,
+                        ttfb: observation.ttfb,
+                        drift: None,
+                        status: observation.status,
+                        error: observation.error.map(cause),
+                        bytes_sent: if observation.sent.is_some() { observation.bytes_sent } else { 0 },
+                        bytes_received: observation.bytes_received,
+                        connections_opened: observation.connections_opened,
+                        connection_reused: observation.connection_reused,
+                    });
+                    if observation.sent.is_some() { report.sent_finished += 1; }
+                    if let Some(error) = observation.error {
+                        report.failed += 1;
+                        report.timed_out += u64::from(error == crate::Failure::Timeout);
+                    } else { report.responses += 1; }
+                }
+                if let Some((step_id, variable)) = completion.unbound() {
+                    // Nothing was sent. The step still attempted and still failed,
+                    // and saying which variable it wanted is the difference between
+                    // a plan error and a service that started returning 404s.
+                    worker.finish_step(&StepSample {
+                        chain: chain_name, step: step_id,
+                        request_duration: None, send_delay: Duration::ZERO,
+                        ttfb: None, drift: None, status: None,
+                        error: Some(metrix_metrics::aggregation::Cause::Extraction),
+                        bytes_sent: 0, bytes_received: 0,
+                        connections_opened: 0, connection_reused: false,
+                    });
                     report.failed += 1;
-                    report.timed_out += u64::from(error == crate::Failure::Timeout);
-                } else { report.responses += 1; }
+                    if let Some(output) = output { output.unbound(iteration, admitted_phase, chain_name, step_id, variable, completion.was_truncated()); }
+                }
+                // The iteration's own duration, recorded whether or not it reached
+                // its last step: a chain that stopped early still took the time it
+                // took, and keeping only the ones that worked would make the
+                // chain's median a median of the successes.
+                worker.finish_chain(chain_name, completion.duration, completion.admission_delay, completion.aborted());
+                if completion.aborted() { report.chains_aborted += 1; }
                 pool.as_mut().expect("pool while requests are active").release(completion.lease);
             }
             _ = async { timeline.clock.as_ref().expect("traffic clock").tick(&mut timeline.clock_tick).await; }, if timeline.clock.is_some() => {
@@ -210,14 +262,15 @@ pub(crate) async fn run(
                             slot.send_recorded = false;
                             let admitted = Instant::now();
                             let endpoint = Arc::clone(&pool.as_ref().expect("traffic pool").endpoint);
-                            let future = execute(Some(Job { lease, endpoint, template: Arc::clone(&plan.request), scheduled, admitted, send_state: Arc::clone(&slot.send_state) }));
+                            let future = chain::run(Some(chain::Job { lease, endpoint, chain: Arc::clone(&plan.chain_steps), scheduled, admitted, send_state: Arc::clone(&slot.send_state) }));
                             assert!(slot.future.try_set(future).is_ok(), "request future layout changed");
                             slot.active = true;
                             slot.worker = report.admitted as usize % workers.len();
                             slot.iteration = report.admitted;
                             slot.admitted = admitted;
                             slot.phase = phase;
-                            if phase == Phase::Warmup { warmup_workers[slot.worker].start(); } else { workers[slot.worker].start(); }
+                            slot.chain = plan.chain_name();
+                            if phase == Phase::Warmup { warmup_workers[slot.worker].start_chain(slot.chain); } else { workers[slot.worker].start_chain(slot.chain); }
                             active += 1;
                             report.admitted += 1;
                             report.peak_in_flight = report.peak_in_flight.max(active);

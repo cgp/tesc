@@ -26,7 +26,7 @@ use tokio::{
 };
 use tokio_rustls::TlsConnector;
 
-use crate::calls::RequestTemplate;
+use crate::calls::{Prepared, RequestTemplate};
 
 #[cfg(test)]
 mod tests;
@@ -302,15 +302,6 @@ impl Pool {
     }
 }
 
-pub(crate) struct Job {
-    pub lease: Lease,
-    pub endpoint: Arc<Endpoint>,
-    pub template: Arc<RequestTemplate>,
-    pub scheduled: Instant,
-    pub admitted: Instant,
-    pub send_state: Arc<SendState>,
-}
-
 /// Allocated once per reusable slot. Zero means not sent; one encodes zero drift.
 #[derive(Default)]
 pub(crate) struct SendState(AtomicU64);
@@ -329,7 +320,7 @@ impl SendState {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct Observation {
     pub sent: Option<Instant>,
     pub drift: Duration,
@@ -342,36 +333,66 @@ pub(crate) struct Observation {
     pub request_duration: Option<Duration>,
     pub connections_opened: u64,
     pub connection_reused: bool,
+    pub bytes_sent: u64,
+    /// The response, kept only when a call reads it. A load generator that buffers
+    /// every body it receives is measuring its own allocator as much as the service.
+    pub response: Option<CapturedResponse>,
 }
 
-pub(crate) struct Completion {
-    pub lease: Lease,
-    pub observation: Observation,
+/// What a chain needs to read a value out of a response.
+pub(crate) struct CapturedResponse {
+    pub headers: hyper::HeaderMap,
+    pub body: Bytes,
+    /// True when the body was longer than the capture ceiling and was cut. An
+    /// extractor reading a truncated document will simply not match, and saying the
+    /// body was cut is the difference between that and a service that stopped
+    /// sending the field.
+    pub truncated: bool,
 }
 
-/// One uniform future type lets every scheduler slot reuse its allocation.
-pub(crate) async fn execute(job: Option<Job>) -> Completion {
-    let Some(mut job) = job else {
-        return std::future::pending().await;
+/// When this request was meant to go, when it was admitted, and whether it is the
+/// one the schedule is measured against.
+#[derive(Clone, Copy)]
+pub(crate) struct Timing {
+    pub scheduled: Instant,
+    pub admitted: Instant,
+    pub records_drift: bool,
+}
+
+/// Send one request on a held lease and observe what came back.
+///
+/// The lease is borrowed rather than consumed, because a chain sends several
+/// requests down one connection: the steps of an iteration are one virtual user, and
+/// giving each of them its own socket would measure a service being connected to
+/// rather than a service being used.
+pub(crate) async fn send(
+    lease: &mut Lease,
+    endpoint: &Endpoint,
+    template: &RequestTemplate,
+    rendered: Option<&Prepared>,
+    timing: Timing,
+    send_state: &SendState,
+) -> Observation {
+    let prepared = rendered
+        .or_else(|| template.prepared())
+        .expect("a call is either fixed or rendered");
+    let mut observation = Observation {
+        bytes_sent: prepared.body.len() as u64,
+        ..Observation::default()
     };
-    let mut observation = Observation::default();
-    let deadline = job.admitted + job.template.timeout;
+    let deadline = timing.admitted + template.timeout;
     let result = timeout_at(deadline, async {
-        if job
-            .lease
-            .connection
-            .as_ref()
-            .is_none_or(Connection::is_closed)
-        {
-            job.lease.connection = None; // Close stale socket before opening its replacement.
-            job.lease.connection = Some(job.endpoint.connect().await?);
+        if lease.connection.as_ref().is_none_or(Connection::is_closed) {
+            lease.connection = None; // Close stale socket before opening its replacement.
+            lease.connection = Some(endpoint.connect().await?);
             observation.connections_opened += 1;
         }
         exchange(
-            job.lease.connection.as_mut().expect("connected"),
-            &job.template,
-            job.scheduled,
-            &job.send_state,
+            lease.connection.as_mut().expect("connected"),
+            template,
+            prepared,
+            timing,
+            send_state,
             &mut observation,
         )
         .await
@@ -379,42 +400,39 @@ pub(crate) async fn execute(job: Option<Job>) -> Completion {
     .await
     .unwrap_or(Err(Failure::Timeout));
     let finished = Instant::now();
-    observation.total = finished.saturating_duration_since(job.admitted);
+    observation.total = finished.saturating_duration_since(timing.admitted);
     observation.request_duration = observation
         .sent
         .map(|sent| finished.saturating_duration_since(sent));
-    observation.admission_delay = job.admitted.saturating_duration_since(job.scheduled);
+    observation.admission_delay = timing.admitted.saturating_duration_since(timing.scheduled);
     observation.error = result.err();
     if observation.error.is_some()
-        && job
-            .lease
+        && lease
             .connection
             .as_ref()
             .is_some_and(|c| c.version() == HttpVersion::Http1 || c.is_closed())
     {
-        job.lease.connection = None;
+        lease.connection = None;
     }
-    Completion {
-        lease: job.lease,
-        observation,
-    }
+    observation
 }
 
 async fn exchange(
     connection: &mut Connection,
     template: &RequestTemplate,
-    scheduled: Instant,
+    prepared: &Prepared,
+    timing: Timing,
     send_state: &SendState,
     observation: &mut Observation,
 ) -> Result<(), Failure> {
-    let mut request = Request::new(Full::new(template.body.clone()));
+    let mut request = Request::new(Full::new(prepared.body.clone()));
     *request.method_mut() = template.method.clone();
-    *request.headers_mut() = template.headers.clone();
+    *request.headers_mut() = prepared.headers.clone();
     let response = match connection {
         Connection::Http1 { sender, used, .. } => {
-            *request.uri_mut() = UriPath::origin(&template.uri);
+            *request.uri_mut() = UriPath::origin(&prepared.uri);
             sender.ready().await.map_err(|_| Failure::Send)?;
-            mark_sent(observation, scheduled, send_state);
+            mark_sent(observation, timing, send_state);
             observation.connection_reused = *used;
             *used = true;
             sender
@@ -423,10 +441,10 @@ async fn exchange(
                 .map_err(|_| Failure::Send)?
         }
         Connection::Http2 { sender, used, .. } => {
-            *request.uri_mut() = template.uri.clone();
+            *request.uri_mut() = prepared.uri.clone();
             *request.version_mut() = hyper::Version::HTTP_2;
             sender.ready().await.map_err(|_| Failure::Send)?;
-            mark_sent(observation, scheduled, send_state);
+            mark_sent(observation, timing, send_state);
             observation.connection_reused = *used;
             *used = true;
             sender
@@ -437,21 +455,57 @@ async fn exchange(
     };
     observation.ttfb = observation.sent.map(|sent| sent.elapsed());
     observation.status = Some(response.status().as_u16());
+
+    let keep_headers = template.reads_headers();
+    let headers = keep_headers.then(|| response.headers().clone());
+    let mut kept = template
+        .reads_body()
+        .then(|| Vec::with_capacity(template.body_ceiling().min(8 * 1024)));
+    let ceiling = template.body_ceiling();
+    let mut truncated = false;
+
     let mut body = response.into_body();
     while let Some(frame) = body.frame().await {
         let frame = frame.map_err(|_| Failure::Body)?;
         if let Some(data) = frame.data_ref() {
             observation.bytes_received += data.len() as u64;
+            // Counted whatever happens, kept only up to the ceiling: the byte count
+            // is a measurement and the body is evidence, and running out of room for
+            // the second must not change the first.
+            if let Some(buffer) = kept.as_mut() {
+                let room = ceiling.saturating_sub(buffer.len());
+                if room == 0 {
+                    truncated = true;
+                } else if data.len() > room {
+                    buffer.extend_from_slice(&data[..room]);
+                    truncated = true;
+                } else {
+                    buffer.extend_from_slice(data);
+                }
+            }
         }
+    }
+
+    if keep_headers || kept.is_some() {
+        observation.response = Some(CapturedResponse {
+            headers: headers.unwrap_or_default(),
+            body: Bytes::from(kept.unwrap_or_default()),
+            truncated,
+        });
     }
     Ok(())
 }
 
-fn mark_sent(observation: &mut Observation, scheduled: Instant, send_state: &SendState) {
+fn mark_sent(observation: &mut Observation, timing: Timing, send_state: &SendState) {
     let sent = Instant::now();
     observation.sent = Some(sent);
-    observation.drift = sent.saturating_duration_since(scheduled);
-    send_state.record(observation.drift);
+    observation.drift = sent.saturating_duration_since(timing.scheduled);
+    if timing.records_drift {
+        // Only the first send of an iteration. A later step is late because the
+        // service was slow, and folding that into send drift would report the
+        // target's latency as the generator's lateness.
+        send_state.record(observation.drift);
+    }
 }
 
 // Keep origin-form construction out of request string formatting.

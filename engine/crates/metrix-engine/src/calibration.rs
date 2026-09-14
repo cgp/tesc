@@ -132,7 +132,7 @@ pub fn calibrate(plan: &Plan) -> Result<MachineProfile, String> {
             let null = null_rps(worker_threads).await;
             let loopback = loopback_rps(
                 worker_threads,
-                plan.request.body.len(),
+                plan.calibration_shape.request_body_bytes,
                 plan.calibration_shape.tls,
             )
             .await?;

@@ -1,0 +1,203 @@
+//! One iteration of one chain: the steps in order, down one connection, with one
+//! variable scope.
+//!
+//! A chain is a sequential chain executed by one virtual user (design-engine §5).
+//! That sentence decides three things here:
+//!
+//! - **One connection for the whole iteration.** Giving each step its own socket
+//!   would measure a service being connected to rather than a service being used,
+//!   and it is not what the behaviour being modelled does.
+//! - **One scope, thrown away at the end.** Two iterations are two different people
+//!   as far as the service is concerned, so nothing a step captures outlives the
+//!   iteration that captured it.
+//! - **A step that fails stops the chain.** The steps after it were going to act on
+//!   something that did not happen; sending them would measure a flow the service
+//!   never got into, and count their failures as separate problems.
+
+use std::{sync::Arc, time::Duration};
+
+use tokio::time::Instant;
+
+use crate::calls::RequestTemplate;
+use crate::extract;
+use crate::http::{Endpoint, Lease, Observation, SendState, Timing, send};
+use crate::template::{Scope, Unbound};
+
+/// One step, ready to run.
+///
+/// The id and the chain's name are `&'static str` because they live for the whole
+/// run and key every accumulator map. Leaked once when the plan compiles, so
+/// recording a step costs a map lookup rather than a string clone.
+pub(crate) struct Step {
+    pub id: &'static str,
+    pub request: Arc<RequestTemplate>,
+}
+
+/// One chain, ready to run, shared by every slot that runs it.
+pub(crate) struct Compiled {
+    pub name: &'static str,
+    pub steps: Vec<Step>,
+}
+
+pub(crate) struct Job {
+    pub lease: Lease,
+    pub endpoint: Arc<Endpoint>,
+    pub chain: Arc<Compiled>,
+    pub scheduled: Instant,
+    pub admitted: Instant,
+    pub send_state: Arc<SendState>,
+}
+
+/// What one step did.
+pub(crate) struct Outcome {
+    /// Index into the chain's steps, so the caller need not match on names.
+    pub index: usize,
+    pub observation: Observation,
+}
+
+/// Why an iteration ended before its last step.
+pub(crate) enum Stopped {
+    /// A request failed. The default failure policy is to abort the chain (§5);
+    /// `on_failure` arrives in B3.4.
+    Failed,
+    /// A step needed a value that no response before it provided. Distinct from a
+    /// failed request because nothing was sent: the plan asked for something it had
+    /// not captured, and reporting it as a transport error would point at the
+    /// service.
+    Unbound { index: usize, variable: String },
+}
+
+pub(crate) struct Completion {
+    pub lease: Lease,
+    pub chain: Arc<Compiled>,
+    pub steps: Vec<Outcome>,
+    /// End to end, admission to last response. Not the sum of the steps: the gaps
+    /// between them are part of what a user waits through.
+    pub duration: Duration,
+    /// How far behind its scheduled arrival the iteration was admitted.
+    pub admission_delay: Duration,
+    /// True when a response was longer than the capture ceiling and was cut. Carried
+    /// because it changes what a missing variable means: an extractor that found
+    /// nothing in a truncated document may have been looking past the cut.
+    pub truncated: bool,
+    pub stopped: Option<Stopped>,
+}
+
+impl Completion {
+    pub fn aborted(&self) -> bool {
+        self.stopped.is_some()
+    }
+
+    /// The step that could not be built, and the variable it wanted.
+    ///
+    /// Reported against that step rather than as a run-wide note: the step was
+    /// attempted and did not happen, which is exactly what a step's own failure
+    /// count is for, and `extraction` is the class the frozen schema keeps for it.
+    pub fn unbound(&self) -> Option<(&'static str, &str)> {
+        match &self.stopped {
+            Some(Stopped::Unbound { index, variable }) => {
+                Some((self.chain.steps[*index].id, variable.as_str()))
+            }
+            _ => None,
+        }
+    }
+
+    /// True when a response in this iteration was cut at the capture ceiling.
+    pub fn was_truncated(&self) -> bool {
+        self.truncated
+    }
+}
+
+/// Run one iteration. `None` parks the slot: one future type per slot, reused.
+pub(crate) async fn run(job: Option<Job>) -> Completion {
+    let Some(mut job) = job else {
+        return std::future::pending().await;
+    };
+    let mut scope = Scope::new();
+    let mut steps = Vec::with_capacity(job.chain.steps.len());
+    let mut stopped = None;
+    let mut truncated = false;
+
+    for (index, step) in job.chain.steps.iter().enumerate() {
+        // The first step is the one the schedule is measured against: it is the
+        // arrival that was due. A later step is late because the service was slow,
+        // which is the measurement rather than a fault in the generator.
+        let first = index == 0;
+        let now = Instant::now();
+        let timing = Timing {
+            scheduled: if first { job.scheduled } else { now },
+            admitted: if first { job.admitted } else { now },
+            records_drift: first,
+        };
+
+        let rendered = match render(step, &scope) {
+            Ok(rendered) => rendered,
+            Err(Unbound(variable)) => {
+                stopped = Some(Stopped::Unbound { index, variable });
+                break;
+            }
+        };
+
+        let observation = send(
+            &mut job.lease,
+            &job.endpoint,
+            &step.request,
+            rendered.as_ref(),
+            timing,
+            &job.send_state,
+        )
+        .await;
+
+        let failed = observation.error.is_some();
+        truncated |= observation
+            .response
+            .as_ref()
+            .is_some_and(|captured| captured.truncated);
+        if !failed {
+            capture(step, &observation, &mut scope);
+        }
+        steps.push(Outcome { index, observation });
+        if failed {
+            stopped = Some(Stopped::Failed);
+            break;
+        }
+    }
+
+    Completion {
+        duration: Instant::now().saturating_duration_since(job.admitted),
+        admission_delay: job.admitted.saturating_duration_since(job.scheduled),
+        lease: job.lease,
+        chain: job.chain,
+        steps,
+        truncated,
+        stopped,
+    }
+}
+
+/// Build the request, or nothing when the call never varies.
+fn render(step: &Step, scope: &Scope) -> Result<Option<crate::calls::Prepared>, Unbound> {
+    if step.request.prepared().is_some() {
+        return Ok(None);
+    }
+    step.request.render(scope).map(Some)
+}
+
+/// Read this step's captures into the scope.
+///
+/// A selector that matched nothing leaves its variable unset rather than setting it
+/// empty. The step that needed it then fails naming the variable, which is a
+/// different and more useful report than a request to `/orders/` answered with a 404.
+fn capture(step: &Step, observation: &Observation, scope: &mut Scope) {
+    if step.request.extract.is_empty() {
+        return;
+    }
+    let Some(captured) = &observation.response else {
+        return;
+    };
+    let response = extract::Response::new(&captured.headers, &captured.body);
+    for (name, extractor) in &step.request.extract {
+        if let Some(value) = response.read(extractor) {
+            scope.insert(name.clone(), value);
+        }
+    }
+}

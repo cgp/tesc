@@ -122,6 +122,9 @@ pub struct Output {
     start: Instant,
     sample_rate: f64,
     seed: u64,
+    /// Whether the unbound-variable note has been written. A plan error repeats
+    /// every iteration, and saying it a hundred thousand times buries it.
+    said_unbound: AtomicBool,
 }
 
 impl Output {
@@ -181,6 +184,7 @@ impl Output {
             start,
             sample_rate,
             seed,
+            said_unbound: AtomicBool::new(false),
         };
         let now = Utc::now();
         output.lifecycle(Record::RunStarted(RunStarted {
@@ -400,6 +404,58 @@ impl Output {
             error: None,
             cancelled: true,
         });
+    }
+
+    /// A step that could not be built, said once.
+    ///
+    /// Once, not once per iteration: a variable nothing captures is missing every
+    /// single time, and a hundred thousand identical notes would bury the fact that
+    /// explains all of them. The per-step failure count carries how often.
+    pub(crate) fn unbound(
+        &self,
+        iteration: u64,
+        phase: Phase,
+        chain: &str,
+        step: &str,
+        variable: &str,
+        truncated: bool,
+    ) {
+        self.request_data(RequestData {
+            t_ms: self.elapsed(),
+            phase,
+            iteration,
+            ttfb_us: None,
+            total_us: 0,
+            status: None,
+            bytes_sent: 0,
+            bytes_received: 0,
+            connection_reused: false,
+            error: Some(Failure::Send),
+            cancelled: false,
+        });
+        if self.said_unbound.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        self.lifecycle(Record::Annotation(Annotation {
+            t_ms: self.elapsed(),
+            target_id: Some(self.identity.target.clone()),
+            code: "chain_unbound".into(),
+            severity: Severity::Invalid,
+            phase: Some(phase),
+            from_ms: 0,
+            to_ms: None,
+            message: format!(
+                "step {step:?} of chain {chain:?} reads {{{{ {variable} }}}}, which no                  response before it provided; the chain stops here every iteration{}",
+                if truncated {
+                    " (a response was cut at the capture ceiling, so an extractor may                      have been looking past the cut)"
+                } else {
+                    ""
+                }
+            ),
+            detail: Some(serde_json::json!({
+                "chain": chain, "step": step, "variable": variable,
+            })),
+        }));
     }
 
     /// Wait once with a shared deadline. Stalled writers are detached, never joined.
@@ -790,47 +846,48 @@ fn summary_record(
 ) -> Record {
     let metrics = &window.metrics;
     let counts = &metrics.counters;
-    let errors = counts
-        .errors
+    // Straight from what was measured, per chain and per step, rather than from the
+    // run's pooled counters: two steps of one chain are two different requests, and
+    // a report that pooled them would publish a median of two distributions.
+    let chains = metrics
+        .chains
         .iter()
-        .enumerate()
-        .filter(|(_, count)| **count > 0)
-        .fold(BTreeMap::new(), |mut errors, (index, count)| {
-            let name = [
-                "dns_failure",
-                "other",
-                "tls_failure",
-                "other",
-                "other",
-                "other",
-                "other",
-            ][index];
-            *errors.entry(name.into()).or_default() += count;
-            errors
-        });
-    let step = StepStats {
-        attempted: counts.started,
-        completed: counts.completed,
-        failed: counts.failed,
-        statuses: counts
-            .statuses
-            .iter()
-            .enumerate()
-            .filter(|(_, count)| **count > 0)
-            .map(|(status, count)| (status.to_string(), *count))
-            .collect(),
-        errors,
-        assertion_failures: BTreeMap::new(),
-        total: metrics.total.snapshot(),
-        ttfb: metrics.ttfb.snapshot(),
-    };
-    let chain = ChainStats {
-        iterations_started: counts.started,
-        iterations_completed: counts.completed,
-        iterations_aborted: counts.failed + counts.cancelled,
-        duration: metrics.chain.snapshot(),
-        steps: BTreeMap::from([(identity.step.clone(), step)]),
-    };
+        .map(|(name, chain)| {
+            let steps = chain
+                .steps
+                .iter()
+                .map(|(id, step)| {
+                    (
+                        (*id).to_owned(),
+                        StepStats {
+                            attempted: step.attempted,
+                            completed: step.completed,
+                            failed: step.failed,
+                            statuses: step
+                                .statuses
+                                .iter()
+                                .map(|(status, count)| (status.to_string(), *count))
+                                .collect(),
+                            errors: error_counts(&step.errors),
+                            assertion_failures: BTreeMap::new(),
+                            total: step.total.snapshot(),
+                            ttfb: step.ttfb.snapshot(),
+                        },
+                    )
+                })
+                .collect();
+            (
+                (*name).to_owned(),
+                ChainStats {
+                    iterations_started: chain.started,
+                    iterations_completed: chain.completed,
+                    iterations_aborted: chain.aborted,
+                    duration: chain.duration.snapshot(),
+                    steps,
+                },
+            )
+        })
+        .collect();
     let seconds = window.to.saturating_sub(window.from).as_secs_f64();
     Record::Summary(Summary {
         t_ms,
@@ -854,7 +911,7 @@ fn summary_record(
         bytes_received: counts.bytes_received,
         connections_opened: counts.connections_opened,
         connections_reused: counts.connections_reused,
-        chains: BTreeMap::from([(identity.chain.clone(), chain)]),
+        chains,
         generator: GeneratorHealth {
             cpu_pct: 0.0,
             rss_bytes: 0,
@@ -864,6 +921,30 @@ fn summary_record(
             events_dropped: dropped,
         },
     })
+}
+
+/// The error counter array as the names the frozen schema uses.
+fn error_counts(errors: &[u64; 8]) -> BTreeMap<String, u64> {
+    // Indexed by `Cause`. Several map to `other` because the transport cannot always
+    // tell them apart, and inventing a distinction it did not observe would be worse
+    // than saying so.
+    const NAMES: [&str; 8] = [
+        "dns_failure",
+        "other",
+        "tls_failure",
+        "other",
+        "other",
+        "other",
+        "other",
+        "extraction",
+    ];
+    let mut counted: BTreeMap<String, u64> = BTreeMap::new();
+    for (index, count) in errors.iter().enumerate() {
+        if *count > 0 {
+            *counted.entry(NAMES[index].to_owned()).or_default() += count;
+        }
+    }
+    counted
 }
 
 fn error_class(failure: Failure) -> ErrorClass {

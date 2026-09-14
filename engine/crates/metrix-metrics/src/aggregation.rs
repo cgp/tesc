@@ -6,7 +6,7 @@ use hdrhistogram::{
     Histogram,
     serialization::{Serializer, V2Serializer},
 };
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 pub const MAX_LATENCY_US: u64 = 3_600_000_000;
 
@@ -110,6 +110,10 @@ pub enum Cause {
     Send,
     Body,
     Timeout,
+    /// A value a later step needed was never captured, so the request could not be
+    /// built. Ours rather than theirs: nothing was sent, and counting it as a
+    /// transport failure would point at the service.
+    Extraction,
 }
 
 #[derive(Clone, Debug)]
@@ -124,7 +128,7 @@ pub struct Counters {
     pub connections_opened: u64,
     pub connections_reused: u64,
     pub statuses: [u64; 1000],
-    pub errors: [u64; 7],
+    pub errors: [u64; 8],
 }
 
 impl Default for Counters {
@@ -140,7 +144,7 @@ impl Default for Counters {
             connections_opened: 0,
             connections_reused: 0,
             statuses: [0; 1000],
-            errors: [0; 7],
+            errors: [0; 8],
         }
     }
 }
@@ -165,6 +169,24 @@ impl Counters {
     }
 }
 
+/// One step's contribution: what it was, and what came back.
+pub struct StepSample {
+    /// Which chain and which step within it. Both are names from the plan, because
+    /// they are what every chart series, error report and SLO is keyed by.
+    pub chain: &'static str,
+    pub step: &'static str,
+    pub request_duration: Option<Duration>,
+    pub send_delay: Duration,
+    pub ttfb: Option<Duration>,
+    pub drift: Option<Duration>,
+    pub status: Option<u16>,
+    pub error: Option<Cause>,
+    pub bytes_sent: u64,
+    pub bytes_received: u64,
+    pub connections_opened: u64,
+    pub connection_reused: bool,
+}
+
 pub struct Sample {
     pub chain_duration: Duration,
     pub admission_delay: Duration,
@@ -180,7 +202,92 @@ pub struct Sample {
     pub connection_reused: bool,
 }
 
-/// One chain/step in B1.3. Names and additional chains are added in B3.
+/// One step of one chain, measured on its own.
+///
+/// Per-step numbers find the slow endpoint; the chain's own duration is what a user
+/// feels (design-engine §5). Both are kept, and neither is derived from the other:
+/// a chain's duration is not the sum of its steps' medians, and a report that added
+/// them would be inventing a figure nobody measured.
+#[derive(Clone, Debug, Default)]
+pub struct StepStats {
+    pub attempted: u64,
+    pub completed: u64,
+    pub failed: u64,
+    pub statuses: BTreeMap<u16, u64>,
+    pub errors: [u64; 8],
+    pub total: Distribution,
+    pub ttfb: Distribution,
+}
+
+impl StepStats {
+    fn merge(&mut self, other: &Self) {
+        self.attempted += other.attempted;
+        self.completed += other.completed;
+        self.failed += other.failed;
+        for (status, count) in &other.statuses {
+            *self.statuses.entry(*status).or_default() += count;
+        }
+        for (left, right) in self.errors.iter_mut().zip(other.errors) {
+            *left += right;
+        }
+        self.total.merge(&other.total);
+        self.ttfb.merge(&other.ttfb);
+    }
+
+    fn reset(&mut self) {
+        self.attempted = 0;
+        self.completed = 0;
+        self.failed = 0;
+        // Cleared rather than dropped: the same statuses recur every window, and a
+        // map that is emptied and refilled once a second allocates for nothing.
+        self.statuses.clear();
+        self.errors = [0; 8];
+        self.total.reset();
+        self.ttfb.reset();
+    }
+}
+
+/// One chain, measured end to end, with its steps inside it.
+#[derive(Clone, Debug, Default)]
+pub struct ChainStats {
+    pub started: u64,
+    pub completed: u64,
+    pub aborted: u64,
+    pub duration: Distribution,
+    pub steps: BTreeMap<&'static str, StepStats>,
+}
+
+impl ChainStats {
+    fn merge(&mut self, other: &Self) {
+        self.started += other.started;
+        self.completed += other.completed;
+        self.aborted += other.aborted;
+        self.duration.merge(&other.duration);
+        for (id, step) in &other.steps {
+            self.steps.entry(id).or_default().merge(step);
+        }
+    }
+
+    fn reset(&mut self) {
+        self.started = 0;
+        self.completed = 0;
+        self.aborted = 0;
+        self.duration.reset();
+        // Keys kept, values cleared: the chain's steps are fixed for the run, so
+        // every window after the first finds the histograms already allocated.
+        for step in self.steps.values_mut() {
+            step.reset();
+        }
+    }
+}
+
+/// Everything one worker measured in one window.
+///
+/// The pooled distributions and the per-chain ones are both kept: the pooled figures
+/// are what a run's own percentiles are computed from, and the per-chain ones are
+/// what the summary stream reports. Deriving either from the other would mean either
+/// merging percentiles or pooling across chains, and neither is a thing that can be
+/// done honestly.
 #[derive(Clone, Debug, Default)]
 pub struct Accumulator {
     pub counters: Counters,
@@ -191,14 +298,117 @@ pub struct Accumulator {
     pub corrected_chain: Distribution,
     pub corrected_total: Distribution,
     pub corrected_ttfb: Distribution,
+    pub chains: BTreeMap<&'static str, ChainStats>,
 }
 
 impl Accumulator {
+    /// Name the chains and steps this run has, before any of them runs.
+    ///
+    /// Every window then reports every chain, including the ones that sent nothing
+    /// in it. A zero is a measurement -- this chain did nothing during this window --
+    /// and a consumer that had to tell an absent chain from an idle one would be
+    /// reconstructing the plan to do it. It also keeps the maps out of the hot path:
+    /// the keys exist before the first iteration and are never inserted again.
+    pub fn declare(&mut self, chain: &'static str, steps: &[&'static str]) {
+        let stats = self.chains.entry(chain).or_default();
+        for step in steps {
+            stats.steps.entry(step).or_default();
+        }
+    }
+
     pub fn start(&mut self) {
         self.counters.started += 1;
     }
+
+    /// One iteration of one chain has been admitted.
+    pub fn start_chain(&mut self, chain: &'static str) {
+        self.counters.started += 1;
+        self.chains.entry(chain).or_default().started += 1;
+    }
+
     pub fn cancel(&mut self) {
         self.counters.cancelled += 1;
+    }
+
+    /// One iteration of one chain was cancelled in flight.
+    pub fn cancel_chain(&mut self, chain: &'static str) {
+        self.counters.cancelled += 1;
+        self.chains.entry(chain).or_default().aborted += 1;
+    }
+
+    /// One step finished, however it finished.
+    pub fn finish_step(&mut self, sample: &StepSample) {
+        let step = self
+            .chains
+            .entry(sample.chain)
+            .or_default()
+            .steps
+            .entry(sample.step)
+            .or_default();
+        step.attempted += 1;
+        if let Some(error) = sample.error {
+            step.failed += 1;
+            step.errors[error as usize] += 1;
+        } else {
+            step.completed += 1;
+        }
+        if let Some(status) = sample.status {
+            *step.statuses.entry(status).or_default() += 1;
+        }
+        if let Some(total) = sample.request_duration {
+            step.total.record(total);
+            self.counters.sent_finished += 1;
+            self.total.record(total);
+            self.corrected_total
+                .record(total.saturating_add(sample.send_delay));
+        }
+        if let Some(ttfb) = sample.ttfb {
+            step.ttfb.record(ttfb);
+            self.ttfb.record(ttfb);
+            self.corrected_ttfb
+                .record(ttfb.saturating_add(sample.send_delay));
+        }
+        if let Some(drift) = sample.drift {
+            self.drift.record(drift);
+        }
+        if let Some(status) = sample.status {
+            if let Some(counter) = self.counters.statuses.get_mut(usize::from(status)) {
+                *counter += 1;
+            }
+        }
+        if let Some(error) = sample.error {
+            self.counters.errors[error as usize] += 1;
+        }
+        self.counters.bytes_sent += sample.bytes_sent;
+        self.counters.bytes_received += sample.bytes_received;
+        self.counters.connections_opened += sample.connections_opened;
+        self.counters.connections_reused += u64::from(sample.connection_reused);
+    }
+
+    /// One iteration is over, whether or not it got through every step.
+    ///
+    /// The duration is recorded either way: an iteration that stopped at its second
+    /// step still took the time it took, and dropping those would make the chain's
+    /// median a median of the runs that happened to work.
+    pub fn finish_chain(
+        &mut self,
+        chain: &'static str,
+        duration: Duration,
+        admission_delay: Duration,
+        aborted: bool,
+    ) {
+        let stats = self.chains.entry(chain).or_default();
+        stats.duration.record(duration);
+        if aborted {
+            stats.aborted += 1;
+            self.counters.failed += 1;
+        } else {
+            stats.completed += 1;
+            self.counters.completed += 1;
+        }
+        self.chain.record(duration);
+        self.corrected_chain
+            .record(duration.saturating_add(admission_delay));
     }
 
     pub fn finish(&mut self, sample: Sample) {
@@ -238,6 +448,9 @@ impl Accumulator {
 
     pub fn merge(&mut self, other: &Self) {
         self.counters.merge(&other.counters);
+        for (name, chain) in &other.chains {
+            self.chains.entry(name).or_default().merge(chain);
+        }
         self.chain.merge(&other.chain);
         self.total.merge(&other.total);
         self.ttfb.merge(&other.ttfb);
@@ -249,6 +462,9 @@ impl Accumulator {
 
     pub fn reset(&mut self) {
         self.counters = Counters::default();
+        for chain in self.chains.values_mut() {
+            chain.reset();
+        }
         self.chain.reset();
         self.total.reset();
         self.ttfb.reset();

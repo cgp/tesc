@@ -3,12 +3,15 @@
 mod bundle;
 mod calibration;
 mod calls;
+mod chain;
 mod detectors;
+mod extract;
 pub use detectors::{DetectorConfig, Diagnostics, Health as PhaseHealth};
 mod execution;
 mod http;
 mod output;
 mod schedule;
+mod template;
 mod timeline;
 mod wake_clock;
 
@@ -24,7 +27,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio_util::sync::ReusableBoxFuture;
 
-use http::{Completion, SendState};
+use http::SendState;
 
 #[derive(Debug, Default)]
 pub struct Report {
@@ -52,6 +55,10 @@ pub struct Report {
     pub last_window: Option<Window>,
     pub windows: u64,
     pub windows_dropped: u64,
+    /// Iterations that stopped before their last step. Counted apart from failed
+    /// requests so one upstream 500 does not inflate the error rate three times
+    /// over (design-engine §5).
+    pub chains_aborted: u64,
     pub diagnostics: Diagnostics,
 }
 
@@ -63,7 +70,10 @@ struct Slot {
     phase: Phase,
     send_state: Arc<SendState>,
     send_recorded: bool,
-    future: ReusableBoxFuture<'static, Completion>,
+    /// Which chain this slot is running, so a cancellation can be counted against
+    /// the chain it belonged to rather than against the run in general.
+    chain: &'static str,
+    future: ReusableBoxFuture<'static, chain::Completion>,
 }
 
 /// The scheduler never writes to stdout/stderr or waits for an output consumer.

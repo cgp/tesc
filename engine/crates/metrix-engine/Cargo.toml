@@ -27,6 +27,10 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 webpki-roots = "1"
+serde_json_path = "0.7.2"
+sxd-document = "0.3.2"
+sxd-xpath = "0.4.2"
+regex = "1.13.1"
 
 [dev-dependencies]
 metrix-mock = { path = "../metrix-mock" }

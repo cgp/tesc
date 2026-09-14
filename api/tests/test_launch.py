@@ -117,6 +117,19 @@ def recordings(home) -> list[store.RecordingRow]:
         return store.list_recordings(conn)
 
 
+def until_started(started: dict, seconds: float = 10.0) -> dict:
+    """Wait for the engine task to have been polled at least once.
+
+    Starting a run creates a task and returns; the task runs when the loop next gets
+    a turn, which is usually immediately and occasionally not. Waiting for it beats
+    asserting on a dictionary the supervisor has not filled in yet.
+    """
+    deadline = time.monotonic() + seconds
+    while not started and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return started
+
+
 def until_finished(client, seconds: float = 10.0) -> list[str]:
     """Wait for the run to close itself.
 
@@ -220,7 +233,7 @@ class TestWhatTheRecordingSays:
         # Its phase timeline is written against these, not against its load target:
         # the boxes traffic goes to and the boxes statistics come from are different
         # sockets and usually different machines.
-        assert stub_engine["targets"] == ("app-1",)
+        assert until_started(stub_engine)["targets"] == ("app-1",)
         client.post(f"/api/recordings/{started['recording_id']}/stop")
 
 
@@ -261,7 +274,7 @@ class TestEndingIt:
         started = client.post(
             "/api/recordings", json={"profile": "staging", "plan": "ping"}
         ).json()
-        assert not stub_engine["stop"].is_set()
+        assert not until_started(stub_engine)["stop"].is_set()
 
         stopped = client.post(f"/api/recordings/{started['recording_id']}/stop")
         assert stopped.status_code == 200

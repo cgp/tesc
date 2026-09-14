@@ -10,6 +10,10 @@
 //! bundle whose fourth chain names a call that does not exist is broken now, and
 //! finding that out at load time rather than four minutes into a run is the whole
 //! point of compiling ahead.
+//!
+//! **A call that varies compiles to the pieces that vary; one that does not compiles
+//! to the finished request.** A run with no chaining renders nothing per request, and
+//! a chain pays only for the parts that actually hold a variable.
 
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
@@ -20,6 +24,9 @@ use hyper::{
     http::uri::Authority,
 };
 use metrix_plan::{Body, Call, Defaults, Mix, SessionPolicy, Target};
+
+use crate::extract::Extractor;
+use crate::template::{Scope, Template, Unbound};
 
 /// Headers the transport owns. A plan that sets one of these is describing a
 /// different request from the one that would go on the wire.
@@ -35,13 +42,133 @@ const TRANSPORT_MANAGED: &[&str] = &[
     "trailer",
 ];
 
-/// One request, compiled once and sent many times.
-pub(crate) struct RequestTemplate {
-    pub method: Method,
+/// A request, ready to send.
+pub(crate) struct Prepared {
     pub uri: Uri,
     pub headers: HeaderMap,
     pub body: Bytes,
+}
+
+/// One call, compiled: the fixed parts once, the varying parts as templates.
+pub(crate) struct RequestTemplate {
+    pub method: Method,
     pub timeout: Duration,
+    /// How much of a response may be kept, from the mix's `capture.body_max_kb`. A
+    /// ceiling rather than a hope: a service that streams a gigabyte back must not
+    /// be able to take the generator down through the extractor.
+    body_max: usize,
+    /// What this call captures out of its response, in the order it was written.
+    pub extract: Vec<(String, Extractor)>,
+    /// The whole request, when nothing in it depends on the scope. The ordinary
+    /// case, and the one that must cost nothing per send.
+    fixed: Option<Prepared>,
+
+    origin: String,
+    path: Template,
+    query: Vec<(Template, Template)>,
+    headers: Vec<(HeaderName, Template)>,
+    host: HeaderValue,
+    body: Template,
+}
+
+impl RequestTemplate {
+    /// The finished request, for a call with no variables in it.
+    pub fn prepared(&self) -> Option<&Prepared> {
+        self.fixed.as_ref()
+    }
+
+    /// True when something has to read the response body.
+    ///
+    /// Asked per call rather than assumed: a load generator that buffers every
+    /// response it receives is measuring its own allocator as much as the service.
+    pub fn reads_body(&self) -> bool {
+        self.extract
+            .iter()
+            .any(|(_, extractor)| !matches!(extractor, Extractor::Header(_)))
+    }
+
+    /// How many bytes of a response body may be kept.
+    pub fn body_ceiling(&self) -> usize {
+        self.body_max
+    }
+
+    /// True when the response's headers are read.
+    pub fn reads_headers(&self) -> bool {
+        self.extract
+            .iter()
+            .any(|(_, extractor)| matches!(extractor, Extractor::Header(_)))
+    }
+
+    /// Build this request from one iteration's scope.
+    pub fn render(&self, scope: &Scope) -> Result<Prepared, Unbound> {
+        let mut path = self.path.render(scope)?;
+        for (key, value) in &self.query {
+            path.push(if path.contains('?') { '&' } else { '?' });
+            path.push_str(&key.render_query(scope)?);
+            path.push('=');
+            path.push_str(&value.render_query(scope)?);
+        }
+        let uri = format!("{}{path}", self.origin)
+            .parse::<Uri>()
+            // A captured value can hold anything the service chose to send. A path
+            // that will not parse is the chain's to report, not a panic.
+            .map_err(|_| Unbound(format!("the path rendered to {path:?}, which is not a URI")))?;
+
+        let mut headers = HeaderMap::with_capacity(self.headers.len() + 1);
+        for (name, value) in &self.headers {
+            let rendered = value.render(scope)?;
+            let value = HeaderValue::from_str(&rendered).map_err(|_| {
+                Unbound(format!(
+                    "header {name} rendered to something it cannot hold"
+                ))
+            })?;
+            headers.insert(name.clone(), value);
+        }
+        headers.insert(hyper::header::HOST, self.host.clone());
+
+        Ok(Prepared {
+            uri,
+            headers,
+            body: Bytes::from(self.body.render(scope)?),
+        })
+    }
+
+    /// One fixed request, for tests that need a template without a bundle.
+    #[cfg(test)]
+    pub fn fixed_for_test(method: Method, uri: Uri, body: Bytes, timeout: Duration) -> Self {
+        let authority = uri.authority().expect("an absolute URI").clone();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            hyper::header::HOST,
+            HeaderValue::from_str(authority.as_str()).expect("a valid authority"),
+        );
+        Self {
+            method,
+            timeout,
+            body_max: 64 * 1024,
+            extract: Vec::new(),
+            fixed: Some(Prepared { uri, headers, body }),
+            origin: String::new(),
+            path: Template::parse("test", "/").expect("a literal path"),
+            query: Vec::new(),
+            headers: Vec::new(),
+            host: HeaderValue::from_static("test"),
+            body: Template::parse("test", "").expect("an empty body"),
+        }
+    }
+
+    /// Every variable this request reads, across all of its parts.
+    fn variables(&self) -> impl Iterator<Item = &str> {
+        self.path
+            .variables()
+            .chain(
+                self.query
+                    .iter()
+                    .flat_map(|(key, value)| key.variables().chain(value.variables())),
+            )
+            .chain(self.headers.iter().flat_map(|(_, value)| value.variables()))
+            .chain(self.body.variables())
+    }
 }
 
 /// One step of one chain, as the mix names it.
@@ -147,79 +274,109 @@ pub(crate) fn resolve(
                 continue;
             }
             let call = &defined[&step.call];
-            let compiled = compile(&step.call, call, &mix.defaults, target, authority)?;
+            let compiled = compile(
+                &step.call,
+                call,
+                &mix.defaults,
+                mix.capture.body_max_kb as usize * 1024,
+                target,
+                authority,
+            )?;
             requests.insert(step.call.clone(), Arc::new(compiled));
         }
     }
 
+    check_bindings(&chains, &requests)?;
     Ok(Resolved { chains, requests })
 }
 
-/// One call into the request it will send, every time, unchanged.
+/// Every variable a step reads must have been written by a step before it.
+///
+/// Checked once, at load, because the alternative is finding out per iteration: a
+/// chain whose second step reads `{{ order_id }}` that nothing captures fails every
+/// time it runs, and reporting that as thousands of failed requests buries the one
+/// fact that explains all of them.
+fn check_bindings(
+    chains: &[Chain],
+    requests: &BTreeMap<String, Arc<RequestTemplate>>,
+) -> Result<(), String> {
+    for (index, chain) in chains.iter().enumerate() {
+        let mut available: Vec<&str> = Vec::new();
+        for (position, step) in chain.steps.iter().enumerate() {
+            let request = &requests[&step.call];
+            for name in request.variables() {
+                require(
+                    available.contains(&name),
+                    &format!(
+                        "mix.json/chains/{index}/steps/{position}: {{{{ {name} }}}} is read \
+                         here and no earlier step of chain {:?} extracts it",
+                        chain.name
+                    ),
+                )?;
+            }
+            available.extend(request.extract.iter().map(|(name, _)| name.as_str()));
+        }
+    }
+    Ok(())
+}
+
+/// One call into the request it will send.
 fn compile(
     name: &str,
     call: &Call,
     defaults: &Defaults,
+    body_max: usize,
     target: &Target,
     authority: &Authority,
 ) -> Result<RequestTemplate, String> {
     let at = format!("call {name:?}");
     require(
-        call.assertions.is_empty() && call.extract.is_empty(),
-        &format!("{at}: assertions and extraction are not implemented (B3.4, B3.2)"),
+        call.assertions.is_empty(),
+        &format!("{at}: assertions are not implemented (B3.4)"),
     )?;
 
     let body = match &call.body {
-        None => Bytes::new(),
-        Some(Body::Inline(text)) => {
-            static_text(&at, "body", text)?;
-            Bytes::copy_from_slice(text.as_bytes())
-        }
+        None => Template::parse(&format!("{at}/body"), "")?,
+        Some(Body::Inline(text)) => Template::parse(&format!("{at}/body"), text)?,
         Some(Body::Generated { .. }) => {
             return Err(format!("{at}/body: generators are not implemented (B3.6)"));
         }
     };
 
-    static_text(&at, "path", &call.path)?;
+    let path = Template::parse(&format!("{at}/path"), &call.path)?;
     require(
         call.path.starts_with('/') && !call.path.starts_with("//") && !call.path.contains('#'),
         &format!("{at}/path: expected an origin-relative path without a fragment"),
     )?;
 
-    let mut path = call.path.clone();
+    let mut query = Vec::new();
     for (key, value) in &call.query {
-        static_text(&at, "query", key)?;
-        static_text(&at, "query", value)?;
-        path.push(if path.contains('?') { '&' } else { '?' });
-        path.push_str(&encode_query(key));
-        path.push('=');
-        path.push_str(&encode_query(value));
+        query.push((
+            Template::parse(&format!("{at}/query"), key)?,
+            Template::parse(&format!("{at}/query"), value)?,
+        ));
     }
 
-    let scheme = if target.tls.enabled { "https" } else { "http" };
-    let uri = format!("{scheme}://{authority}{path}")
-        .parse::<Uri>()
-        .map_err(|_| format!("{at}/path: invalid HTTP URI"))?;
-
-    let mut headers = HeaderMap::new();
+    let mut headers = Vec::new();
     for (key, value) in defaults.headers.iter().chain(call.headers.iter()) {
-        static_text(&at, "headers", value)?;
         let key = HeaderName::from_bytes(key.as_bytes())
             .map_err(|_| format!("{at}/headers: invalid header name"))?;
         require(
             !TRANSPORT_MANAGED.contains(&key.as_str()),
             &format!("{at}/headers: {key} is managed by the transport and cannot be set"),
         )?;
-        headers.insert(
-            key,
-            HeaderValue::from_str(value)
-                .map_err(|_| format!("{at}/headers: invalid header value"))?,
-        );
+        headers.push((key, Template::parse(&format!("{at}/headers"), value)?));
     }
-    headers.insert(
-        hyper::header::HOST,
-        HeaderValue::from_str(authority.as_str()).map_err(|_| "target: invalid HTTP authority")?,
-    );
+
+    let mut extract = Vec::new();
+    for (variable, selector) in &call.extract {
+        let at = format!("{at}/extract/{variable}");
+        require(
+            !variable.is_empty(),
+            &format!("{at}: an empty variable name"),
+        )?;
+        extract.push((variable.clone(), Extractor::compile(&at, selector)?));
+    }
 
     let timeout = Duration::from_millis(call.timeout_ms.or(defaults.timeout_ms).unwrap_or(5000));
     require(
@@ -227,20 +384,35 @@ fn compile(
         &format!("{at}/timeout_ms: must be positive and representable by the monotonic clock"),
     )?;
 
-    Ok(RequestTemplate {
-        method: call.method.to_string().parse().expect("plan method enum"),
-        uri,
-        headers,
-        body,
-        timeout,
-    })
-}
+    let scheme = if target.tls.enabled { "https" } else { "http" };
+    let host = HeaderValue::from_str(authority.as_str())
+        .map_err(|_| "target: invalid HTTP authority".to_owned())?;
 
-fn static_text(at: &str, field: &str, value: &str) -> Result<(), String> {
-    require(
-        !value.contains("{{") && !value.contains("}}"),
-        &format!("{at}/{field}: templates are not implemented (B3.5)"),
-    )
+    let mut compiled = RequestTemplate {
+        method: call.method.to_string().parse().expect("plan method enum"),
+        timeout,
+        body_max,
+        extract,
+        fixed: None,
+        origin: format!("{scheme}://{authority}"),
+        path,
+        query,
+        headers,
+        host,
+        body,
+    };
+
+    // Nothing varying means the request can be built now and sent unchanged for the
+    // life of the run. Built through the same renderer the varying case uses, so
+    // there is one way a request is assembled rather than two that can disagree.
+    if compiled.variables().next().is_none() {
+        let prepared = compiled
+            .render(&Scope::new())
+            .map_err(|Unbound(what)| format!("{at}: {what}"))?;
+        compiled.fixed = Some(prepared);
+    }
+
+    Ok(compiled)
 }
 
 fn require(condition: bool, message: &str) -> Result<(), String> {
@@ -249,17 +421,4 @@ fn require(condition: bool, message: &str) -> Result<(), String> {
     } else {
         Err(message.into())
     }
-}
-
-fn encode_query(value: &str) -> String {
-    use std::fmt::Write;
-    let mut encoded = String::new();
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
-            encoded.push(char::from(byte));
-        } else {
-            write!(encoded, "%{byte:02X}").expect("writing to String");
-        }
-    }
-    encoded
 }

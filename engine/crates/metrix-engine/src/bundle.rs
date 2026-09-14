@@ -21,7 +21,7 @@ use metrix_plan::{Call, CallFile, LoadMode, LoadModel, Mix, SessionPolicy, Targe
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 
-use crate::calls::{self, RequestTemplate};
+use crate::calls;
 use crate::schedule::Schedule;
 
 pub struct Plan {
@@ -32,10 +32,9 @@ pub struct Plan {
     pub(crate) step: String,
     pub(crate) call: String,
     pub(crate) target: Target,
-    /// The step the executor sends. One, until B3.2 walks a chain and B3.3 mixes
-    /// several -- but it is now chosen out of everything that resolved, rather than
-    /// being the only thing that was ever looked at.
-    pub(crate) request: Arc<RequestTemplate>,
+    /// The chain the executor runs, steps in order. One chain, until B3.3 mixes
+    /// several.
+    pub(crate) chain_steps: Arc<crate::chain::Compiled>,
     pub(crate) rate: f64,
     pub(crate) duration: Duration,
     pub(crate) baseline: Duration,
@@ -56,14 +55,37 @@ impl Plan {
         &self.root
     }
 
-    /// The request this plan will send, for tests that need to see what compiled.
-    /// Exposed as an opaque handle rather than the field, so nothing outside the
+    /// The chain this plan runs, and the steps within it.
+    /// The longest any one request in the chain may take. What the connection pool
+    /// is prepared with, because a pool that gave up sooner than the request it is
+    /// carrying would report the generator's impatience as the service's failure.
+    pub(crate) fn request_timeout(&self) -> Duration {
+        self.chain_steps
+            .steps
+            .iter()
+            .map(|step| step.request.timeout)
+            .max()
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn chain_name(&self) -> &'static str {
+        self.chain_steps.name
+    }
+
+    pub(crate) fn step_name(&self, index: usize) -> &'static str {
+        self.chain_steps.steps[index].id
+    }
+
+    /// The first request this plan will send, for tests that need to see what
+    /// compiled. An opaque handle rather than the field, so nothing outside the
     /// engine can assemble a request of its own from the parts.
     #[doc(hidden)]
     pub fn request_for_test(&self) -> RequestView<'_> {
+        let request = &self.chain_steps.steps[0].request;
+        let prepared = request.prepared().expect("a fixed call in a test");
         RequestView {
-            uri: &self.request.uri,
-            method: &self.request.method,
+            uri: &prepared.uri,
+            method: &request.method,
         }
     }
 
@@ -221,20 +243,31 @@ impl Plan {
             chain.session == SessionPolicy::Fresh && chain.pool_size.is_none(),
             "mix.json/chains/0/session: stateless fresh sessions only (B3.9)",
         )?;
-        require(
-            chain.steps.len() == 1,
-            "mix.json/chains/0/steps: chaining is not implemented yet (B3.2)",
-        )?;
-        let written = &mix.chains[0].steps[0];
-        require(
-            written.overrides.is_none()
-                && written.delay_ms.is_none()
-                && written.on_failure.is_none()
-                && written.repeat_until.is_none(),
-            "mix.json/chains/0/steps/0: overrides, delays and failure/repeat policies are not implemented (B3.4)",
-        )?;
+        for (position, written) in mix.chains[0].steps.iter().enumerate() {
+            require(
+                written.overrides.is_none()
+                    && written.delay_ms.is_none()
+                    && written.on_failure.is_none()
+                    && written.repeat_until.is_none(),
+                &format!(
+                    "mix.json/chains/0/steps/{position}: overrides, delays and                      failure/repeat policies are not implemented (B3.4)"
+                ),
+            )?;
+        }
         let step = &chain.steps[0];
-        let request = Arc::clone(&resolved.requests[&step.call]);
+        // Leaked deliberately: these name the chain and its steps for the life of
+        // the process, and every accumulator map is keyed by them.
+        let chain_steps = Arc::new(crate::chain::Compiled {
+            name: String::leak(chain.name.clone()),
+            steps: chain
+                .steps
+                .iter()
+                .map(|step| crate::chain::Step {
+                    id: String::leak(step.id.clone()),
+                    request: Arc::clone(&resolved.requests[&step.call]),
+                })
+                .collect(),
+        });
         let timeout = resolved.longest_timeout();
         require(
             span.checked_add(timeout)
@@ -243,9 +276,9 @@ impl Plan {
             "mix.json/phases: timeline duration including drain is not representable",
         )?;
         let calibration_shape = crate::calibration::Shape {
-            request_body_bytes: request.body.len(),
+            request_body_bytes: calibration_body_bytes(&chain_steps),
             tls: target.tls.enabled,
-            chain_depth: 1,
+            chain_depth: chain_steps.steps.len() as u32,
             generation: "static".into(),
         };
         let machine_profile = if load_machine_profile {
@@ -269,7 +302,7 @@ impl Plan {
             step: step.id.clone(),
             call: step.call.clone(),
             target,
-            request,
+            chain_steps,
             rate,
             duration,
             baseline,
@@ -334,6 +367,22 @@ fn bundle_hash(documents: &BTreeMap<String, Vec<u8>>) -> String {
         hash.update(bytes);
     }
     format!("sha256:{:x}", hash.finalize())
+}
+
+/// The body size calibration measures against: the largest a single request in the
+/// chain can be. Calibration asks what this machine can push, and the widest request
+/// is what decides that.
+fn calibration_body_bytes(chain: &crate::chain::Compiled) -> usize {
+    chain
+        .steps
+        .iter()
+        .map(|step| {
+            step.request
+                .prepared()
+                .map_or(0, |prepared| prepared.body.len())
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 /// What a test may see of a compiled request.

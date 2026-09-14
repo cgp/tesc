@@ -89,19 +89,38 @@ impl TlsTarget {
 }
 
 fn template(uri: &str, timeout: Duration) -> Arc<RequestTemplate> {
-    let uri: hyper::Uri = uri.parse().unwrap();
-    let mut headers = hyper::HeaderMap::new();
-    headers.insert(
-        hyper::header::HOST,
-        uri.authority().unwrap().as_str().parse().unwrap(),
-    );
-    Arc::new(RequestTemplate {
-        method: hyper::Method::POST,
-        uri,
-        headers,
-        body: Bytes::from_static(b"echo body"),
+    Arc::new(RequestTemplate::fixed_for_test(
+        hyper::Method::POST,
+        uri.parse().unwrap(),
+        Bytes::from_static(b"echo body"),
         timeout,
-    })
+    ))
+}
+
+/// One request on a fresh lease, which is what these tests are about.
+async fn one(
+    endpoint: Arc<Endpoint>,
+    template: Arc<RequestTemplate>,
+    lease: Lease,
+    scheduled: Instant,
+    admitted: Instant,
+    send_state: Arc<SendState>,
+) -> (Lease, Observation) {
+    let mut lease = lease;
+    let observation = send(
+        &mut lease,
+        &endpoint,
+        &template,
+        None,
+        Timing {
+            scheduled,
+            admitted,
+            records_drift: true,
+        },
+        &send_state,
+    )
+    .await;
+    (lease, observation)
 }
 
 #[tokio::test]
@@ -111,19 +130,18 @@ async fn late_admission_and_pre_send_wait_are_in_corrected_latency_for_both_prot
         let admitted = Instant::now();
         let scheduled = admitted - Duration::from_millis(200);
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let completion = execute(Some(Job {
-            lease: Lease {
+        let (_lease, o) = one(
+            Arc::new(server.endpoint(version, true, "localhost")),
+            template("https://localhost/echo", Duration::from_secs(3)),
+            Lease {
                 connection: None,
                 replacement: false,
             },
-            endpoint: Arc::new(server.endpoint(version, true, "localhost")),
-            template: template("https://localhost/echo", Duration::from_secs(3)),
-            admitted,
             scheduled,
-            send_state: Arc::new(SendState::default()),
-        }))
+            admitted,
+            Arc::new(SendState::default()),
+        )
         .await;
-        let o = completion.observation;
         assert_eq!(o.error, None);
         assert_eq!(o.admission_delay, Duration::from_millis(200));
         assert!(o.drift >= Duration::from_millis(250));
@@ -183,16 +201,23 @@ async fn tls_handshake_wait_is_queued_until_a_pre_send_timeout() {
         phase: metrix_metrics::events::Phase::Measure,
         send_state: Arc::clone(&state),
         send_recorded: false,
-        future: ReusableBoxFuture::new(execute(Some(Job {
+        chain: "test",
+        future: ReusableBoxFuture::new(crate::chain::run(Some(crate::chain::Job {
             lease: Lease {
                 connection: None,
                 replacement: false,
             },
             endpoint,
-            template: template(
-                &format!("https://{address}/echo"),
-                Duration::from_millis(500),
-            ),
+            chain: Arc::new(crate::chain::Compiled {
+                name: "test",
+                steps: vec![crate::chain::Step {
+                    id: "only",
+                    request: template(
+                        &format!("https://{address}/echo"),
+                        Duration::from_millis(500),
+                    ),
+                }],
+            }),
             scheduled: now,
             admitted: now,
             send_state: state,
@@ -231,8 +256,9 @@ async fn tls_handshake_wait_is_queued_until_a_pre_send_timeout() {
     assert_eq!(window.queue_depth, 1);
     assert_eq!(window.metrics.drift.count(), 0);
     let completion = slots[0].future.get_pin().await;
-    assert_eq!(completion.observation.error, Some(Failure::Timeout));
-    assert!(completion.observation.sent.is_none());
+    let observation = &completion.steps[0].observation;
+    assert_eq!(observation.error, Some(Failure::Timeout));
+    assert!(observation.sent.is_none());
     slots[0].active = false;
     crate::flush(
         crate::Recording {
@@ -269,14 +295,20 @@ async fn verified_tls_negotiates_both_protocols_and_reuses_connections() {
             .unwrap()
             .unwrap();
         assert_eq!(connection.version(), expected);
+        let compiled = template("https://localhost/echo", Duration::from_secs(1));
         for _ in 0..2 {
             let mut observation = Observation::default();
             timeout(
                 Duration::from_secs(5),
                 exchange(
                     &mut connection,
-                    &template("https://localhost/echo", Duration::from_secs(1)),
-                    Instant::now(),
+                    &compiled,
+                    compiled.prepared().expect("a fixed call"),
+                    Timing {
+                        scheduled: Instant::now(),
+                        admitted: Instant::now(),
+                        records_drift: true,
+                    },
                     &SendState::default(),
                     &mut observation,
                 ),
@@ -359,26 +391,27 @@ async fn truncated_and_stalled_response_bodies_are_failures_and_close_http1() {
             .await
             .unwrap();
         let now = Instant::now();
-        let completion = execute(Some(Job {
-            lease: pool.acquire().unwrap(),
-            endpoint: Arc::clone(&pool.endpoint),
-            template: template(&format!("http://{address}/"), Duration::from_millis(100)),
-            scheduled: now,
-            admitted: now,
-            send_state: Arc::new(SendState::default()),
-        }))
+        let (lease, observation) = one(
+            Arc::clone(&pool.endpoint),
+            template(&format!("http://{address}/"), Duration::from_millis(100)),
+            pool.acquire().unwrap(),
+            now,
+            now,
+            Arc::new(SendState::default()),
+        )
         .await;
+        let completion = (lease, observation);
         assert_eq!(
-            completion.observation.error,
+            completion.1.error,
             Some(if stall {
                 Failure::Timeout
             } else {
                 Failure::Body
             })
         );
-        assert_eq!(completion.observation.status, Some(200));
-        assert!(completion.lease.connection.is_none());
-        pool.release(completion.lease);
+        assert_eq!(completion.1.status, Some(200));
+        assert!(completion.0.connection.is_none());
+        pool.release(completion.0);
         assert_eq!(pool.allocated, 0);
         task.abort();
     }
