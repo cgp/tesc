@@ -570,3 +570,9 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - **A row in the archive said `warn ×139` about a run carrying eleven warnings.** The badge paired the worst severity with the total count, which was harmless while a recording carried three notes and became a lie the moment the B2 engine started emitting a routine info annotation per interval: a hundred and twenty-eight ordinary observations, drawn in the colour that means act on this.
 - It now counts the severity it names. The rest of the breakdown moved to the title, which is where a figure that is context rather than a finding belongs.
 - Found by merging the engine track and looking at the first real run through it, not by a test — the test that existed asserted the wrong number, because it was written when three notes and three warnings were the same thing.
+
+## 2026-09-13 — A recording id that is actually unique.
+
+- **`new_id` had sixteen bits of randomness behind a timestamp accurate to the second.** That is the whole of what separates two recordings started inside one — and a sweep starts several at once. At 16 bits, two hundred ids in the same second collide about a third of the time.
+- Found because it happened: `scripts/check.sh` failed on `UNIQUE constraint failed: recording.id` after the B2 merge, in a test that had passed a minute earlier. `recording.id` is a primary key, so a collision is an IntegrityError where a run should have started.
+- Widened to forty bits and pinned with a bound rather than by generating ids and hoping — a probabilistic test of a probabilistic property fails on the unlucky run and passes on the next, which is the same mistake one level up. The docstring no longer claims uniqueness it cannot provide: the suffix is random, not reserved against the store, and small enough to never be seen is not the same as impossible.

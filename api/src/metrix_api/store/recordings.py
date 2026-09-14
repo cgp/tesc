@@ -30,10 +30,25 @@ ABORTED = "aborted"
 FAILED = "failed"
 
 
+#: Random bytes in a recording id. The timestamp is only accurate to the second, so
+#: this is the whole of what separates two recordings started inside one -- which is
+#: not rare: a sweep starts several at once, and a test suite makes hundreds. Four
+#: hex characters was too few. At 16 bits, 200 ids in the same second collide about
+#: a third of the time, which is how this was found: `recording.id` is a primary key,
+#: so a collision is an IntegrityError where a run should have started.
+ID_BYTES = 5
+
+
 def new_id(now: datetime | None = None) -> str:
-    """Sortable, unique, and readable in a directory listing."""
+    """Sortable, readable in a directory listing, and unlikely to repeat.
+
+    Unlikely, not impossible -- the suffix is random rather than reserved against the
+    store, and saying so is better than a docstring that promises what a birthday
+    bound cannot. At `ID_BYTES` the chance is small enough that the clean failure it
+    produces will not be seen; it is not zero.
+    """
     stamp = (now or datetime.now(UTC)).strftime("%Y-%m-%dT%H-%M-%SZ")
-    return f"{stamp}_{secrets.token_hex(2)}"
+    return f"{stamp}_{secrets.token_hex(ID_BYTES)}"
 
 
 def series_key(profile: Profile, *, kind: str, api_version: str, interval_s: float) -> str:

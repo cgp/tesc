@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -14,8 +15,12 @@ from metrix_api.store import (
     discover_migrations,
     migrate,
     open_store,
+    recordings,
     transaction,
 )
+
+#: One fixed instant, so the timestamp half of an id is never the thing under test.
+AT = datetime(2026, 9, 13, 14, 3, 11, tzinfo=UTC)
 
 RECORDING = """
     INSERT INTO recording
@@ -190,3 +195,25 @@ class TestThreading:
             ).result()
             assert count == 0
             pool.submit(conn.close).result()
+
+
+class TestIds:
+    """A recording id is a primary key, so what separates two of them is not cosmetic."""
+
+    def test_the_readable_half_is_the_timestamp_to_the_second(self) -> None:
+        stamp, _, suffix = recordings.new_id(AT).partition("_")
+        assert stamp == "2026-09-13T14-03-11Z"
+        assert len(suffix) == 2 * recordings.ID_BYTES
+
+    def test_the_random_half_carries_enough_to_separate_a_second_of_recordings(self) -> None:
+        # The timestamp is accurate to the second, so the suffix is the whole of what
+        # tells apart recordings started inside one -- a sweep starting several at
+        # once, or a suite making hundreds. Asserted as a bound rather than by
+        # generating ids and hoping: a probabilistic test for a probabilistic property
+        # fails on the unlucky run and passes on the next.
+        space = 256**recordings.ID_BYTES
+        # Birthday bound: the chance any two of a thousand share a suffix.
+        assert 1000 * 999 / 2 / space < 1e-4
+
+    def test_two_recordings_in_the_same_second_are_different_recordings(self) -> None:
+        assert recordings.new_id(AT) != recordings.new_id(AT)
