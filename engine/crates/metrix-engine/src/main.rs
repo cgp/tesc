@@ -80,7 +80,7 @@ fn execute(args: Args) -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
     let plan_path = args.plan.expect("clap requires --plan");
-    let plan = if args.calibrate {
+    let mut plan = if args.calibrate {
         Plan::load_for_calibration(&plan_path)?
     } else {
         Plan::load(&plan_path)?
@@ -98,6 +98,11 @@ fn execute(args: Args) -> Result<ExitCode, String> {
         );
         return Ok(ExitCode::SUCCESS);
     }
+    // The seed names one run of the plan rather than the plan, so it arrives on the
+    // command line and is recorded in the run's identity. Everything generated --
+    // which dataset row an iteration reads, what `uuid()` returns -- comes from it,
+    // so a run can be replayed as the same workload.
+    plan.set_seed(args.seed);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(plan.worker_threads)
         .enable_all()

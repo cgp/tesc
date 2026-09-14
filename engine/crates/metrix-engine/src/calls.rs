@@ -26,8 +26,9 @@ use hyper::{
 use metrix_plan::{Body, Call, Defaults, Mix, OnFailure, RepeatUntil, SessionPolicy, Target};
 
 use crate::assertions::Check;
+use crate::dataset::Datasets;
 use crate::extract::Extractor;
-use crate::template::{Scope, Template, Unbound};
+use crate::template::{Scope, Template, Unbound, Values};
 
 /// Headers the transport owns. A plan that sets one of these is describing a
 /// different request from the one that would go on the wire.
@@ -143,13 +144,13 @@ impl RequestTemplate {
     }
 
     /// Build this request from one iteration's scope.
-    pub fn render(&self, scope: &Scope) -> Result<Prepared, Unbound> {
-        let mut path = self.path.render(scope)?;
+    pub fn render(&self, values: &mut Values<'_>) -> Result<Prepared, Unbound> {
+        let mut path = self.path.render(values)?;
         for (key, value) in &self.query {
             path.push(if path.contains('?') { '&' } else { '?' });
-            path.push_str(&key.render_query(scope)?);
+            path.push_str(&key.render_query(values)?);
             path.push('=');
-            path.push_str(&value.render_query(scope)?);
+            path.push_str(&value.render_query(values)?);
         }
         let uri = format!("{}{path}", self.origin)
             .parse::<Uri>()
@@ -159,7 +160,7 @@ impl RequestTemplate {
 
         let mut headers = HeaderMap::with_capacity(self.headers.len() + 1);
         for (name, value) in &self.headers {
-            let rendered = value.render(scope)?;
+            let rendered = value.render(values)?;
             let value = HeaderValue::from_str(&rendered).map_err(|_| {
                 Unbound(format!(
                     "header {name} rendered to something it cannot hold"
@@ -172,7 +173,7 @@ impl RequestTemplate {
         Ok(Prepared {
             uri,
             headers,
-            body: Bytes::from(self.body.render(scope)?),
+            body: Bytes::from(self.body.render(values)?),
         })
     }
 
@@ -194,25 +195,41 @@ impl RequestTemplate {
             reads: Reads::default(),
             fixed: Some(Prepared { uri, headers, body }),
             origin: String::new(),
-            path: Template::parse("test", "/").expect("a literal path"),
+            path: Template::parse("test", "/", &Datasets::default()).expect("a literal path"),
             query: Vec::new(),
             headers: Vec::new(),
             host: HeaderValue::from_static("test"),
-            body: Template::parse("test", "").expect("an empty body"),
+            body: Template::parse("test", "", &Datasets::default()).expect("an empty body"),
         }
     }
 
     /// Every variable this request reads, across all of its parts.
     fn variables(&self) -> impl Iterator<Item = &str> {
-        self.path
-            .variables()
+        self.pieces().flat_map(Template::variables)
+    }
+
+    /// Every dataset any part of this request reads.
+    pub fn datasets(&self) -> impl Iterator<Item = usize> {
+        self.pieces().flat_map(Template::datasets)
+    }
+
+    /// True when nothing in the request varies, so it can be built once.
+    ///
+    /// Asked of every piece rather than only of the chain variables: a path holding
+    /// `{{ uuid() }}` reads no variable and is a different request every time.
+    fn is_fixed(&self) -> bool {
+        self.pieces().all(Template::is_fixed)
+    }
+
+    fn pieces(&self) -> impl Iterator<Item = &Template> {
+        std::iter::once(&self.path)
             .chain(
                 self.query
                     .iter()
-                    .flat_map(|(key, value)| key.variables().chain(value.variables())),
+                    .flat_map(|(key, value)| [key, value].into_iter()),
             )
-            .chain(self.headers.iter().flat_map(|(_, value)| value.variables()))
-            .chain(self.body.variables())
+            .chain(self.headers.iter().map(|(_, value)| value))
+            .chain(std::iter::once(&self.body))
     }
 }
 
@@ -267,9 +284,17 @@ impl Resolved {
 pub(crate) fn resolve(
     mix: &Mix,
     defined: &BTreeMap<String, Call>,
+    datasets: &Datasets,
     target: &Target,
     authority: &Authority,
 ) -> Result<Resolved, String> {
+    let context = Context {
+        defaults: &mix.defaults,
+        body_max: mix.capture.body_max_kb as usize * 1024,
+        datasets,
+        target,
+        authority,
+    };
     let mut chains = Vec::new();
     let mut seen_chains: BTreeMap<&str, usize> = BTreeMap::new();
     // Compiled once per call-and-capture, shared by every step that wants it.
@@ -319,15 +344,8 @@ pub(crate) fn resolve(
             let request = match compiled.get(&key) {
                 Some(request) => Arc::clone(request),
                 None => {
-                    let request = Arc::new(compile(
-                        &step.call,
-                        &defined[&step.call],
-                        &mix.defaults,
-                        mix.capture.body_max_kb as usize * 1024,
-                        reads,
-                        target,
-                        authority,
-                    )?);
+                    let request =
+                        Arc::new(compile(&step.call, &defined[&step.call], reads, &context)?);
                     compiled.insert(key, Arc::clone(&request));
                     request
                 }
@@ -397,27 +415,41 @@ fn check_bindings(chains: &[Chain]) -> Result<(), String> {
     Ok(())
 }
 
+/// Everything outside a call that compiling one needs: the mix's defaults, where the
+/// request is going, and what the plan makes available to a template.
+pub(crate) struct Context<'a> {
+    pub defaults: &'a Defaults,
+    pub body_max: usize,
+    pub datasets: &'a Datasets,
+    pub target: &'a Target,
+    pub authority: &'a Authority,
+}
+
 /// One call into the request it will send.
 fn compile(
     name: &str,
     call: &Call,
-    defaults: &Defaults,
-    body_max: usize,
     reads: Reads,
-    target: &Target,
-    authority: &Authority,
+    context: &Context<'_>,
 ) -> Result<RequestTemplate, String> {
+    let Context {
+        defaults,
+        body_max,
+        datasets,
+        target,
+        authority,
+    } = *context;
     let at = format!("call {name:?}");
 
     let body = match &call.body {
-        None => Template::parse(&format!("{at}/body"), "")?,
-        Some(Body::Inline(text)) => Template::parse(&format!("{at}/body"), text)?,
+        None => Template::parse(&format!("{at}/body"), "", datasets)?,
+        Some(Body::Inline(text)) => Template::parse(&format!("{at}/body"), text, datasets)?,
         Some(Body::Generated { .. }) => {
             return Err(format!("{at}/body: generators are not implemented (B3.6)"));
         }
     };
 
-    let path = Template::parse(&format!("{at}/path"), &call.path)?;
+    let path = Template::parse(&format!("{at}/path"), &call.path, datasets)?;
     require(
         call.path.starts_with('/') && !call.path.starts_with("//") && !call.path.contains('#'),
         &format!("{at}/path: expected an origin-relative path without a fragment"),
@@ -426,8 +458,8 @@ fn compile(
     let mut query = Vec::new();
     for (key, value) in &call.query {
         query.push((
-            Template::parse(&format!("{at}/query"), key)?,
-            Template::parse(&format!("{at}/query"), value)?,
+            Template::parse(&format!("{at}/query"), key, datasets)?,
+            Template::parse(&format!("{at}/query"), value, datasets)?,
         ));
     }
 
@@ -439,7 +471,10 @@ fn compile(
             !TRANSPORT_MANAGED.contains(&key.as_str()),
             &format!("{at}/headers: {key} is managed by the transport and cannot be set"),
         )?;
-        headers.push((key, Template::parse(&format!("{at}/headers"), value)?));
+        headers.push((
+            key,
+            Template::parse(&format!("{at}/headers"), value, datasets)?,
+        ));
     }
 
     let mut extract = Vec::new();
@@ -486,9 +521,11 @@ fn compile(
     // Nothing varying means the request can be built now and sent unchanged for the
     // life of the run. Built through the same renderer the varying case uses, so
     // there is one way a request is assembled rather than two that can disagree.
-    if compiled.variables().next().is_none() {
+    if compiled.is_fixed() {
+        let scope = Scope::new();
+        let mut values = Values::new(&scope, datasets, 0, 0);
         let prepared = compiled
-            .render(&Scope::new())
+            .render(&mut values)
             .map_err(|Unbound(what)| format!("{at}: {what}"))?;
         compiled.fixed = Some(prepared);
     }

@@ -447,7 +447,7 @@ context in                        request out (all fields optional)
   rng           seeded RNG
 ```
 
-Seeded per virtual user from the run seed, which is recorded in run metadata — so a run can be replayed with identical generated traffic. Without that, comparing two runs means comparing two different workloads.
+Seeded **per iteration** from the run seed, which is recorded in run metadata — so a run can be replayed with identical generated traffic. Without that, comparing two runs means comparing two different workloads. Per iteration rather than per virtual user: which VU picks up an arrival depends on how long the service took to answer the arrival before it, so a per-VU stream replays differently against a service that has since got slower. Keying it to the iteration number makes iteration 4,001 generate the same request in every run of the plan, which is the property the seed exists for. Every step of one iteration draws from the same stream in order, so a chain that posts `{{ uuid() }}` and then reads it back sends the same id twice.
 
 ### 7.2 Tiers
 
@@ -458,6 +458,8 @@ Seeded per virtual user from the run seed, which is recorded in run metadata —
 | **Lua (embedded)** | ~µs | **Default for anything dynamic** |
 | Rust plugin | ~ns–µs | Heavy generation: large XML, signing, compression |
 | Exec sidecar | ~10–100µs + IPC | Escape hatch: a script that already exists |
+
+**Datasets are read into memory at load and then only indexed.** No file handles on the hot path and no I/O inside the measured window — a generator reading from disk per request puts the test machine's page cache into the latency distribution. Which row an iteration gets is a pure function of the iteration number and the seed: no cursor and nothing shared between workers, which is what makes `round_robin` really round robin rather than round robin per worker, and what makes a replay send the same rows in the same order. `unique_per_iteration` is checked against the arithmetic of the run at load — a file with fewer rows than the run has iterations of the chains that read it is refused, naming both numbers, because wrapping would take away the one thing that mode promises.
 
 **Lua is the default answer to "I need real logic here."** Embedded via `mlua`, one VM per worker thread, reused across requests — no process boundary, no serialization, no IPC. It is fast enough to sit on the hot path at the rates in scope, and it keeps generation logic inside the plan's directory rather than in a separate deployable.
 

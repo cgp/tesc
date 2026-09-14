@@ -34,6 +34,11 @@ pub struct Plan {
     pub(crate) target: Target,
     /// Every chain the mixture holds, each with its steps in order.
     pub(crate) chains: Vec<Arc<crate::chain::Compiled>>,
+    /// Every dataset the mix declares, read once and shared by every iteration.
+    pub(crate) datasets: Arc<crate::dataset::Datasets>,
+    /// The run seed. Set from `--seed` rather than from the bundle: it names one run
+    /// of the plan, not the plan, and it is what a replay is asked for.
+    pub(crate) seed: u64,
     /// Each chain's share of the total rate, in the same order.
     pub(crate) weights: Vec<f64>,
     pub(crate) rate: f64,
@@ -86,6 +91,14 @@ impl Plan {
         Self::load_inner(root, true)
     }
 
+    /// The seed every generated value in the run comes from.
+    ///
+    /// Not part of the bundle: the bundle is the plan and the seed names one run of
+    /// it. Recorded in the run's identity so a replay can be asked for by it.
+    pub fn set_seed(&mut self, seed: u64) {
+        self.seed = seed;
+    }
+
     /// Calibration replaces a stale local profile, so it deliberately ignores one while
     /// compiling the plan shape.
     pub fn load_for_calibration(root: &Path) -> Result<Self, String> {
@@ -112,8 +125,8 @@ impl Plan {
             "mix.json/load: stages and breakpoint are not implemented",
         )?;
         require(
-            mix.auth.is_none() && mix.datasets.is_empty() && mix.generators.is_empty(),
-            "mix.json: auth, datasets and generators are not implemented",
+            mix.auth.is_none() && mix.generators.is_empty(),
+            "mix.json: auth and generators are not implemented",
         )?;
         require(
             mix.slo.is_empty() && mix.observe.is_none(),
@@ -221,7 +234,9 @@ impl Plan {
         // Every chain, every step, every reference -- not only the one that will be
         // sent. The layers that use the rest arrive in B3.2 and B3.3; the resolution
         // they will use is a property of the document, and is checked as one.
-        let resolved = calls::resolve(&mix, &defined, &target, &authority)?;
+        let datasets = Arc::new(crate::dataset::Datasets::load(&root, &mix)?);
+        let resolved = calls::resolve(&mix, &defined, &datasets, &target, &authority)?;
+        unique_rows_suffice(&datasets, &resolved, rate, warmup + duration)?;
 
         let timeout = resolved.longest_timeout();
         // Percentages are a claim about what the service was asked for, so they
@@ -323,6 +338,8 @@ impl Plan {
             hash: bundle_hash(&documents),
             target,
             chains,
+            datasets,
+            seed: 0,
             weights,
             rate,
             duration,
@@ -339,6 +356,52 @@ impl Plan {
             allow_generator_limited,
         })
     }
+}
+
+/// A `unique_per_iteration` dataset has to hold a row for every iteration that will
+/// read it.
+///
+/// The mode exists for POSTs that must not collide (§7.2), so wrapping quietly at the
+/// end of the file would take away the one thing it promises. Checked against the
+/// arithmetic of the run rather than discovered partway through it: a file 200 rows
+/// short is 200 colliding requests in results nobody will re-read.
+fn unique_rows_suffice(
+    datasets: &crate::dataset::Datasets,
+    resolved: &calls::Resolved,
+    rate: f64,
+    sending: Duration,
+) -> Result<(), String> {
+    for (index, dataset) in datasets.iter().enumerate() {
+        if dataset.mode() != metrix_plan::DatasetMode::UniquePerIteration {
+            continue;
+        }
+        // Only the chains that read it, at their own share of the rate: a dataset
+        // used by a chain at 5% is asked for a twentieth of the run's iterations.
+        let share: f64 = resolved
+            .chains
+            .iter()
+            .filter(|chain| {
+                chain
+                    .steps
+                    .iter()
+                    .any(|step| step.request.datasets().any(|read| read == index))
+            })
+            .map(|chain| chain.percent)
+            .sum();
+        if share <= 0.0 {
+            continue;
+        }
+        let needed = (rate * share / PERCENT_TOTAL * sending.as_secs_f64()).ceil() as u64;
+        require(
+            dataset.rows() as u64 >= needed,
+            &format!(
+                "mix.json/datasets/{}: unique_per_iteration needs one row per iteration                  and this run starts {needed} of the chains that read it, but the file                  holds {} rows",
+                dataset.name(),
+                dataset.rows()
+            ),
+        )?;
+    }
+    Ok(())
 }
 
 fn read<T: DeserializeOwned>(

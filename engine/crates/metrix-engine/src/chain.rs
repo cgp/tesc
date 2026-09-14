@@ -20,9 +20,10 @@ use tokio::time::Instant;
 
 use crate::assertions;
 use crate::calls::RequestTemplate;
+use crate::dataset::Datasets;
 use crate::extract::{self, Extractor};
 use crate::http::{Endpoint, Lease, Observation, SendState, Timing, send};
-use crate::template::{Scope, Unbound};
+use crate::template::{Scope, Unbound, Values};
 use metrix_plan::OnFailure;
 
 /// One step, ready to run.
@@ -67,6 +68,13 @@ pub(crate) struct Job {
     pub lease: Lease,
     pub endpoint: Arc<Endpoint>,
     pub chain: Arc<Compiled>,
+    /// Every dataset the plan declares, read once at load and shared by every
+    /// iteration for the life of the run.
+    pub datasets: Arc<Datasets>,
+    /// The run seed, recorded in the run's identity. Together with the iteration
+    /// number it decides every generated value this iteration sends.
+    pub seed: u64,
+    pub iteration: u64,
     pub scheduled: Instant,
     pub admitted: Instant,
     pub send_state: Arc<SendState>,
@@ -225,7 +233,7 @@ pub(crate) async fn run(job: Option<Job>) -> Completion {
             records_drift: first,
         };
 
-        let rendered = match render(step, &scope) {
+        let rendered = match render(step, &scope, &job) {
             Ok(rendered) => rendered,
             Err(Unbound(variable)) => {
                 stopped = Some(Stopped::Unbound { index, variable });
@@ -361,11 +369,22 @@ fn judge(step: &Step, observation: &Observation) -> Option<usize> {
 }
 
 /// Build the request, or nothing when the call never varies.
-fn render(step: &Step, scope: &Scope) -> Result<Option<crate::calls::Prepared>, Unbound> {
+///
+/// One `Values` per step rather than one per iteration: the generated values a step
+/// sends are keyed to the run seed and the iteration, so every step of an iteration
+/// draws the same stream from the start. Two steps posting `{{ uuid() }}` therefore
+/// send the same id, which is what a chain creating a resource and then reading it
+/// back needs — and a replay of the plan sends it again.
+fn render(
+    step: &Step,
+    scope: &Scope,
+    job: &Job,
+) -> Result<Option<crate::calls::Prepared>, Unbound> {
     if step.request.prepared().is_some() {
         return Ok(None);
     }
-    step.request.render(scope).map(Some)
+    let mut values = Values::new(scope, &job.datasets, job.seed, job.iteration);
+    step.request.render(&mut values).map(Some)
 }
 
 /// Read this step's captures into the scope.
