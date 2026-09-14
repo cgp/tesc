@@ -205,6 +205,7 @@ async fn tls_handshake_wait_is_queued_until_a_pre_send_timeout() {
         future: ReusableBoxFuture::new(crate::chain::run(Some(crate::chain::Job {
             datasets: std::sync::Arc::new(crate::dataset::Datasets::default()),
             generators: std::sync::Arc::new(crate::generate::Generators::default()),
+            auth: None,
             seed: 0,
             iteration: 0,
             vu: 0,
@@ -245,6 +246,7 @@ async fn tls_handshake_wait_is_queued_until_a_pre_send_timeout() {
     let mut last = Duration::ZERO;
     crate::flush(
         crate::Recording {
+            auth: None,
             slots: &mut slots,
             workers: &mut workers,
             warmup_workers: &mut warmup_workers,
@@ -270,6 +272,7 @@ async fn tls_handshake_wait_is_queued_until_a_pre_send_timeout() {
     slots[0].active = false;
     crate::flush(
         crate::Recording {
+            auth: None,
             slots: &mut slots,
             workers: &mut workers,
             warmup_workers: &mut warmup_workers,

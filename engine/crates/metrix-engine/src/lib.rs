@@ -1,6 +1,7 @@
 //! Fixed-rate load execution independent of the control plane.
 
 mod assertions;
+mod auth;
 mod bundle;
 mod calibration;
 mod calls;
@@ -126,6 +127,8 @@ struct Recording<'a> {
     warmup_interval: &'a mut Accumulator,
     phase: Phase,
     lag: &'a mut Lag,
+    /// A snapshot of what auth has cost so far, taken where the plan is in scope.
+    auth: Option<metrix_metrics::aggregation::AuthCounts>,
 }
 
 fn record_send(
@@ -165,6 +168,7 @@ fn flush(
         warmup_interval,
         phase,
         lag,
+        auth,
     } = recording;
     for slot in &mut *slots {
         record_send(slot, workers, warmup_workers, report);
@@ -217,6 +221,7 @@ fn flush(
         },
         scheduler_lag: lag.max,
         scheduler_lag_samples: lag.samples,
+        auth,
         metrics: if phase == Phase::Warmup {
             warmup_interval.clone()
         } else {

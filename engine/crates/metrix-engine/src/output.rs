@@ -988,16 +988,25 @@ fn summary_record(
                     )
                 })
                 .collect(),
+            auth: window.auth.map(|counts| metrix_metrics::events::AuthStats {
+                identities: counts.identities,
+                acquisitions: counts.acquisitions,
+                refreshes: counts.refreshes,
+                failures: counts.failures,
+                unauthorized: counts.unauthorized,
+                refresh_ms: counts.refresh_us as f64 / 1000.0,
+                blocked_ms: counts.blocked_us as f64 / 1000.0,
+            }),
         },
     })
 }
 
 /// The error counter array as the names the frozen schema uses.
-fn error_counts(errors: &[u64; 10]) -> BTreeMap<String, u64> {
+fn error_counts(errors: &[u64; 11]) -> BTreeMap<String, u64> {
     // Indexed by `Cause`. Several map to `other` because the transport cannot always
     // tell them apart, and inventing a distinction it did not observe would be worse
     // than saying so.
-    const NAMES: [&str; 10] = [
+    const NAMES: [&str; 11] = [
         "dns_failure",
         "other",
         "tls_failure",
@@ -1008,6 +1017,7 @@ fn error_counts(errors: &[u64; 10]) -> BTreeMap<String, u64> {
         "extraction",
         "assertion",
         "generation",
+        "unauthorized",
     ];
     let mut counted: BTreeMap<String, u64> = BTreeMap::new();
     for (index, count) in errors.iter().enumerate() {

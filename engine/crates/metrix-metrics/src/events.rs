@@ -199,6 +199,29 @@ pub struct GeneratorHealth {
     /// and folding it into the response time would make the service look slow.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub generation: BTreeMap<String, GenerationStats>,
+    /// Present only when the plan has an `auth` block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<AuthStats>,
+}
+
+/// What getting and keeping credentials has cost this run (§6.3).
+///
+/// Beside the load metrics and never inside them: token traffic is infrastructure for
+/// the test, and a throughput figure that counted calls to an identity provider would
+/// be reporting a different system's numbers as the target's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AuthStats {
+    /// How many tokens the run holds, which is what `identity` decided.
+    pub identities: u64,
+    pub acquisitions: u64,
+    pub refreshes: u64,
+    pub failures: u64,
+    /// 401s from the target that caused a refresh.
+    pub unauthorized: u64,
+    pub refresh_ms: f64,
+    /// Virtual-user time spent blocked on somebody else's refresh. Reported apart
+    /// from request latency, because it is the generator waiting and not the service.
+    pub blocked_ms: f64,
 }
 
 /// One generator's own cost over a window.
@@ -281,6 +304,9 @@ pub enum ErrorClass {
     Extraction,
     /// The generator failed to build the request. Ours, not theirs.
     Generation,
+    /// The credential was rejected or could not be obtained. Apart from application
+    /// errors: a 401 storm is a different problem from a service returning 500s.
+    Unauthorized,
     Other,
 }
 

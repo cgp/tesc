@@ -19,6 +19,7 @@ use std::{sync::Arc, time::Duration};
 use tokio::time::Instant;
 
 use crate::assertions;
+use crate::auth;
 use crate::calls::RequestTemplate;
 use crate::dataset::Datasets;
 use crate::extract::{self, Extractor};
@@ -75,6 +76,8 @@ pub(crate) struct Job {
     pub datasets: Arc<Datasets>,
     /// Every generator the plan declares, started before the arrival clock did.
     pub generators: Arc<Generators>,
+    /// The credential every request carries, with its tokens already fetched.
+    pub auth: Option<Arc<crate::auth::Auth>>,
     /// The run seed, recorded in the run's identity. Together with the iteration
     /// number it decides every generated value this iteration sends.
     pub seed: u64,
@@ -106,6 +109,10 @@ pub(crate) enum Verdict {
     /// that polled five times and gave up has not seen the job complete, and calling
     /// that a success would report a service that finishes nothing as healthy.
     Unfinished,
+    /// The target rejected the credential and the plan says that is a failure rather
+    /// than a renewal. Its own class (§6.1): a 401 is not an application error, and a
+    /// run that reported it as one would send somebody reading the service's code.
+    Unauthorized,
 }
 
 impl Verdict {
@@ -113,7 +120,15 @@ impl Verdict {
     pub fn assertion(self) -> Option<usize> {
         match self {
             Self::Assertion(index) => Some(index),
-            Self::Unfinished => None,
+            Self::Unfinished | Self::Unauthorized => None,
+        }
+    }
+
+    /// The class this verdict is counted under.
+    pub fn cause(self) -> Cause {
+        match self {
+            Self::Assertion(_) | Self::Unfinished => Cause::Assertion,
+            Self::Unauthorized => Cause::Unauthorized,
         }
     }
 }
@@ -132,6 +147,10 @@ pub(crate) enum Stopped {
     /// ours rather than theirs -- but a different class, because a plan's own script
     /// failing is not the same problem as a plan referring to a value it never took.
     Generation { index: usize, reason: String },
+    /// No usable credential, so the request was never made. Counted as unauthorized
+    /// rather than as a transport failure: the service was not asked, and the reason
+    /// is on this side of the connection.
+    Credential { index: usize, reason: String },
 }
 
 /// How one generator call went, carried out so the caller can record it against the
@@ -181,6 +200,11 @@ impl Completion {
             Some(Stopped::Generation { index, reason }) => Some((
                 self.chain.steps[*index].id,
                 Cause::Generation,
+                reason.as_str(),
+            )),
+            Some(Stopped::Credential { index, reason }) => Some((
+                self.chain.steps[*index].id,
+                Cause::Unauthorized,
                 reason.as_str(),
             )),
             _ => None,
@@ -263,7 +287,7 @@ pub(crate) async fn run(job: Option<Job>) -> Completion {
             records_drift: first,
         };
 
-        let rendered = match build(step, &scope, &job, &mut generated).await {
+        let built = match build(step, &scope, &job, &mut generated).await {
             Ok(rendered) => rendered,
             Err(Refused::Unbound(variable)) => {
                 stopped = Some(Stopped::Unbound { index, variable });
@@ -274,8 +298,19 @@ pub(crate) async fn run(job: Option<Job>) -> Completion {
                 break;
             }
         };
+        // A request that carries a credential is not a fixed request, however fixed
+        // the call is: the token changes when it is refreshed, so the finished
+        // request has to be copied and stamped rather than sent as it was compiled.
+        let (mut rendered, mut carried) = match credential(step, built, &job).await {
+            Ok(pair) => pair,
+            Err(reason) => {
+                stopped = Some(Stopped::Credential { index, reason });
+                break;
+            }
+        };
 
         let mut retried = false;
+        let mut renewed = false;
         let outcome = loop {
             attempts += 1;
             let observation = send(
@@ -291,6 +326,47 @@ pub(crate) async fn run(job: Option<Job>) -> Completion {
                 .response
                 .as_ref()
                 .is_some_and(|captured| captured.truncated);
+
+            // Auth before the assertions: a 401 is the credential's business first,
+            // and judging the body of a rejection would be judging the wrong thing.
+            if observation.status == Some(401)
+                && let Some(auth) = &job.auth
+            {
+                if auth.fails_on_401() {
+                    break Outcome {
+                        index,
+                        observation,
+                        verdict: Some(Verdict::Unauthorized),
+                    };
+                }
+                if !renewed {
+                    renewed = true;
+                    let who = auth::Who {
+                        vu: job.vu,
+                        iteration: job.iteration,
+                        seed: job.seed,
+                        datasets: &job.datasets,
+                    };
+                    // Single-flight, inside `on_unauthorized`: two hundred users
+                    // rejected at once send one refresh between them.
+                    let rejected = carried.clone().unwrap_or_default();
+                    if auth.on_unauthorized(who, &rejected).await == auth::Retry::Yes {
+                        let mut again = rendered
+                            .clone()
+                            .expect("a request carrying a credential was rendered");
+                        if let Ok(token) = auth.inject(&mut again, who).await {
+                            steps.push(Outcome {
+                                index,
+                                observation,
+                                verdict: None,
+                            });
+                            rendered = Some(again);
+                            carried = Some(token);
+                            continue;
+                        }
+                    }
+                }
+            }
 
             // The transport first, then the answer: a step that never got a reply
             // has nothing for an assertion to be about.
@@ -362,6 +438,40 @@ pub(crate) async fn run(job: Option<Job>) -> Completion {
         stopped,
         generated,
     }
+}
+
+/// Attach the credential, if the plan has one.
+///
+/// Returns the request to send: `None` still means "send the call as compiled", which
+/// is the ordinary case for a plan with no auth and the one that must cost nothing.
+async fn credential(
+    step: &Step,
+    built: Option<crate::calls::Prepared>,
+    job: &Job,
+) -> Result<(Option<crate::calls::Prepared>, Option<String>), String> {
+    let Some(auth) = &job.auth else {
+        return Ok((built, None));
+    };
+    let mut prepared = match built {
+        Some(prepared) => prepared,
+        None => step
+            .request
+            .prepared()
+            .expect("a call that rendered nothing is a fixed call")
+            .clone(),
+    };
+    let token = auth
+        .inject(
+            &mut prepared,
+            auth::Who {
+                vu: job.vu,
+                iteration: job.iteration,
+                seed: job.seed,
+                datasets: &job.datasets,
+            },
+        )
+        .await?;
+    Ok((Some(prepared), Some(token)))
 }
 
 /// Why a request could not be built at all, so none was sent.

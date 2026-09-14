@@ -121,6 +121,10 @@ pub enum Cause {
     /// (§7.3): a generation failure counted as a target error would report a working
     /// service as broken by the plan's own script.
     Generation,
+    /// The credential was rejected or could not be obtained. Apart from application
+    /// errors (§6.1) because it is a different thing to go and fix, and because a 401
+    /// storm reads very differently from a service returning 500s.
+    Unauthorized,
 }
 
 #[derive(Clone, Debug)]
@@ -135,7 +139,7 @@ pub struct Counters {
     pub connections_opened: u64,
     pub connections_reused: u64,
     pub statuses: [u64; 1000],
-    pub errors: [u64; 10],
+    pub errors: [u64; 11],
 }
 
 impl Default for Counters {
@@ -151,7 +155,7 @@ impl Default for Counters {
             connections_opened: 0,
             connections_reused: 0,
             statuses: [0; 1000],
-            errors: [0; 10],
+            errors: [0; 11],
         }
     }
 }
@@ -225,7 +229,7 @@ pub struct StepStats {
     pub completed: u64,
     pub failed: u64,
     pub statuses: BTreeMap<u16, u64>,
-    pub errors: [u64; 10],
+    pub errors: [u64; 11],
     /// Which assertion failed, by its index in the call. Named by index because that
     /// is what the call document is indexed by, and a message would be a second
     /// place for the assertion's meaning to live.
@@ -260,7 +264,7 @@ impl StepStats {
         // map that is emptied and refilled once a second allocates for nothing.
         self.statuses.clear();
         self.assertion_failures.clear();
-        self.errors = [0; 10];
+        self.errors = [0; 11];
         self.total.reset();
         self.ttfb.reset();
     }
@@ -564,4 +568,23 @@ pub struct Window {
     pub scheduler_lag: Duration,
     pub scheduler_lag_samples: u64,
     pub metrics: Accumulator,
+    /// What auth cost over the run so far, when the plan has an `auth` block. Whole-
+    /// run totals rather than per-window deltas: acquisitions and refreshes are rare
+    /// enough that a window's worth of them is usually zero, and the question a
+    /// reader has is how much of this run was spent on tokens.
+    pub auth: Option<AuthCounts>,
+}
+
+/// What getting and keeping credentials has cost (§6.3).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AuthCounts {
+    pub identities: u64,
+    pub acquisitions: u64,
+    pub refreshes: u64,
+    pub failures: u64,
+    /// 401s from the target that caused a refresh.
+    pub unauthorized: u64,
+    pub refresh_us: u64,
+    /// Virtual-user time spent waiting on somebody else's refresh.
+    pub blocked_us: u64,
 }

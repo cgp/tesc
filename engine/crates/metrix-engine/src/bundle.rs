@@ -38,6 +38,9 @@ pub struct Plan {
     pub(crate) datasets: Arc<crate::dataset::Datasets>,
     /// Every generator the mix declares, compiled once and shared the same way.
     pub(crate) generators: Arc<crate::generate::Generators>,
+    /// The credential every request carries, and what keeps it fresh. `None` when the
+    /// plan declares no auth, which is not the same as `mode: none` costing nothing.
+    pub(crate) auth: Option<Arc<crate::auth::Auth>>,
     /// The run seed. Set from `--seed` rather than from the bundle: it names one run
     /// of the plan, not the plan, and it is what a replay is asked for.
     pub(crate) seed: u64,
@@ -126,7 +129,6 @@ impl Plan {
             mix.load.stages.is_empty() && mix.load.breakpoint.is_none(),
             "mix.json/load: stages and breakpoint are not implemented",
         )?;
-        require(mix.auth.is_none(), "mix.json: auth is not implemented")?;
         require(
             mix.slo.is_empty() && mix.observe.is_none(),
             "mix.json: SLOs and observation are not available in B1.2",
@@ -236,6 +238,28 @@ impl Plan {
         let datasets = Arc::new(crate::dataset::Datasets::load(&root, &mix)?);
         let generators = Arc::new(crate::generate::Generators::load(&root, &mix)?);
         let resolved = calls::resolve(&mix, &defined, &datasets, &generators, &target, &authority)?;
+        // Compiled against the same context a call is, because a login request is a
+        // call: same templates, same extractors, same refusals.
+        let auth = mix
+            .auth
+            .as_ref()
+            .map(|declared| {
+                crate::auth::Auth::compile(
+                    declared,
+                    concurrency,
+                    &calls::Context {
+                        defaults: &mix.defaults,
+                        body_max: mix.capture.body_max_kb as usize * 1024,
+                        datasets: &datasets,
+                        generators: &generators,
+                        target: &target,
+                        authority: &authority,
+                    },
+                )
+            })
+            .transpose()?
+            .flatten()
+            .map(Arc::new);
         unique_rows_suffice(&datasets, &resolved, rate, warmup + duration)?;
 
         let timeout = resolved.longest_timeout();
@@ -340,6 +364,7 @@ impl Plan {
             chains,
             datasets,
             generators,
+            auth,
             seed: 0,
             weights,
             rate,

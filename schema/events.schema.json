@@ -168,6 +168,57 @@
         "message"
       ]
     },
+    "AuthStats": {
+      "description": "What getting and keeping credentials has cost this run (§6.3).\n\nBeside the load metrics and never inside them: token traffic is infrastructure for\nthe test, and a throughput figure that counted calls to an identity provider would\nbe reporting a different system's numbers as the target's.",
+      "type": "object",
+      "properties": {
+        "acquisitions": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "blocked_ms": {
+          "description": "Virtual-user time spent blocked on somebody else's refresh. Reported apart\nfrom request latency, because it is the generator waiting and not the service.",
+          "type": "number",
+          "format": "double"
+        },
+        "failures": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "identities": {
+          "description": "How many tokens the run holds, which is what `identity` decided.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "refresh_ms": {
+          "type": "number",
+          "format": "double"
+        },
+        "refreshes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "unauthorized": {
+          "description": "401s from the target that caused a refresh.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "identities",
+        "acquisitions",
+        "refreshes",
+        "failures",
+        "unauthorized",
+        "refresh_ms",
+        "blocked_ms"
+      ]
+    },
     "ChainStats": {
       "type": "object",
       "properties": {
@@ -234,6 +285,11 @@
           "description": "The generator failed to build the request. Ours, not theirs.",
           "type": "string",
           "const": "generation"
+        },
+        {
+          "description": "The credential was rejected or could not be obtained. Apart from application\nerrors: a 401 storm is a different problem from a service returning 500s.",
+          "type": "string",
+          "const": "unauthorized"
         }
       ]
     },
@@ -266,6 +322,17 @@
       "description": "Self-metrics. Without these a run cannot be trusted, so they ride in every summary.",
       "type": "object",
       "properties": {
+        "auth": {
+          "description": "Present only when the plan has an `auth` block.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuthStats"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "cpu_pct": {
           "type": "number",
           "format": "double"

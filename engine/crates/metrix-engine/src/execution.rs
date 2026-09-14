@@ -44,6 +44,16 @@ pub(crate) async fn run(
         _ = &mut shutdown => { report.interrupted = true; return Ok(report); }
         started = Box::pin(plan.generators.start()) => started?,
     }
+    // Tokens before the clock too, and pre-warmed to the size `identity` implies: a
+    // token first fetched inside the measured window is a token fetch inside the
+    // measured window (§6.1).
+    if let Some(auth) = &plan.auth {
+        tokio::select! {
+            biased;
+            _ = &mut shutdown => { report.interrupted = true; return Ok(report); }
+            warmed = Box::pin(auth.warm()) => warmed?,
+        }
+    }
     let pool = tokio::select! {
         biased;
         _ = &mut shutdown => { report.interrupted = true; return Ok(report); }
@@ -156,6 +166,7 @@ pub(crate) async fn run(
                     warmup_interval: &mut warmup_interval,
                     lag: &mut lag,
                     phase,
+                    auth: plan.auth.as_ref().map(|auth| auth.snapshot()),
                 },
                 &mut interval_metrics,
                 &mut report,
@@ -195,7 +206,7 @@ pub(crate) async fn run(
                     if let Some(output) = output { output.cancel(slot.iteration, slot.phase, slot.chain, slot.admitted.elapsed()); }
                 } }
                 report.diagnostics.observe(start.elapsed(), active);
-                flush(Recording { slots: &mut slots, workers: &mut workers, warmup_workers: &mut warmup_workers, warmup_interval: &mut warmup_interval, lag: &mut lag, phase },
+                flush(Recording { slots: &mut slots, workers: &mut workers, warmup_workers: &mut warmup_workers, warmup_interval: &mut warmup_interval, lag: &mut lag, phase, auth: plan.auth.as_ref().map(|auth| auth.snapshot()) },
                     &mut interval_metrics, &mut report, &mut last_snapshot, start.elapsed(), 0, snapshots.as_ref());
                 if let Some(output) = output { output.summary(report.last_window.as_ref().expect("flushed window"), phase, &report.diagnostics, timeline.ready(Instant::now(), active) || report.interrupted, report.interrupted); }
                 break;
@@ -208,7 +219,7 @@ pub(crate) async fn run(
                 report.max_scheduler_lag = report.max_scheduler_lag.max(late);
                 report.scheduler_lag_samples += 1;
                 report.diagnostics.observe(start.elapsed(), active);
-                flush(Recording { slots: &mut slots, workers: &mut workers, warmup_workers: &mut warmup_workers, warmup_interval: &mut warmup_interval, lag: &mut lag, phase },
+                flush(Recording { slots: &mut slots, workers: &mut workers, warmup_workers: &mut warmup_workers, warmup_interval: &mut warmup_interval, lag: &mut lag, phase, auth: plan.auth.as_ref().map(|auth| auth.snapshot()) },
                     &mut interval_metrics, &mut report, &mut last_snapshot, start.elapsed(), active, snapshots.as_ref());
                 if let Some(output) = output { output.summary(report.last_window.as_ref().expect("flushed window"), phase, &report.diagnostics, timeline.ready(Instant::now(), active) || report.interrupted, report.interrupted); }
             }
@@ -246,7 +257,7 @@ pub(crate) async fn run(
                         error: observation
                             .error
                             .map(cause)
-                            .or(outcome.verdict.map(|_| metrix_metrics::aggregation::Cause::Assertion)),
+                            .or(outcome.verdict.map(chain::Verdict::cause)),
                         assertion: outcome.verdict.and_then(chain::Verdict::assertion),
                         bytes_sent: if observation.sent.is_some() { observation.bytes_sent } else { 0 },
                         bytes_received: observation.bytes_received,
@@ -309,7 +320,7 @@ pub(crate) async fn run(
                             // it is what the iteration generates its values from, so a
                             // job carrying the previous one would send that one's row.
                             slot.iteration = report.admitted;
-                            let future = chain::run(Some(chain::Job { lease, endpoint, chain: running, datasets: Arc::clone(&plan.datasets), generators: Arc::clone(&plan.generators), seed: plan.seed, iteration: slot.iteration, vu, scheduled, admitted, send_state: Arc::clone(&slot.send_state) }));
+                            let future = chain::run(Some(chain::Job { lease, endpoint, chain: running, datasets: Arc::clone(&plan.datasets), generators: Arc::clone(&plan.generators), auth: plan.auth.clone(), seed: plan.seed, iteration: slot.iteration, vu, scheduled, admitted, send_state: Arc::clone(&slot.send_state) }));
                             assert!(slot.future.try_set(future).is_ok(), "request future layout changed");
                             slot.active = true;
                             slot.worker = report.admitted as usize % workers.len();

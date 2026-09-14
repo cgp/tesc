@@ -21,13 +21,14 @@ pub mod common;
 pub mod mix;
 pub mod targets;
 
+pub use auth::{Auth, AuthMode, Identity, Inject, On401, Refresh, RefreshStrategy};
 pub use call::{Assertion, Call, CallFile, Condition, Generate};
 pub use common::{Dur, Method, Selector};
 pub use mix::{
     Chain, Corpus, Dataset, DatasetMode, Defaults, ExecProtocol, Generator, Load, LoadMode,
     LoadModel, Mix, OnFailure, Phases, RepeatUntil, SessionPolicy, Step,
 };
-pub use targets::{Target, Targets};
+pub use targets::{HttpVersion, Target, Targets, Tls};
 
 /// The statistical floor: 30s at 75 RPS. Supports p50 and p95 solidly, p99 coarsely
 /// (95% CI spans p98.6–p99.4), and does not support p99.9 at all. Validation warns

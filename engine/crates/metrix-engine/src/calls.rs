@@ -57,6 +57,15 @@ pub(crate) struct Reads {
 }
 
 impl Reads {
+    /// Everything, for a request whose whole answer is read: an auth response is
+    /// small, arrives rarely, and every part of it may be what the plan asked for.
+    pub fn all() -> Self {
+        Self {
+            body: true,
+            headers: true,
+        }
+    }
+
     /// What a polling selector needs kept.
     fn of(extractor: Option<&Extractor>) -> Self {
         match extractor {
@@ -79,6 +88,11 @@ pub(crate) fn transport_managed(name: &str) -> bool {
 }
 
 /// A request, ready to send.
+///
+/// `Clone` for one reason: a request that carries a credential has to be copied
+/// before it is stamped, because the compiled call is shared by every iteration and
+/// the token is not.
+#[derive(Clone)]
 pub(crate) struct Prepared {
     pub uri: Uri,
     pub headers: HeaderMap,
@@ -232,6 +246,34 @@ impl RequestTemplate {
             prepared.body = Bytes::from(body);
         }
         Ok(())
+    }
+
+    /// A request that is already finished, for the paths that do not come from a
+    /// call document: an auth round trip, and the tests that need a template without
+    /// a bundle behind it.
+    pub fn fixed(
+        method: Method,
+        uri: Uri,
+        headers: HeaderMap,
+        body: Bytes,
+        timeout: Duration,
+    ) -> Self {
+        Self {
+            method,
+            timeout,
+            body_max: 64 * 1024,
+            extract: Vec::new(),
+            assertions: Vec::new(),
+            reads: Reads::all(),
+            generate: None,
+            fixed: Some(Prepared { uri, headers, body }),
+            origin: String::new(),
+            path: Template::parse("auth", "/", &Datasets::default()).expect("a literal path"),
+            query: Vec::new(),
+            headers: Vec::new(),
+            host: HeaderValue::from_static("auth"),
+            body: Template::parse("auth", "", &Datasets::default()).expect("an empty body"),
+        }
     }
 
     /// One fixed request, for tests that need a template without a bundle.
@@ -500,7 +542,7 @@ pub(crate) struct Context<'a> {
 }
 
 /// One call into the request it will send.
-fn compile(
+pub(crate) fn compile(
     name: &str,
     call: &Call,
     reads: Reads,

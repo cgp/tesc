@@ -251,10 +251,47 @@ fn reference(at: &str, text: &str, datasets: &Datasets) -> Result<Segment, Strin
             "{at}: {text:?} is not a variable name, a dataset field or a call"
         ));
     }
+    if let Some(value) = ambient(at, text)? {
+        return Ok(Segment::Literal(value));
+    }
     match datasets.resolve(at, text)? {
         Some((dataset, column)) => Ok(Segment::Field { dataset, column }),
         None => Ok(Segment::Variable(text.to_owned())),
     }
+}
+
+/// `{{ env.NAME }}` and `{{ secret.NAME }}`, read from the process environment.
+///
+/// **Secrets never live in the plan** (design-engine §6.1): plans are machine-authored
+/// and end up committed, so a credential is handed to the process instead. `secret.`
+/// reads `METRIX_SECRET_<NAME>`, which keeps the two apart in the environment as well
+/// as in the plan — a bundle exported to a bare load box then says exactly which
+/// credentials it needs, by name, without carrying any of them.
+///
+/// Resolved once, here, into a literal. A value that does not change for the life of
+/// the run should not be looked up per request, and a plan whose credential is simply
+/// absent should fail before it sends anything rather than failing every request.
+fn ambient(at: &str, text: &str) -> Result<Option<String>, String> {
+    let (kind, name) = match text.split_once('.') {
+        Some(("env", name)) => ("env", name.to_owned()),
+        Some(("secret", name)) => ("secret", format!("METRIX_SECRET_{name}")),
+        _ => return Ok(None),
+    };
+    let bare = name.trim_start_matches("METRIX_SECRET_");
+    require_env_name(at, kind, bare)?;
+    match std::env::var(&name) {
+        Ok(value) => Ok(Some(value)),
+        Err(_) => Err(format!(
+            "{at}: {{{{ {kind}.{bare} }}}} is not set; the engine reads it from {name} in              its own environment, because a credential in a plan is a credential in a              repository"
+        )),
+    }
+}
+
+fn require_env_name(at: &str, kind: &str, name: &str) -> Result<(), String> {
+    if name.is_empty() || name.contains('.') {
+        return Err(format!("{at}: {kind}. must be followed by one name"));
+    }
+    Ok(())
 }
 
 fn function(at: &str, text: &str) -> Result<Segment, String> {
@@ -538,6 +575,35 @@ mod tests {
         assert!(parse("{{ rand(9,1) }}").is_err());
         assert!(parse("{{ uuid(3) }}").is_err());
         assert!(parse("{{ pick() }}").is_err());
+    }
+
+    /// A variable every process running these tests has, so the test needs no
+    /// `set_var` — which this workspace forbids, and which would be a race against
+    /// every other test thread reading the environment anyway.
+    const PRESENT: &str = if cfg!(windows) { "Path" } else { "PATH" };
+
+    #[test]
+    fn an_environment_value_is_read_once_and_becomes_part_of_the_text() {
+        let template = parse(&format!("/r/{{{{ env.{PRESENT} }}}}")).unwrap();
+        // A literal, not a variable: it does not change for the life of the run, so
+        // it should not cost a lookup per request.
+        assert!(template.is_fixed());
+        let rendered = render(&format!("/r/{{{{ env.{PRESENT} }}}}"), &[]).unwrap();
+        assert!(rendered.len() > "/r/".len(), "{rendered}");
+    }
+
+    #[test]
+    fn a_credential_that_is_not_there_stops_the_plan_rather_than_every_request() {
+        // Named by the variable the engine actually reads, so the operator knows what
+        // to set. `secret.` has its own prefix: a bundle then says which credentials
+        // it needs without carrying any of them.
+        let error = parse("{{ secret.NOT_SET_ANYWHERE_9F3A }}").unwrap_err();
+        assert!(
+            error.contains("METRIX_SECRET_NOT_SET_ANYWHERE_9F3A"),
+            "{error}"
+        );
+        let missing = parse("{{ env.NOT_SET_ANYWHERE_9F3A }}").unwrap_err();
+        assert!(missing.contains("NOT_SET_ANYWHERE_9F3A"), "{missing}");
     }
 
     #[test]

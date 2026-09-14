@@ -165,6 +165,20 @@ impl Datasets {
         &self.sets[index]
     }
 
+    /// A dataset by name, for the places that name one whole rather than a field of
+    /// it — `identity: from_dataset:users`.
+    pub fn index(&self, at: &str, name: &str) -> Result<usize, String> {
+        self.sets
+            .iter()
+            .position(|dataset| dataset.name == name)
+            .ok_or_else(|| {
+                format!(
+                    "{at}: no dataset named {name:?} is declared{}",
+                    listing(self.sets.iter().map(|dataset| dataset.name.as_str()))
+                )
+            })
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &Dataset> {
         self.sets.iter()
     }
