@@ -65,7 +65,21 @@ test("several notes are counted rather than listed", () => {
   const markup = view([
     recording({ worst: "warn", annotations_by_severity: { warn: 3, info: 1 } }),
   ]);
-  assert.match(markup, /warn\s*×4/);
+  // Three warnings, not four notes. A load run carries a routine info annotation
+  // per interval, and counting those in an orange badge asks somebody to act on a
+  // hundred observations that are working exactly as intended.
+  assert.match(markup, /warn\s*×3/);
+  assert.match(markup, /3 of 4 notes in all/);
+});
+
+test("a run whose only notes are routine is not dressed up as a problem", () => {
+  const markup = view([
+    recording({ worst: "info", annotations_by_severity: { info: 128 } }),
+  ]);
+  assert.match(markup, /bg-blue-lt/);
+  assert.match(markup, /info\s*×128/);
+  // Nothing to qualify: every note it carries is the severity on the badge.
+  assert.doesNotMatch(markup, /in all/);
 });
 
 test("a truncated list says how much of the archive it is showing", () => {

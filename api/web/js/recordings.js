@@ -3,6 +3,7 @@
 
 import {
   bytes,
+  count,
   duration,
   escape,
   metricChange,
@@ -130,18 +131,31 @@ export function render(state) {
   </div>`;
 }
 
-/** What a row says about itself before anyone opens it. */
+/**
+ * What a row says about itself before anyone opens it.
+ *
+ * The count is of the severity named, never of every note. A load run emits a
+ * routine info annotation per interval, so pairing the worst severity with the
+ * total read as "warn x139" on a run that carried eleven warnings and a hundred
+ * and twenty-eight ordinary observations -- a number nobody should act on, drawn
+ * in the colour that says act on it.
+ *
+ * The rest are not hidden: the whole breakdown is on the title, which is where a
+ * figure that is context rather than a finding belongs.
+ */
 function noteBadge(recording) {
   const counts = recording.annotations_by_severity ?? {};
   if (!recording.worst) return `<span class="text-secondary">clean</span>`;
   const tone = { invalid: "red", warn: "orange", info: "blue" }[recording.worst];
+  const worst = counts[recording.worst] ?? 0;
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   const title =
-    recording.worst === "invalid"
+    (recording.worst === "invalid"
       ? "Carries an invalid note: its numbers cannot be trusted, and it cannot become a baseline"
-      : "Carries notes worth reading before quoting anything from it";
+      : "Carries notes worth reading before quoting anything from it") +
+    (total > worst ? ` — ${worst} of ${count(total, "note")} in all` : "");
   return `<span class="badge bg-${tone}-lt" title="${escape(title)}"
-    >${escape(recording.worst)}${total > 1 ? ` ×${total}` : ""}</span>`;
+    >${escape(recording.worst)}${worst > 1 ? ` ×${worst}` : ""}</span>`;
 }
 
 function showing(state) {

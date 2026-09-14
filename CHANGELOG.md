@@ -564,3 +564,9 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - Clarified which reproducibility metadata the engine owns and which remains API recording metadata.
 - Completed B2.6; B3.1 separate call resolution is next.
 - Validation: full `bash scripts/check.sh` passed, including Rust checks and tests, standalone execution, API and frontend tests, generated schemas, and emitted NDJSON validation.
+
+## 2026-09-13 — The notes badge counts warnings, not notes.
+
+- **A row in the archive said `warn ×139` about a run carrying eleven warnings.** The badge paired the worst severity with the total count, which was harmless while a recording carried three notes and became a lie the moment the B2 engine started emitting a routine info annotation per interval: a hundred and twenty-eight ordinary observations, drawn in the colour that means act on this.
+- It now counts the severity it names. The rest of the breakdown moved to the title, which is where a figure that is context rather than a finding belongs.
+- Found by merging the engine track and looking at the first real run through it, not by a test — the test that existed asserted the wrong number, because it was written when three notes and three warnings were the same thing.
