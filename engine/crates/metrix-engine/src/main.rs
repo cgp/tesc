@@ -30,6 +30,13 @@ struct Args {
     /// Fraction of request events retained; summaries always include every observation.
     #[arg(long, default_value_t = 1.0)]
     sample_rate: f64,
+    /// Run one chain of the mixture on its own, at the whole rate.
+    ///
+    /// For working on a plan rather than measuring with one: a chain at 3% sends a
+    /// request every few seconds, and finding out whether its extraction works
+    /// should not take four minutes.
+    #[arg(long)]
+    chain: Option<String>,
     /// Deterministic request-event sampling seed.
     #[arg(long, default_value_t = 0)]
     seed: u64,
@@ -109,6 +116,9 @@ fn execute(args: Args) -> Result<ExitCode, String> {
     // which dataset row an iteration reads, what `uuid()` returns -- comes from it,
     // so a run can be replayed as the same workload.
     plan.set_seed(args.seed);
+    if let Some(chain) = &args.chain {
+        plan.only_chain(chain)?;
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(plan.worker_threads)
         .thread_stack_size(SCHEDULER_STACK)

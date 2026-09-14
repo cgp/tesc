@@ -86,7 +86,7 @@ impl Datasets {
     pub fn load(root: &Path, mix: &Mix) -> Result<Self, String> {
         let mut sets = Vec::new();
         for (name, spec) in &mix.datasets {
-            let at = format!("mix.json/datasets/{name}");
+            let at = format!("mix.json#/datasets/{name}");
             require(
                 !name.is_empty() && !name.contains('.'),
                 &format!(

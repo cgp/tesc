@@ -14,14 +14,14 @@ pub(crate) struct Schedule {
 impl Schedule {
     pub fn validate(rate: f64, duration: Duration) -> Result<(), String> {
         if !rate.is_finite() || rate <= 0.0 || rate > 1e9 {
-            return Err("mix.json/load/rate: must be finite, positive, and at most one arrival per nanosecond".into());
+            return Err("mix.json#/load/rate: must be finite, positive, and at most one arrival per nanosecond".into());
         }
         if duration.is_zero()
             || Instant::now().checked_add(duration).is_none()
             || duration.as_secs_f64() * rate > (1_u64 << 53) as f64
         {
             return Err(
-                "mix.json/load: duration must be positive and the schedule representable".into(),
+                "mix.json#/load: duration must be positive and the schedule representable".into(),
             );
         }
         Ok(())

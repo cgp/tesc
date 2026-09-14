@@ -42,6 +42,10 @@ pub struct Plan {
     pub(crate) samples: Arc<crate::samples::Samples>,
     /// What each chain's virtual users carry between requests, in chain order.
     pub(crate) sessions: crate::session::PerChain,
+    /// Each chain's declared policy, kept so `--chain` can rebuild one set.
+    chain_sessions: Vec<(SessionPolicy, Option<u32>)>,
+    /// Set when the run was narrowed to one chain, so the output can say so.
+    only: Option<String>,
     /// The credential every request carries, and what keeps it fresh. `None` when the
     /// plan declares no auth, which is not the same as `mode: none` costing nothing.
     pub(crate) auth: Option<Arc<crate::auth::Auth>>,
@@ -100,6 +104,44 @@ impl Plan {
         Self::load_inner(root, true)
     }
 
+    /// Run one chain of the mixture on its own.
+    ///
+    /// For working on a plan rather than measuring with one: a chain at 3% of the
+    /// rate sends a request every few seconds, and finding out whether its extraction
+    /// works should not take four minutes. The chain runs at the whole rate, and the
+    /// run says which chain it was — the numbers are about that chain and not about
+    /// the mixture, and a report that did not say so would be a mixture nobody wrote.
+    pub fn only_chain(&mut self, name: &str) -> Result<(), String> {
+        let index = self
+            .chains
+            .iter()
+            .position(|chain| chain.name == name)
+            .ok_or_else(|| {
+                format!(
+                    "--chain: no chain named {name:?}; the mixture has {}",
+                    self.chains
+                        .iter()
+                        .map(|chain| chain.name)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?;
+        self.chains = vec![Arc::clone(&self.chains[index])];
+        self.weights = vec![PERCENT_TOTAL];
+        self.sessions = Arc::new(vec![crate::session::Sessions::new(
+            self.chain_sessions[index].0,
+            self.concurrency,
+            self.chain_sessions[index].1,
+        )]);
+        self.only = Some(name.to_owned());
+        Ok(())
+    }
+
+    /// The chain this run was narrowed to, if it was.
+    pub fn narrowed_to(&self) -> Option<&str> {
+        self.only.as_deref()
+    }
+
     /// The seed every generated value in the run comes from.
     ///
     /// Not part of the bundle: the bundle is the plan and the seed names one run of
@@ -123,27 +165,27 @@ impl Plan {
         let targets: Targets = read(&root, Path::new("targets.json"), &mut documents)?;
         require(
             mix.version == 1,
-            "mix.json/version: only version 1 is supported",
+            "mix.json#/version: only version 1 is supported",
         )?;
         require(
             mix.load.mode == LoadMode::Fixed && mix.load.model == LoadModel::Open,
-            "mix.json/load: B1.2 requires fixed, open-model load",
+            "mix.json#/load: B1.2 requires fixed, open-model load",
         )?;
         require(
             mix.load.stages.is_empty() && mix.load.breakpoint.is_none(),
-            "mix.json/load: stages and breakpoint are not implemented",
+            "mix.json#/load: stages and breakpoint are not implemented",
         )?;
         require(
             mix.slo.is_empty() && mix.observe.is_none(),
-            "mix.json: SLOs and observation are not available in B1.2",
+            "mix.json#/slo: SLOs and observation are not available in B1.2",
         )?;
         require(
             mix.defaults.follow_redirects != Some(true),
-            "mix.json/defaults/follow_redirects: redirects are not implemented",
+            "mix.json#/defaults/follow_redirects: redirects are not implemented",
         )?;
         require(
             mix.engine.pin_cores != Some(true),
-            "mix.json/engine/pin_cores: core pinning is not implemented",
+            "mix.json#/engine/pin_cores: core pinning is not implemented",
         )?;
         require(
             targets.list.len() == 1 && targets.gap.is_none_or(|d| d.is_zero()),
@@ -152,35 +194,35 @@ impl Plan {
         let target = targets.list.into_iter().next().expect("checked length");
         require(
             !target.id.is_empty(),
-            "targets.json/list/0/id: must not be empty",
+            "targets.json#/list/0/id: must not be empty",
         )?;
         require(
             target.host_header.is_none()
                 && target.tls.sni.is_none()
                 && !target.tls.insecure_skip_verify,
-            "targets.json/list/0: Host/SNI overrides and insecure TLS are not implemented (B4.2)",
+            "targets.json#/list/0: Host/SNI overrides and insecure TLS are not implemented (B4.2)",
         )?;
         let authority: hyper::http::uri::Authority = target
             .address
             .parse()
-            .map_err(|_| "targets.json/list/0/address: expected host:port or [IPv6]:port")?;
+            .map_err(|_| "targets.json#/list/0/address: expected host:port or [IPv6]:port")?;
         require(
             authority.port_u16().is_some_and(|p| p > 0)
                 && !authority.host().is_empty()
                 && !target.address.contains('@'),
-            "targets.json/list/0/address: expected host:port or [IPv6]:port",
+            "targets.json#/list/0/address: expected host:port or [IPv6]:port",
         )?;
         let rate = mix
             .load
             .rate
-            .ok_or("mix.json/load/rate: required for fixed load")?;
+            .ok_or("mix.json#/load/rate: required for fixed load")?;
         let duration = mix.load.duration.as_duration();
         Schedule::validate(rate, duration)?;
         let tolerance = mix.engine.rate_tolerance_pct.unwrap_or(2);
         let explicit_drift = mix.engine.send_drift_threshold_ms;
         require(
             tolerance < 100 && explicit_drift.is_none_or(|ms| (1..=3_600_000).contains(&ms)),
-            "mix.json/engine: detector tolerance must be 0..99 and drift threshold 1..3600000ms",
+            "mix.json#/engine: detector tolerance must be 0..99 and drift threshold 1..3600000ms",
         )?;
         let detector_config = crate::DetectorConfig {
             rate_tolerance_pct: tolerance,
@@ -200,16 +242,16 @@ impl Plan {
             .checked_add(warmup)
             .and_then(|d| d.checked_add(duration))
             .and_then(|d| d.checked_add(settle))
-            .ok_or("mix.json/phases: timeline duration is not representable")?;
+            .ok_or("mix.json#/phases: timeline duration is not representable")?;
         require(
             std::time::Instant::now().checked_add(span).is_some(),
-            "mix.json/phases: timeline duration is not representable",
+            "mix.json#/phases: timeline duration is not representable",
         )?;
         let concurrency = mix.load.max_concurrency.unwrap_or(200) as usize;
         let connections = mix.engine.connections_per_host.unwrap_or(256) as usize;
         require(
             concurrency > 0 && connections > 0,
-            "mix.json: max_concurrency and connections_per_host must be positive",
+            "mix.json#/load/max_concurrency: max_concurrency and connections_per_host must be positive",
         )?;
         let worker_threads = mix
             .engine
@@ -217,19 +259,25 @@ impl Plan {
             .unwrap_or_else(|| num_cpus::get_physical().saturating_sub(1).max(1));
         require(
             worker_threads > 0,
-            "mix.json/engine/worker_threads: must be positive",
+            "mix.json#/engine/worker_threads: must be positive",
         )?;
-        let mut defined: BTreeMap<String, Call> = BTreeMap::new();
+        // Each call remembers which file it came from, so an error about it names the
+        // file to open rather than only the call. A bundle can hold a dozen call
+        // files, and `call "create-order"/path` says nothing about where that is.
+        let mut defined: BTreeMap<String, (String, Call)> = BTreeMap::new();
         for file in &mix.calls {
+            let where_from = file.to_string_lossy().replace('\\', "/");
             for (name, call) in read::<CallFile>(&root, file, &mut documents)? {
                 require(
                     !name.is_empty(),
-                    "mix.json/calls: a call name must not be empty",
+                    "mix.json#/calls: a call name must not be empty",
                 )?;
                 require(
-                    defined.insert(name.clone(), call).is_none(),
+                    defined
+                        .insert(name.clone(), (where_from.clone(), call))
+                        .is_none(),
                     &format!(
-                        "mix.json/calls: {name:?} is defined in more than one file; a step \
+                        "mix.json#/calls: {name:?} is defined in more than one file; a step \
                          naming it could not say which"
                     ),
                 )?;
@@ -275,7 +323,7 @@ impl Plan {
         require(
             (total - PERCENT_TOTAL).abs() <= PERCENT_EPSILON,
             &format!(
-                "mix.json/chains: the percentages total {total:.4}, which is {:.4} {} 100",
+                "mix.json#/chains: the percentages total {total:.4}, which is {:.4} {} 100",
                 (PERCENT_TOTAL - total).abs(),
                 if total < PERCENT_TOTAL {
                     "short of"
@@ -289,25 +337,27 @@ impl Plan {
             require(
                 chain.percent > 0.0,
                 &format!(
-                    "mix.json/chains/{index}/percent: a chain at {} never runs; remove it, or give it a share of the traffic",
+                    "mix.json#/chains/{index}/percent: a chain at {} never runs; remove it, or give it a share of the traffic",
                     chain.percent
                 ),
             )?;
             require(
                 chain.session != SessionPolicy::Pool || chain.pool_size.is_some_and(|n| n > 0),
                 &format!(
-                    "mix.json/chains/{index}/pool_size: a pooled chain needs a population                      size; without one the pool is one session and the policy is `reuse`"
+                    "mix.json#/chains/{index}/pool_size: a pooled chain needs a population                      size; without one the pool is one session and the policy is `reuse`"
                 ),
             )?;
             require(
                 chain.session == SessionPolicy::Pool || chain.pool_size.is_none(),
-                &format!("mix.json/chains/{index}/pool_size: only a pooled chain has a population"),
+                &format!(
+                    "mix.json#/chains/{index}/pool_size: only a pooled chain has a population"
+                ),
             )?;
             for (position, written) in mix.chains[index].steps.iter().enumerate() {
                 require(
                     written.overrides.is_none() && written.delay_ms.is_none(),
                     &format!(
-                        "mix.json/chains/{index}/steps/{position}: step overrides and think time are not implemented"
+                        "mix.json#/chains/{index}/steps/{position}: step overrides and think time are not implemented"
                     ),
                 )?;
             }
@@ -324,6 +374,11 @@ impl Plan {
             &mix.capture.redact,
             mix.capture.body_max_kb as usize * 1024,
         ));
+        let chain_sessions: Vec<(SessionPolicy, Option<u32>)> = resolved
+            .chains
+            .iter()
+            .map(|chain| (chain.session, chain.pool_size))
+            .collect();
         let sessions: crate::session::PerChain = Arc::new(
             resolved
                 .chains
@@ -358,7 +413,7 @@ impl Plan {
             span.checked_add(timeout)
                 .and_then(|d| std::time::Instant::now().checked_add(d))
                 .is_some(),
-            "mix.json/phases: timeline duration including drain is not representable",
+            "mix.json#/phases: timeline duration including drain is not representable",
         )?;
         let calibration_shape = crate::calibration::Shape {
             request_body_bytes: calibration_body_bytes(&chains),
@@ -381,7 +436,7 @@ impl Plan {
         let allow_generator_limited = mix.engine.allow_generator_limited.unwrap_or(false);
         require(
             headroom_ratio.is_none_or(|ratio| ratio <= 0.9 || allow_generator_limited),
-            "mix.json/load/rate: exceeds 90% of the calibrated generator ceiling; set engine/allow_generator_limited to true to run with an invalid annotation",
+            "mix.json#/load/rate: exceeds 90% of the calibrated generator ceiling; set engine/allow_generator_limited to true to run with an invalid annotation",
         )?;
         Ok(Self {
             root,
@@ -393,6 +448,8 @@ impl Plan {
             generators,
             samples,
             sessions,
+            chain_sessions,
+            only: None,
             auth,
             seed: 0,
             weights,
@@ -450,7 +507,7 @@ fn unique_rows_suffice(
         require(
             dataset.rows() as u64 >= needed,
             &format!(
-                "mix.json/datasets/{}: unique_per_iteration needs one row per iteration                  and this run starts {needed} of the chains that read it, but the file                  holds {} rows",
+                "mix.json#/datasets/{}: unique_per_iteration needs one row per iteration                  and this run starts {needed} of the chains that read it, but the file                  holds {} rows",
                 dataset.name(),
                 dataset.rows()
             ),

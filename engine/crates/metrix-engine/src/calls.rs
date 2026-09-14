@@ -422,7 +422,7 @@ impl Resolved {
 /// Read the mixture's chains and compile every call they name.
 pub(crate) fn resolve(
     mix: &Mix,
-    defined: &BTreeMap<String, Call>,
+    defined: &BTreeMap<String, (String, Call)>,
     datasets: &Datasets,
     generators: &Generators,
     target: &Target,
@@ -442,7 +442,7 @@ pub(crate) fn resolve(
     let mut compiled: BTreeMap<(String, Reads), Arc<RequestTemplate>> = BTreeMap::new();
 
     for (index, chain) in mix.chains.iter().enumerate() {
-        let at = format!("mix.json/chains/{index}");
+        let at = format!("mix.json#/chains/{index}");
         require(
             !chain.name.is_empty(),
             &format!("{at}/name: must not be empty"),
@@ -486,8 +486,9 @@ pub(crate) fn resolve(
             let request = match compiled.get(&key) {
                 Some(request) => Arc::clone(request),
                 None => {
-                    let request =
-                        Arc::new(compile(&step.call, &defined[&step.call], reads, &context)?);
+                    let (file, call) = &defined[&step.call];
+                    let at = format!("{file}#/{}", pointer(&step.call));
+                    let request = Arc::new(compile(&at, call, reads, &context)?);
                     compiled.insert(key, Arc::clone(&request));
                     request
                 }
@@ -545,7 +546,7 @@ fn check_bindings(chains: &[Chain]) -> Result<(), String> {
                 require(
                     available.contains(&name),
                     &format!(
-                        "mix.json/chains/{index}/steps/{position}: {{{{ {name} }}}} is read \
+                        "mix.json#/chains/{index}/steps/{position}: {{{{ {name} }}}} is read \
                          here and no earlier step of chain {:?} extracts it",
                         chain.name
                     ),
@@ -568,9 +569,16 @@ pub(crate) struct Context<'a> {
     pub authority: &'a Authority,
 }
 
-/// One call into the request it will send.
+/// A name as one JSON Pointer token: `~` and `/` are the two characters a pointer
+/// cannot hold literally (RFC 6901), and a call may be named anything.
+pub(crate) fn pointer(token: &str) -> String {
+    token.replace('~', "~0").replace('/', "~1")
+}
+
+/// One call into the request it will send. `at` is the file and pointer it came from,
+/// so every error below names somewhere a reader can open.
 pub(crate) fn compile(
-    name: &str,
+    at: &str,
     call: &Call,
     reads: Reads,
     context: &Context<'_>,
@@ -583,7 +591,6 @@ pub(crate) fn compile(
         target,
         authority,
     } = *context;
-    let at = format!("call {name:?}");
 
     let body = Template::parse(
         &format!("{at}/body"),

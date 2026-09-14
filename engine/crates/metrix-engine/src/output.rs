@@ -227,6 +227,24 @@ impl Output {
             index: 1,
             total: 1,
         }));
+        if let Some(chain) = plan.narrowed_to() {
+            // Said out loud, because a run of one chain out of six is not a run of
+            // the mixture, and a stored run that did not say so would be compared
+            // against ones that were.
+            output.lifecycle(Record::Annotation(Annotation {
+                t_ms: 0,
+                target_id: None,
+                code: "single_chain".into(),
+                severity: Severity::Invalid,
+                phase: None,
+                from_ms: 0,
+                to_ms: None,
+                message: format!(
+                    "--chain ran {chain:?} alone at the whole rate. These numbers are about                      that chain and not about the mixture the plan declares."
+                ),
+                detail: Some(serde_json::json!({"chain": chain})),
+            }));
+        }
         output.lifecycle(Record::Annotation(Annotation {
             t_ms: 0, target_id: None, code: "self_metrics_unavailable".into(), severity: Severity::Info,
             phase: None, from_ms: 0, to_ms: None,

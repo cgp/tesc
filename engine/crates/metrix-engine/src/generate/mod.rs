@@ -114,7 +114,7 @@ impl Generators {
         let mut names = Vec::new();
         let mut generators = Vec::new();
         for (name, declared) in &mix.generators {
-            let at = format!("mix.json/generators/{name}");
+            let at = format!("mix.json#/generators/{name}");
             require(!name.is_empty(), &format!("{at}: an empty generator name"))?;
             generators.push(match declared {
                 Declared::Lua {

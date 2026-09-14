@@ -139,7 +139,7 @@ impl Auth {
         concurrency: usize,
         context: &Context<'_>,
     ) -> Result<Option<Self>, String> {
-        let at = "mix.json/auth";
+        let at = "mix.json#/auth";
         if matches!(declared.mode, AuthMode::None) {
             return Ok(None);
         }
@@ -210,13 +210,16 @@ impl Auth {
             let pool = Pool::prepare(target, 1, TOKEN_TIMEOUT)
                 .await
                 .map_err(|error| {
-                    format!("mix.json/auth: cannot reach {} — {error:?}", target.address)
+                    format!(
+                        "mix.json#/auth: cannot reach {} — {error:?}",
+                        target.address
+                    )
                 })?;
             *self.pool.lock().await = Some(pool);
         }
         for index in 0..self.slots.len() {
             self.acquire(index, None).await.map_err(|error| {
-                format!("mix.json/auth: cannot get a token before the run starts — {error}")
+                format!("mix.json#/auth: cannot get a token before the run starts — {error}")
             })?;
         }
         Ok(())
@@ -571,8 +574,12 @@ fn compile_mode(
         }
         AuthMode::LoginRequest { request, extract } => {
             let at = format!("{at}/mode");
-            let compiled =
-                crate::calls::compile("auth login", request, crate::calls::Reads::all(), context)?;
+            let compiled = crate::calls::compile(
+                &format!("{at}/request"),
+                request,
+                crate::calls::Reads::all(),
+                context,
+            )?;
             let token = extract
                 .get("token")
                 .ok_or_else(|| {
