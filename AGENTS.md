@@ -11,7 +11,7 @@ Load generator with machine-authored test plans, plus host observation. Rust eng
 | `docs/design-engine.md` | Load generation and measurement |
 | `docs/profiles.md` | User-facing: how to write a profile. The only doc aimed outward. |
 | `docs/implementation-api.md` | Track A checklist — **complete**, A4's "done when" included |
-| `docs/implementation-engine.md` | Track B checklist — B1 and B2 complete, **B3.1 next** |
+| `docs/implementation-engine.md` | Track B checklist — B1–B3 complete, **B4.1 next** |
 | `CHANGELOG.md` | Running work log. Append, never consult. |
 
 Section numbers (§N) are shared across the three design docs and are not contiguous within any one file.

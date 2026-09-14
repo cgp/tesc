@@ -616,3 +616,109 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - **Verified end to end against the real binary**: one POST, and a finished `load` recording carrying its plan hash, engine version, exit 0, all five phases on the recording's clock (baseline 44–2071ms through settle 10126–12156ms), and its chain and step rows — then the same thing again through the browser's Run button.
 - Verified: `scripts/check.sh` all green — 644 passed, 1 skipped, 168 front-end tests.
 - **A4's "done when" is met**: a run launched from the browser shows load and host metrics against one clock. The A track is complete.
+
+## 2026-09-14 — Calls, chains, and the mixture. The B3 track.
+
+- **A step is judged by what came back, not only by whether something did.** `assert`
+  says what the answer had to look like and the first assertion that does not hold is
+  reported by its index in the call — declarative and enumerable, because an
+  expression language turns a failed assertion into a debugging session about the
+  expression. A failed assertion is not a transport failure: the request happened and
+  the service answered, and the two are counted apart for the same reason aborted
+  chains are counted apart from failed requests. That is also what makes a
+  deliberately-failing chain work, where a step asserting 401 passes when it gets one.
+- **`repeat_until` that gives up is a step that failed.** A poll that exhausted its
+  attempts has not seen the job finish, and counting that as a success reports a
+  service completing nothing as healthy. The waiting between attempts stays out of
+  request latency and lands in the chain's end-to-end duration.
+- **Writing that test found a bug in capture**: a polling step never kept the body it
+  polled, because capture was decided by the call and the selector belongs to the
+  step. Every poll read nothing, found nothing, and ran to its ceiling against a
+  service that had answered correctly first time.
+- **Traffic varies from a file and from a fixed function set.** `{{ users.email }}` is
+  a dataset field, `{{ uuid() }}` a generator call, `{{ order_id }}` a chain variable
+  — told apart by shape, all resolved when the plan compiles, so a misspelled column
+  or an unknown function is a load error naming what the file does have. Which row an
+  iteration reads is a pure function of the iteration number and the seed: no cursor,
+  nothing shared between workers, which is what makes `round_robin` round robin rather
+  than round robin per worker. `unique_per_iteration` is checked against the
+  arithmetic of the run and refused with both numbers, because wrapping quietly would
+  take away the one thing that mode is for.
+- **Generated values are keyed per iteration, not per virtual user.** Which VU picks
+  up an arrival depends on how long the service took to answer the one before it, so a
+  per-VU stream replays differently against a service that has since got slower.
+  Iteration 4,001 now generates the same request in every run of the plan, which is
+  the property a recorded seed exists for.
+- **Three generation tiers behind one interface.** Lua is the default: one VM per
+  worker thread in a thread local, never behind a lock, standard libraries chosen
+  rather than pruned so `io`, `package` and `debug` are never opened at all. The
+  plugin tier is its registry and ships empty. The exec sidecar keeps a pool of
+  processes speaking one JSON object per line, started before the arrival clock and
+  before the target — a plan whose own script will not start is the plan's problem,
+  and an unreachable target must not be reported instead.
+- **A generator attaches to the call, not to its body.** The hook returns the whole
+  request, and a `body` block that can set the path is a field lying about what it
+  does. Arguments are templated, so a script is handed `{{ users.email }}` without
+  ever learning that datasets exist.
+- **Generation is measured as generation**, in its own per-generator histogram rather
+  than inside the step's latency — a slow script folded into response time reads as a
+  slow endpoint. Failure is its own class for the same reason: nothing was sent.
+- **`prefetch` is refused with its reason rather than approximated.** A buffered
+  request carries the dataset row, the sequence number and the draws of the iteration
+  it was built for; handing it to a later one makes the run unreplayable.
+- **A script can read a corpus without reading the machine.** The declared directory is
+  held in memory before the clock starts and handed to each VM as Lua strings built
+  once — a `read` per request would allocate a payload's worth on the hot path, which
+  is the cost loading once exists to avoid. Read-only, because a VM outlives the
+  iteration that used it.
+- **Auth is a first-class block and none of it is load.** Token calls go out over their
+  own pool, a separate one even for `login_request` against the target itself, because
+  a login that borrowed a connection would spend capacity the load was given. Tokens
+  are pre-warmed to the size `identity` implies, before the clock.
+- **Refresh is single-flight, and the detail that makes it work is which token a caller
+  says was rejected.** Passing the one it actually sent — rather than whatever is
+  current by the time it asks — means the stragglers still carrying the old credential
+  find the new one and take it. Seventeen rejections now cost one refresh; reading the
+  current value cost two, and the naive version costs seventeen and produces a spike
+  that reads as the target degrading.
+- **A session is the cookie jar plus the auth identity, and they move together.** A
+  fresh session that reused a token would not be fresh in any way the service can
+  tell, so the identity is chosen by the session rather than by the slot running it.
+  `fresh` overstates login load and destroys cache locality, `reuse` hides both, and
+  the gap between those two mistakes is easily a factor of two in apparent capacity.
+- **The first few failures are kept in full, per class.** One flood of
+  connection-refused would otherwise evict the single 500 that explains the problem.
+  The budget is checked before a body is buffered, from the status line, so a broken
+  run producing errors by the thousand stops keeping them. What counts as worth
+  sampling lives in one place now — the chain and the scheduler had disagreed, and
+  every sample of the commonest failure there is came out with an empty request.
+- **Secrets are redacted by value, not only by name.** The engine remembers the literal
+  value of every `{{ secret.X }}` it resolved and removes it wherever it appears;
+  redaction covering only the names somebody remembered to list is a promise rather
+  than a mechanism.
+- **Every load error is `<file>#<json-pointer>: <message>`.** Calls used to say
+  `call "create-order"/path`, which names the call and not the file, and a bundle can
+  hold a dozen call files. The pointer points at what is wrong rather than what was
+  edited: a percentage total is a property of `/chains`, a chain that never runs is a
+  property of `/chains/1/percent`.
+- **`--chain` runs one chain alone at the whole rate**, and annotates the run as
+  narrowed: a run of one chain out of six is not a run of the mixture, and a stored run
+  that did not say so would sit beside runs that were.
+- **The engine was one HTTP/2 send path away from overflowing the main thread's
+  megabyte.** The scheduler is a single state machine owning preallocated accumulators
+  and polling a chain iteration inline, so it now runs on a thread whose stack this run
+  asked for rather than the one the linker chose.
+- **The API's readiness check treated a generator name as a template prefix**, which
+  would have called a plan ready that the engine refuses to load.
+- **The example bundle had never been finished**: `gen/order.lua` and `data/users.csv`
+  were named and absent, and `cart-add` read a variable only another chain extracts.
+  Both fixed; the second was caught by the new pointer errors.
+- Verified: `scripts/check.sh` all green — 244 engine tests, 644 API passed with 1
+  skipped, 168 front-end tests.
+- **B3's eleven items are all ticked and its "done when" is met in substance**: one
+  test runs the example's six chains, its XML and JSON, its extraction, its Lua
+  generator, OAuth with a mid-run refresh, and its 401-as-a-pass chain together. The
+  committed bundle still does not load, for three reasons that all belong to B4 — two
+  targets with `shuffle` and a `gap`, a `host_header`, and an `slo` block. It is aimed
+  at fictional ECS tasks and could never have run offline. Recorded here rather than
+  ticked past.
