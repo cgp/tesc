@@ -22,8 +22,10 @@ use crate::assertions;
 use crate::calls::RequestTemplate;
 use crate::dataset::Datasets;
 use crate::extract::{self, Extractor};
+use crate::generate::{self, Generators};
 use crate::http::{Endpoint, Lease, Observation, SendState, Timing, send};
 use crate::template::{Scope, Unbound, Values};
+use metrix_metrics::aggregation::Cause;
 use metrix_plan::OnFailure;
 
 /// One step, ready to run.
@@ -71,10 +73,15 @@ pub(crate) struct Job {
     /// Every dataset the plan declares, read once at load and shared by every
     /// iteration for the life of the run.
     pub datasets: Arc<Datasets>,
+    /// Every generator the plan declares, started before the arrival clock did.
+    pub generators: Arc<Generators>,
     /// The run seed, recorded in the run's identity. Together with the iteration
     /// number it decides every generated value this iteration sends.
     pub seed: u64,
     pub iteration: u64,
+    /// Which virtual user this iteration is, for a generator that wants to model one
+    /// person doing several things.
+    pub vu: usize,
     pub scheduled: Instant,
     pub admitted: Instant,
     pub send_state: Arc<SendState>,
@@ -121,6 +128,18 @@ pub(crate) enum Stopped {
     /// not captured, and reporting it as a transport error would point at the
     /// service.
     Unbound { index: usize, variable: String },
+    /// A generator could not build the request (§7.3). Also nothing sent, and also
+    /// ours rather than theirs -- but a different class, because a plan's own script
+    /// failing is not the same problem as a plan referring to a value it never took.
+    Generation { index: usize, reason: String },
+}
+
+/// How one generator call went, carried out so the caller can record it against the
+/// run's own health rather than against the service.
+pub(crate) struct Generated {
+    pub generator: &'static str,
+    pub took: Duration,
+    pub failed: bool,
 }
 
 pub(crate) struct Completion {
@@ -137,6 +156,8 @@ pub(crate) struct Completion {
     /// nothing in a truncated document may have been looking past the cut.
     pub truncated: bool,
     pub stopped: Option<Stopped>,
+    /// Every generator call this iteration made, in order.
+    pub generated: Vec<Generated>,
 }
 
 impl Completion {
@@ -144,16 +165,24 @@ impl Completion {
         self.stopped.is_some()
     }
 
-    /// The step that could not be built, and the variable it wanted.
+    /// The step that could not be built, why, and the class it is counted under.
     ///
     /// Reported against that step rather than as a run-wide note: the step was
-    /// attempted and did not happen, which is exactly what a step's own failure
-    /// count is for, and `extraction` is the class the frozen schema keeps for it.
-    pub fn unbound(&self) -> Option<(&'static str, &str)> {
+    /// attempted and did not happen, which is exactly what a step's own failure count
+    /// is for. Two classes, because a plan referring to a value it never captured and
+    /// a plan's own script failing are different problems to go and fix.
+    pub fn not_sent(&self) -> Option<(&'static str, Cause, &str)> {
         match &self.stopped {
-            Some(Stopped::Unbound { index, variable }) => {
-                Some((self.chain.steps[*index].id, variable.as_str()))
-            }
+            Some(Stopped::Unbound { index, variable }) => Some((
+                self.chain.steps[*index].id,
+                Cause::Extraction,
+                variable.as_str(),
+            )),
+            Some(Stopped::Generation { index, reason }) => Some((
+                self.chain.steps[*index].id,
+                Cause::Generation,
+                reason.as_str(),
+            )),
             _ => None,
         }
     }
@@ -219,6 +248,7 @@ pub(crate) async fn run(job: Option<Job>) -> Completion {
     let mut steps = Vec::with_capacity(job.chain.steps.len());
     let mut stopped = None;
     let mut truncated = false;
+    let mut generated = Vec::new();
 
     for (index, step) in job.chain.steps.iter().enumerate() {
         let mut attempts = 0;
@@ -233,10 +263,14 @@ pub(crate) async fn run(job: Option<Job>) -> Completion {
             records_drift: first,
         };
 
-        let rendered = match render(step, &scope, &job) {
+        let rendered = match build(step, &scope, &job, &mut generated).await {
             Ok(rendered) => rendered,
-            Err(Unbound(variable)) => {
+            Err(Refused::Unbound(variable)) => {
                 stopped = Some(Stopped::Unbound { index, variable });
+                break;
+            }
+            Err(Refused::Generation(reason)) => {
+                stopped = Some(Stopped::Generation { index, reason });
                 break;
             }
         };
@@ -326,7 +360,14 @@ pub(crate) async fn run(job: Option<Job>) -> Completion {
         steps,
         truncated,
         stopped,
+        generated,
     }
+}
+
+/// Why a request could not be built at all, so none was sent.
+enum Refused {
+    Unbound(String),
+    Generation(String),
 }
 
 /// Whether this answer said the work is done.
@@ -375,16 +416,82 @@ fn judge(step: &Step, observation: &Observation) -> Option<usize> {
 /// draws the same stream from the start. Two steps posting `{{ uuid() }}` therefore
 /// send the same id, which is what a chain creating a resource and then reading it
 /// back needs — and a replay of the plan sends it again.
-fn render(
+async fn build(
     step: &Step,
     scope: &Scope,
     job: &Job,
-) -> Result<Option<crate::calls::Prepared>, Unbound> {
-    if step.request.prepared().is_some() {
-        return Ok(None);
-    }
+    generated: &mut Vec<Generated>,
+) -> Result<Option<crate::calls::Prepared>, Refused> {
+    let Some(declared) = step.request.generate.as_ref() else {
+        if step.request.prepared().is_some() {
+            return Ok(None);
+        }
+        let mut values = Values::new(scope, &job.datasets, job.seed, job.iteration);
+        return step
+            .request
+            .render(&mut values)
+            .map(Some)
+            .map_err(|Unbound(what)| Refused::Unbound(what));
+    };
+
+    // Substitution first, because a generator's arguments are templated too: a call
+    // handing its hook `{{ users.email }}` gets the row's email, and the hook never
+    // has to learn that datasets exist.
     let mut values = Values::new(scope, &job.datasets, job.seed, job.iteration);
-    step.request.render(&mut values).map(Some)
+    let mut prepared = step
+        .request
+        .render(&mut values)
+        .map_err(|Unbound(what)| Refused::Unbound(what))?;
+    let mut args = std::collections::BTreeMap::new();
+    for (name, template) in &declared.args {
+        let rendered = template
+            .render(&mut values)
+            .map_err(|Unbound(what)| Refused::Unbound(what))?;
+        args.insert(name.clone(), rendered);
+    }
+
+    let name = job.generators.name(declared.index);
+    let rows: Vec<_> = job
+        .datasets
+        .iter()
+        .map(|set| {
+            (
+                set.name(),
+                set.fields(set.row(job.iteration, job.seed)).collect(),
+            )
+        })
+        .collect();
+    let mut context = generate::Context {
+        vu: job.vu,
+        iteration: job.iteration,
+        step: step.id,
+        vars: scope,
+        rows,
+        args: &args,
+        rng: &mut values.rng,
+    };
+
+    // Timed around the hook alone and kept out of request latency: if generation is
+    // the slow part it has to be visible as generation (§7.3), and folded into the
+    // response time it would make the service look slow instead.
+    let started = std::time::Instant::now();
+    // Boxed: this future is inlined into the chain iteration's, which is built on the
+    // scheduler's stack before it is moved into its slot. Without the box the state
+    // machine carries the largest tier's whole exchange -- a child process, its pipes
+    // and its buffers -- in every iteration of every chain, generated or not.
+    let built = Box::pin(job.generators.get(declared.index).build(&mut context)).await;
+    let took = started.elapsed();
+    let outcome = built.and_then(|built| {
+        generate::validate(name, &built)?;
+        step.request.apply(&mut prepared, built)
+    });
+    generated.push(Generated {
+        generator: declared.name,
+        took,
+        failed: outcome.is_err(),
+    });
+    outcome.map_err(Refused::Generation)?;
+    Ok(Some(prepared))
 }
 
 /// Read this step's captures into the scope.

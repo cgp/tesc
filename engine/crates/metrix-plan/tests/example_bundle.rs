@@ -78,20 +78,20 @@ fn every_step_names_a_call_that_exists() {
 }
 
 #[test]
-fn calls_parse_with_both_body_forms_and_both_extractor_languages() {
+fn calls_parse_with_both_ways_of_building_one_and_both_extractor_languages() {
     let calls: CallFile = serde_json::from_str(&read("calls/shop.json")).unwrap();
 
-    // Inline body.
+    // Written inline.
     let login = &calls["login"];
-    assert!(matches!(login.body, Some(metrix_plan::Body::Inline(_))));
+    assert!(login.body.is_some() && login.generate.is_none());
     assert!(login.extract.contains_key("token"));
 
-    // Generated body, XPath extraction.
+    // Built by a generator, XPath extraction. The generator is named on the call
+    // rather than inside its body, because the hook returns the whole request.
     let order = &calls["create-order"];
-    assert!(matches!(
-        order.body,
-        Some(metrix_plan::Body::Generated { .. })
-    ));
+    let generate = order.generate.as_ref().expect("a generated request");
+    assert_eq!(generate.generator, "order-xml");
+    assert!(order.body.is_none());
     assert!(matches!(
         order.extract["order_id"],
         metrix_plan::Selector::Xpath(_)

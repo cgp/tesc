@@ -414,31 +414,6 @@
         "inject"
       ]
     },
-    "Body": {
-      "description": "A request body: either written inline, or produced by a named generator.",
-      "anyOf": [
-        {
-          "description": "Inline text, with `{{ }}` templating applied.",
-          "type": "string"
-        },
-        {
-          "description": "Built by a generator declared in the mix.",
-          "type": "object",
-          "properties": {
-            "args": {
-              "type": "object",
-              "additionalProperties": true
-            },
-            "generator": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "generator"
-          ]
-        }
-      ]
-    },
     "Breakpoint": {
       "description": "Breakpoint search parameters.",
       "type": "object",
@@ -508,13 +483,10 @@
           }
         },
         "body": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Body"
-            },
-            {
-              "type": "null"
-            }
+          "description": "Inline text, with `{{ }}` templating applied. A body a generator produces is\ndeclared in `generate`, because the hook returns the whole request and a\n`body` block that could set the path would be a field lying about what it is.",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "description": {
@@ -527,6 +499,17 @@
           "additionalProperties": {
             "$ref": "#/$defs/Selector"
           }
+        },
+        "generate": {
+          "description": "Build this request with a generator declared in the mix (§7.1). Whatever the\nhook returns replaces that part of the request; whatever it omits keeps what\nthe call wrote here.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Generate"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "headers": {
           "type": "object",
@@ -768,6 +751,25 @@
           "type": "string",
           "const": "oneshot"
         }
+      ]
+    },
+    "Generate": {
+      "description": "A call handed to a generator declared in the mix.",
+      "type": "object",
+      "properties": {
+        "args": {
+          "description": "Passed through to the hook. Strings are templated like any other field, so a\ngenerator can be handed `{{ users.email }}` without knowing datasets exist.",
+          "type": "object",
+          "additionalProperties": true
+        },
+        "generator": {
+          "description": "A name in the mix's `generators` block.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "generator"
       ]
     },
     "Generator": {

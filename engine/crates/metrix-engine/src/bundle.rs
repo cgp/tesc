@@ -36,6 +36,8 @@ pub struct Plan {
     pub(crate) chains: Vec<Arc<crate::chain::Compiled>>,
     /// Every dataset the mix declares, read once and shared by every iteration.
     pub(crate) datasets: Arc<crate::dataset::Datasets>,
+    /// Every generator the mix declares, compiled once and shared the same way.
+    pub(crate) generators: Arc<crate::generate::Generators>,
     /// The run seed. Set from `--seed` rather than from the bundle: it names one run
     /// of the plan, not the plan, and it is what a replay is asked for.
     pub(crate) seed: u64,
@@ -124,10 +126,7 @@ impl Plan {
             mix.load.stages.is_empty() && mix.load.breakpoint.is_none(),
             "mix.json/load: stages and breakpoint are not implemented",
         )?;
-        require(
-            mix.auth.is_none() && mix.generators.is_empty(),
-            "mix.json: auth and generators are not implemented",
-        )?;
+        require(mix.auth.is_none(), "mix.json: auth is not implemented")?;
         require(
             mix.slo.is_empty() && mix.observe.is_none(),
             "mix.json: SLOs and observation are not available in B1.2",
@@ -235,7 +234,8 @@ impl Plan {
         // sent. The layers that use the rest arrive in B3.2 and B3.3; the resolution
         // they will use is a property of the document, and is checked as one.
         let datasets = Arc::new(crate::dataset::Datasets::load(&root, &mix)?);
-        let resolved = calls::resolve(&mix, &defined, &datasets, &target, &authority)?;
+        let generators = Arc::new(crate::generate::Generators::load(&root, &mix)?);
+        let resolved = calls::resolve(&mix, &defined, &datasets, &generators, &target, &authority)?;
         unique_rows_suffice(&datasets, &resolved, rate, warmup + duration)?;
 
         let timeout = resolved.longest_timeout();
@@ -339,6 +339,7 @@ impl Plan {
             target,
             chains,
             datasets,
+            generators,
             seed: 0,
             weights,
             rate,

@@ -204,8 +204,10 @@ async fn tls_handshake_wait_is_queued_until_a_pre_send_timeout() {
         chain: "test",
         future: ReusableBoxFuture::new(crate::chain::run(Some(crate::chain::Job {
             datasets: std::sync::Arc::new(crate::dataset::Datasets::default()),
+            generators: std::sync::Arc::new(crate::generate::Generators::default()),
             seed: 0,
             iteration: 0,
+            vu: 0,
             lease: Lease {
                 connection: None,
                 replacement: false,

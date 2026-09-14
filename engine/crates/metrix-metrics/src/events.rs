@@ -194,6 +194,20 @@ pub struct GeneratorHealth {
     pub headroom_ratio: Option<f64>,
     /// Event records dropped to output backpressure. Non-zero raises an annotation.
     pub events_dropped: u64,
+    /// What each named generator cost and how often it failed (§9.6). Reported apart
+    /// from request latency: if generation is the slow part that has to be visible,
+    /// and folding it into the response time would make the service look slow.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub generation: BTreeMap<String, GenerationStats>,
+}
+
+/// One generator's own cost over a window.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GenerationStats {
+    pub calls: u64,
+    /// Calls that produced no request. Their own error class, never a target error.
+    pub failed: u64,
+    pub duration: Histogram,
 }
 
 /// One request. Sampled when the stream cannot keep up; `sampled` says so.

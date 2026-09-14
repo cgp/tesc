@@ -443,9 +443,14 @@ context in                        request out (all fields optional)
   iteration     iteration number    query     (map)
   step          step id             headers   (map)
   vars          extracted vars      body      (string or bytes)
-  row           current dataset row
+  rows          dataset rows by name
   rng           seeded RNG
+  args          the call's own arguments
 ```
+
+**A generator attaches to the call, not to its body.** The hook returns the whole request, so the field that names it cannot be `body` — a `body` block returning a path is a field lying about what it does. A call declares `generate: { generator, args }` alongside its method and path; whatever the hook returns replaces that part of the request, and whatever it omits keeps what the call wrote. The call therefore still reads as a request — method, a path, the headers — with the generator filling in what a template cannot express. `args` are templated like any other field, so a generator can be handed `{{ users.email }}` without knowing datasets exist.
+
+`rows` is keyed by dataset name rather than being a single current row, because a plan reading a user and a product has two current rows and one of them would have to be the wrong one.
 
 Seeded **per iteration** from the run seed, which is recorded in run metadata — so a run can be replayed with identical generated traffic. Without that, comparing two runs means comparing two different workloads. Per iteration rather than per virtual user: which VU picks up an arrival depends on how long the service took to answer the arrival before it, so a per-VU stream replays differently against a service that has since got slower. Keying it to the iteration number makes iteration 4,001 generate the same request in every run of the plan, which is the property the seed exists for. Every step of one iteration draws from the same stream in order, so a chain that posts `{{ uuid() }}` and then reads it back sends the same id twice.
 
@@ -469,10 +474,10 @@ function generate(ctx)
   local id = ctx.vars.pid or ctx.rng:int(1, 10000)
   return {
     path  = "/api/orders/" .. id,
-    query = { region = ctx.row.region, expand = "lines" },
+    query = { region = ctx.rows.users.region, expand = "lines" },
     body  = string.format(
       "<order><user>%s</user><qty>%d</qty></order>",
-      ctx.row.email, ctx.rng:int(1, 5))
+      ctx.rows.users.email, ctx.rng:int(1, 5))
   }
 end
 ```
@@ -480,6 +485,13 @@ end
 ```jsonc
 "generators": {
   "order": { "type": "lua", "file": "gen/order.lua", "entry": "generate" }
+}
+
+// and the call that uses it
+"create-order": {
+  "method": "POST", "path": "/api/orders",
+  "headers": { "Content-Type": "application/xml" },
+  "generate": { "generator": "order", "args": { "user": "{{ users.email }}" } }
 }
 ```
 

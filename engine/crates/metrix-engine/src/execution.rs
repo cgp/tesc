@@ -31,6 +31,19 @@ pub(crate) async fn run(
 ) -> Result<Report, String> {
     tokio::pin!(shutdown);
     let mut report = Report::default();
+    // The plan's own setup before the target's, and both before the arrival clock. A
+    // sidecar that forked its first process on the first arrival would charge that
+    // fork to the first request; one that cannot start at all is the plan's problem,
+    // and an unreachable target must not be the thing reported instead.
+    //
+    // Boxed because this function's future is the whole scheduler and is polled on
+    // one thread's stack: setup that happens once must not be carried inside the
+    // state machine that runs for the length of the run.
+    tokio::select! {
+        biased;
+        _ = &mut shutdown => { report.interrupted = true; return Ok(report); }
+        started = Box::pin(plan.generators.start()) => started?,
+    }
     let pool = tokio::select! {
         biased;
         _ = &mut shutdown => { report.interrupted = true; return Ok(report); }
@@ -73,6 +86,11 @@ pub(crate) async fn run(
         for compiled in &plan.chains {
             let steps: Vec<&'static str> = compiled.steps.iter().map(|step| step.id).collect();
             accumulator.declare(compiled.name, &steps);
+            for step in &compiled.steps {
+                if let Some(attached) = &step.request.generate {
+                    accumulator.declare_generator(attached.name);
+                }
+            }
         }
     }
     // Which chain each arrival runs. Deterministic and exactly proportional: a
@@ -243,21 +261,27 @@ pub(crate) async fn run(
                         report.failed += 1;
                     } else { report.responses += 1; }
                 }
-                if let Some((step_id, variable)) = completion.unbound() {
+                // Generation is the run's own cost, not the service's: recorded
+                // whether or not it produced a request, and never as a target error.
+                for call in &completion.generated {
+                    worker.finish_generation(call.generator, call.took, call.failed);
+                }
+                if let Some((step_id, cause, detail)) = completion.not_sent() {
                     // Nothing was sent. The step still attempted and still failed,
-                    // and saying which variable it wanted is the difference between
-                    // a plan error and a service that started returning 404s.
+                    // and saying which variable it wanted, or what the generator
+                    // said, is the difference between a plan error and a service
+                    // that started returning 404s.
                     worker.finish_step(&StepSample {
                         chain: chain_name, step: step_id,
                         request_duration: None, send_delay: Duration::ZERO,
                         ttfb: None, drift: None, status: None,
-                        error: Some(metrix_metrics::aggregation::Cause::Extraction),
+                        error: Some(cause),
                         assertion: None,
                         bytes_sent: 0, bytes_received: 0,
                         connections_opened: 0, connection_reused: false,
                     });
                     report.failed += 1;
-                    if let Some(output) = output { output.unbound(iteration, admitted_phase, chain_name, step_id, variable, completion.was_truncated()); }
+                    if let Some(output) = output { output.not_sent(iteration, admitted_phase, crate::output::NotSent { chain: chain_name, step: step_id, cause, detail, truncated: completion.was_truncated() }); }
                 }
                 // The iteration's own duration, recorded whether or not it reached
                 // its last step: a chain that stopped early still took the time it
@@ -273,7 +297,7 @@ pub(crate) async fn run(
                 let h = report.diagnostics.phase_mut(phase); h.offered += late + u64::from(arrival.is_some()); h.skipped_late += late;
                 report.skipped_late += late;
                 if let Some(scheduled) = arrival {
-                    if let Some(slot) = slots.iter_mut().find(|s| !s.active) {
+                    if let Some((vu, slot)) = slots.iter_mut().enumerate().find(|(_, s)| !s.active) {
                         if let Some(lease) = pool.as_mut().expect("traffic pool").acquire() {
                             slot.send_state.reset();
                             slot.send_recorded = false;
@@ -285,7 +309,7 @@ pub(crate) async fn run(
                             // it is what the iteration generates its values from, so a
                             // job carrying the previous one would send that one's row.
                             slot.iteration = report.admitted;
-                            let future = chain::run(Some(chain::Job { lease, endpoint, chain: running, datasets: Arc::clone(&plan.datasets), seed: plan.seed, iteration: slot.iteration, scheduled, admitted, send_state: Arc::clone(&slot.send_state) }));
+                            let future = chain::run(Some(chain::Job { lease, endpoint, chain: running, datasets: Arc::clone(&plan.datasets), generators: Arc::clone(&plan.generators), seed: plan.seed, iteration: slot.iteration, vu, scheduled, admitted, send_state: Arc::clone(&slot.send_state) }));
                             assert!(slot.future.try_set(future).is_ok(), "request future layout changed");
                             slot.active = true;
                             slot.worker = report.admitted as usize % workers.len();

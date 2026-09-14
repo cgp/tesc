@@ -44,6 +44,16 @@ struct Identity {
     headroom_ratio: Option<f64>,
 }
 
+/// A step that was attempted and never reached the wire.
+pub(crate) struct NotSent<'a> {
+    pub chain: &'static str,
+    pub step: &'static str,
+    pub cause: metrix_metrics::aggregation::Cause,
+    /// The variable that was missing, or what the generator said.
+    pub detail: &'a str,
+    pub truncated: bool,
+}
+
 struct RequestData {
     /// Which chain and step this request was. Per record rather than from the run's
     /// identity: a mixture sends several chains, and a record that named the wrong
@@ -430,16 +440,18 @@ impl Output {
     ///
     /// Once, not once per iteration: a variable nothing captures is missing every
     /// single time, and a hundred thousand identical notes would bury the fact that
-    /// explains all of them. The per-step failure count carries how often.
-    pub(crate) fn unbound(
-        &self,
-        iteration: u64,
-        phase: Phase,
-        chain: &'static str,
-        step: &'static str,
-        variable: &str,
-        truncated: bool,
-    ) {
+    /// explains all of them. The per-step failure count carries how often. A
+    /// generator that failed is said once for the same reason — a script with a bug
+    /// in it has the same bug on every call.
+    pub(crate) fn not_sent(&self, iteration: u64, phase: Phase, what: NotSent<'_>) {
+        let NotSent {
+            chain,
+            step,
+            cause,
+            detail,
+            truncated,
+        } = what;
+        let generation = cause == metrix_metrics::aggregation::Cause::Generation;
         self.request_data(RequestData {
             t_ms: self.elapsed(),
             phase,
@@ -459,25 +471,38 @@ impl Output {
         if self.said_unbound.swap(true, Ordering::Relaxed) {
             return;
         }
-        self.lifecycle(Record::Annotation(Annotation {
-            t_ms: self.elapsed(),
-            target_id: Some(self.identity.target.clone()),
-            code: "chain_unbound".into(),
-            severity: Severity::Invalid,
-            phase: Some(phase),
-            from_ms: 0,
-            to_ms: None,
-            message: format!(
-                "step {step:?} of chain {chain:?} reads {{{{ {variable} }}}}, which no                  response before it provided; the chain stops here every iteration{}",
+        let message = if generation {
+            format!(
+                "step {step:?} of chain {chain:?} could not be built: {detail}. Nothing was                  sent, so this is the plan's own failure and not the service's"
+            )
+        } else {
+            format!(
+                "step {step:?} of chain {chain:?} reads {{{{ {detail} }}}}, which no                  response before it provided; the chain stops here every iteration{}",
                 if truncated {
                     " (a response was cut at the capture ceiling, so an extractor may                      have been looking past the cut)"
                 } else {
                     ""
                 }
-            ),
-            detail: Some(serde_json::json!({
-                "chain": chain, "step": step, "variable": variable,
-            })),
+            )
+        };
+        self.lifecycle(Record::Annotation(Annotation {
+            t_ms: self.elapsed(),
+            target_id: Some(self.identity.target.clone()),
+            code: if generation {
+                "generation_failed".into()
+            } else {
+                "chain_unbound".into()
+            },
+            severity: Severity::Invalid,
+            phase: Some(phase),
+            from_ms: 0,
+            to_ms: None,
+            message,
+            detail: Some(if generation {
+                serde_json::json!({ "chain": chain, "step": step, "reason": detail })
+            } else {
+                serde_json::json!({ "chain": chain, "step": step, "variable": detail })
+            }),
         }));
     }
 
@@ -946,16 +971,33 @@ fn summary_record(
             scheduler_lag_ms: window.scheduler_lag.as_secs_f64() * 1000.0,
             headroom_ratio: identity.headroom_ratio,
             events_dropped: dropped,
+            // The generator's own cost, beside the rest of its health rather than in
+            // the step's latency: §7.3 says a slow generator has to be visible as a
+            // slow generator.
+            generation: metrics
+                .generation
+                .iter()
+                .map(|(name, counts)| {
+                    (
+                        (*name).to_owned(),
+                        metrix_metrics::events::GenerationStats {
+                            calls: counts.calls,
+                            failed: counts.failed,
+                            duration: counts.duration.snapshot(),
+                        },
+                    )
+                })
+                .collect(),
         },
     })
 }
 
 /// The error counter array as the names the frozen schema uses.
-fn error_counts(errors: &[u64; 9]) -> BTreeMap<String, u64> {
+fn error_counts(errors: &[u64; 10]) -> BTreeMap<String, u64> {
     // Indexed by `Cause`. Several map to `other` because the transport cannot always
     // tell them apart, and inventing a distinction it did not observe would be worse
     // than saying so.
-    const NAMES: [&str; 9] = [
+    const NAMES: [&str; 10] = [
         "dns_failure",
         "other",
         "tls_failure",
@@ -965,6 +1007,7 @@ fn error_counts(errors: &[u64; 9]) -> BTreeMap<String, u64> {
         "other",
         "extraction",
         "assertion",
+        "generation",
     ];
     let mut counted: BTreeMap<String, u64> = BTreeMap::new();
     for (index, count) in errors.iter().enumerate() {

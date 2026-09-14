@@ -237,6 +237,31 @@
         }
       ]
     },
+    "GenerationStats": {
+      "description": "One generator's own cost over a window.",
+      "type": "object",
+      "properties": {
+        "calls": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "duration": {
+          "$ref": "#/$defs/Histogram"
+        },
+        "failed": {
+          "description": "Calls that produced no request. Their own error class, never a target error.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "calls",
+        "failed",
+        "duration"
+      ]
+    },
     "GeneratorHealth": {
       "description": "Self-metrics. Without these a run cannot be trusted, so they ride in every summary.",
       "type": "object",
@@ -250,6 +275,13 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0
+        },
+        "generation": {
+          "description": "What each named generator cost and how often it failed (§9.6). Reported apart\nfrom request latency: if generation is the slow part that has to be visible,\nand folding it into the response time would make the service look slow.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/GenerationStats"
+          }
         },
         "headroom_ratio": {
           "description": "Demanded rate over the calibrated ceiling, when a machine profile is known.",

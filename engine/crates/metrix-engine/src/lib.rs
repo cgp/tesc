@@ -8,6 +8,7 @@ mod chain;
 mod dataset;
 mod detectors;
 mod extract;
+mod generate;
 pub use detectors::{DetectorConfig, Diagnostics, Health as PhaseHealth};
 mod execution;
 mod http;

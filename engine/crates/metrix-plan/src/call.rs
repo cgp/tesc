@@ -36,8 +36,17 @@ pub struct Call {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub headers: BTreeMap<String, String>,
 
+    /// Inline text, with `{{ }}` templating applied. A body a generator produces is
+    /// declared in `generate`, because the hook returns the whole request and a
+    /// `body` block that could set the path would be a field lying about what it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub body: Option<Body>,
+    pub body: Option<String>,
+
+    /// Build this request with a generator declared in the mix (§7.1). Whatever the
+    /// hook returns replaces that part of the request; whatever it omits keeps what
+    /// the call wrote here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generate: Option<Generate>,
 
     /// Overrides the mix-level default for this call only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -53,18 +62,16 @@ pub struct Call {
     pub extract: BTreeMap<String, Selector>,
 }
 
-/// A request body: either written inline, or produced by a named generator.
+/// A call handed to a generator declared in the mix.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(untagged)]
-pub enum Body {
-    /// Inline text, with `{{ }}` templating applied.
-    Inline(String),
-    /// Built by a generator declared in the mix.
-    Generated {
-        generator: String,
-        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-        args: BTreeMap<String, Value>,
-    },
+#[serde(deny_unknown_fields)]
+pub struct Generate {
+    /// A name in the mix's `generators` block.
+    pub generator: String,
+    /// Passed through to the hook. Strings are templated like any other field, so a
+    /// generator can be handed `{{ users.email }}` without knowing datasets exist.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub args: BTreeMap<String, Value>,
 }
 
 /// A declarative, enumerable expectation. No expression language: every variant is a

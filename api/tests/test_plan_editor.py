@@ -38,7 +38,7 @@ CALLS = {
     "add": {
         "method": "POST",
         "path": "/api/cart/{{ pid }}",
-        "body": {"generator": "order-xml"},
+        "generate": {"generator": "order-xml"},
         "assert": [{"status": 201}],
     },
     "spare": {"method": "GET", "path": "/api/spare"},

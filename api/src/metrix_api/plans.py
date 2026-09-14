@@ -678,17 +678,17 @@ def _references(value: Any) -> list[str]:
 
 
 def _body_kind(call: dict[str, Any]) -> str:
-    """How the request body is produced (§7.2), in the words the plan uses."""
-    body = call.get("body")
-    if body is None:
+    """How the request is produced (§7.2), in the words the plan uses.
+
+    The generator is named on the call rather than inside its body, because the hook
+    returns the whole request -- path, query, headers and body -- and a `body` block
+    that could set the path would be a field lying about what it does.
+    """
+    generate = call.get("generate")
+    if isinstance(generate, dict) and generate.get("generator"):
+        return f"generator {generate['generator']}"
+    if call.get("body") is None:
         return "none"
-    if isinstance(body, dict):
-        if "generator" in body:
-            return f"generator {body['generator']}"
-        if "dataset" in body:
-            return f"dataset {body['dataset']}"
-        if "file" in body:
-            return f"file {body['file']}"
     return "inline template"
 
 
@@ -725,9 +725,14 @@ def call_details(plan: Plan) -> list[dict[str, Any]]:
 
 
 def _bindings(plan: Plan) -> set[str]:
-    """Names that resolve without an earlier step having produced them."""
+    """Names that resolve without an earlier step having produced them.
+
+    Datasets and not generators: a dotted name is a dataset field, and a generator
+    produces request parts rather than template variables. Treating a generator name
+    as a prefix here would call a plan ready that the engine refuses to load, which
+    is the one thing this check must never do.
+    """
     provided = {f"{name}." for name in plan.mix.get("datasets", {})}
-    provided.update(f"{name}." for name in plan.mix.get("generators", {}))
     provided.update(AMBIENT)
     return provided
 

@@ -97,7 +97,7 @@ Buildable and testable with nothing but a shell, a bundle, and the mock target.
 - [x] **B3.3** — Chains with percentages of a total rate; sum-to-100 validation (§4.5)
 - [x] **B3.4** — Assertions, `on_failure`, `repeat_until`, chain-abort accounting, expected-failure chains
 - [x] **B3.5** — Datasets and inline templating
-- [ ] **B3.6** — Generation tiers: **Lua via `mlua` first** (§7.2), then Rust plugin, then exec sidecar
+- [x] **B3.6** — Generation tiers: **Lua via `mlua` first** (§7.2), then Rust plugin, then exec sidecar
 - [ ] **B3.7** — Lua corpus loading: read-only, bundle-rooted, in-memory, size-ceilinged
 - [ ] **B3.8** — `auth` block (§6): all modes, single-flight refresh, auth traffic excluded
 - [ ] **B3.9** — Session policy per chain: `fresh` / `reuse` / `pool` (§4.2)

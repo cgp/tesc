@@ -64,6 +64,15 @@ impl Dataset {
     pub fn field(&self, row: usize, column: usize) -> &str {
         &self.values[row * self.width + column]
     }
+
+    /// One whole row, named, for a generator that is handed the row rather than a
+    /// field of it.
+    pub fn fields(&self, row: usize) -> impl Iterator<Item = (&str, &str)> {
+        self.columns
+            .iter()
+            .enumerate()
+            .map(move |(column, name)| (name.as_str(), self.field(row, column)))
+    }
 }
 
 /// Every dataset the mix declares, in a fixed order so references compile to indices.

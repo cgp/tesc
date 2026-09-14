@@ -100,7 +100,7 @@ impl Distribution {
 }
 
 /// Fixed-index causes keep error recording free of strings and map insertions.
-#[derive(Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 #[repr(usize)]
 pub enum Cause {
     Dns,
@@ -117,6 +117,10 @@ pub enum Cause {
     /// The request happened and the answer was not the one the plan expects. Apart
     /// from the transport failures because it is a different fact about the run.
     Assertion,
+    /// A generator could not build the request, so none was sent. Ours, not theirs
+    /// (§7.3): a generation failure counted as a target error would report a working
+    /// service as broken by the plan's own script.
+    Generation,
 }
 
 #[derive(Clone, Debug)]
@@ -131,7 +135,7 @@ pub struct Counters {
     pub connections_opened: u64,
     pub connections_reused: u64,
     pub statuses: [u64; 1000],
-    pub errors: [u64; 9],
+    pub errors: [u64; 10],
 }
 
 impl Default for Counters {
@@ -147,7 +151,7 @@ impl Default for Counters {
             connections_opened: 0,
             connections_reused: 0,
             statuses: [0; 1000],
-            errors: [0; 9],
+            errors: [0; 10],
         }
     }
 }
@@ -221,7 +225,7 @@ pub struct StepStats {
     pub completed: u64,
     pub failed: u64,
     pub statuses: BTreeMap<u16, u64>,
-    pub errors: [u64; 9],
+    pub errors: [u64; 10],
     /// Which assertion failed, by its index in the call. Named by index because that
     /// is what the call document is indexed by, and a message would be a second
     /// place for the assertion's meaning to live.
@@ -256,7 +260,7 @@ impl StepStats {
         // map that is emptied and refilled once a second allocates for nothing.
         self.statuses.clear();
         self.assertion_failures.clear();
-        self.errors = [0; 9];
+        self.errors = [0; 10];
         self.total.reset();
         self.ttfb.reset();
     }
@@ -314,6 +318,32 @@ pub struct Accumulator {
     pub corrected_total: Distribution,
     pub corrected_ttfb: Distribution,
     pub chains: BTreeMap<&'static str, ChainStats>,
+    /// What each generator cost and how often it failed (§7.3). Apart from request
+    /// latency on purpose: generation is the generator's time, not the service's, and
+    /// folding it in would make a slow script look like a slow endpoint.
+    pub generation: BTreeMap<&'static str, GenerationCounts>,
+}
+
+/// One generator's own cost over a window.
+#[derive(Clone, Debug, Default)]
+pub struct GenerationCounts {
+    pub calls: u64,
+    pub failed: u64,
+    pub duration: Distribution,
+}
+
+impl GenerationCounts {
+    fn merge(&mut self, other: &Self) {
+        self.calls += other.calls;
+        self.failed += other.failed;
+        self.duration.merge(&other.duration);
+    }
+
+    fn reset(&mut self) {
+        self.calls = 0;
+        self.failed = 0;
+        self.duration.reset();
+    }
 }
 
 impl Accumulator {
@@ -329,6 +359,20 @@ impl Accumulator {
         for step in steps {
             stats.steps.entry(step).or_default();
         }
+    }
+
+    /// Name a generator before it runs, for the same reason chains are named: a
+    /// window in which a generator was not called is a fact about the window.
+    pub fn declare_generator(&mut self, generator: &'static str) {
+        self.generation.entry(generator).or_default();
+    }
+
+    /// One call of one generator, whether or not it produced a request.
+    pub fn finish_generation(&mut self, generator: &'static str, took: Duration, failed: bool) {
+        let counts = self.generation.entry(generator).or_default();
+        counts.calls += 1;
+        counts.failed += u64::from(failed);
+        counts.duration.record(took);
     }
 
     pub fn start(&mut self) {
@@ -466,6 +510,9 @@ impl Accumulator {
 
     pub fn merge(&mut self, other: &Self) {
         self.counters.merge(&other.counters);
+        for (name, counts) in &other.generation {
+            self.generation.entry(name).or_default().merge(counts);
+        }
         for (name, chain) in &other.chains {
             self.chains.entry(name).or_default().merge(chain);
         }
@@ -480,6 +527,9 @@ impl Accumulator {
 
     pub fn reset(&mut self) {
         self.counters = Counters::default();
+        for counts in self.generation.values_mut() {
+            counts.reset();
+        }
         for chain in self.chains.values_mut() {
             chain.reset();
         }

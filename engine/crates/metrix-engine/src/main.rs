@@ -1,7 +1,7 @@
 //! Standalone bundle execution and the shared schema generator.
 
 use clap::Parser;
-use metrix_engine::{Output, Plan, calibrate, run_with_output, write_profile};
+use metrix_engine::{Output, OutputReport, Plan, calibrate, run_with_output, write_profile};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -34,6 +34,12 @@ struct Args {
     #[arg(long, default_value_t = 0)]
     seed: u64,
 }
+
+/// How much stack the scheduler thread and the runtime's workers get.
+///
+/// Chosen rather than inherited: see where it is used. Generous because the cost of
+/// reserving address space is nothing next to the cost of finding out the hard way.
+const SCHEDULER_STACK: usize = 16 * 1024 * 1024;
 
 /// Each schema file and the type it is generated from.
 macro_rules! schemas {
@@ -105,6 +111,7 @@ fn execute(args: Args) -> Result<ExitCode, String> {
     plan.set_seed(args.seed);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(plan.worker_threads)
+        .thread_stack_size(SCHEDULER_STACK)
         .enable_all()
         .build()
         .map_err(|_| "cannot create engine runtime")?;
@@ -116,36 +123,70 @@ fn execute(args: Args) -> Result<ExitCode, String> {
         args.seed,
     )?;
     // run() polls shutdown first, registering Ctrl-C before network setup.
-    let result = runtime.block_on(async {
-        let mut signal_error = None;
-        let report = run_with_output(
-            plan,
-            async {
-                signal_error = tokio::signal::ctrl_c().await.err();
-            },
-            &output,
-        )
-        .await?;
-        if signal_error.is_some() {
-            Err("cannot register Ctrl-C handler".to_owned())
-        } else {
-            Ok(report)
+    //
+    // On a stack this run asked for rather than the one the linker chose for `main`.
+    // The scheduler is a single state machine that owns preallocated per-worker
+    // accumulators and polls a chain iteration inline, so its frame is large by
+    // design, and the HTTP/2 send path adds a good deal more on top. A megabyte is
+    // enough until it is not, and the way it stops being enough is a stack overflow
+    // part-way through a run rather than an error anybody can act on.
+    let result = std::thread::scope(|scope| {
+        let spawned = std::thread::Builder::new()
+            .name("scheduler".into())
+            .stack_size(SCHEDULER_STACK)
+            .spawn_scoped(scope, move || {
+                let result = runtime.block_on(async {
+                    let mut signal_error = None;
+                    let report = run_with_output(
+                        plan,
+                        async {
+                            signal_error = tokio::signal::ctrl_c().await.err();
+                        },
+                        &output,
+                    )
+                    .await?;
+                    if signal_error.is_some() {
+                        Err("cannot register Ctrl-C handler".to_owned())
+                    } else {
+                        Ok(report)
+                    }
+                });
+                // OS DNS resolution uses blocking runtime tasks and cannot itself be
+                // cancelled. Do not let one outlive the declared deadline by blocking
+                // runtime teardown.
+                runtime.shutdown_timeout(std::time::Duration::from_millis(100));
+                // Closed here rather than back on the calling thread, because an
+                // `Output` owns the receiving end of its writer channels and is not
+                // shareable across threads. It goes in with the run and the run's
+                // delivery report comes back out with it.
+                let code = match &result {
+                    Ok(report) if report.interrupted => 130,
+                    Ok(_) => 0,
+                    Err(_) => 1,
+                };
+                let stopped = match &result {
+                    Ok(report) if report.interrupted => Some("interrupted".into()),
+                    Err(_) => Some("setup or internal failure".into()),
+                    _ => None,
+                };
+                (result, code, output.finish(code, stopped))
+            });
+        match spawned {
+            Ok(handle) => handle.join().unwrap_or_else(|_| {
+                (
+                    Err("the scheduler thread failed".to_owned()),
+                    1,
+                    OutputReport::default(),
+                )
+            }),
+            Err(_) => (
+                Err("cannot start the scheduler thread".to_owned()),
+                1,
+                OutputReport::default(),
+            ),
         }
     });
-    // OS DNS resolution uses blocking runtime tasks and cannot itself be cancelled.
-    // Do not let one outlive the declared deadline by blocking runtime teardown.
-    runtime.shutdown_timeout(std::time::Duration::from_millis(100));
-    let code = match &result {
-        Ok(report) if report.interrupted => 130,
-        Ok(_) => 0,
-        Err(_) => 1,
-    };
-    let stopped = match &result {
-        Ok(report) if report.interrupted => Some("interrupted".into()),
-        Err(_) => Some("setup or internal failure".into()),
-        _ => None,
-    };
-    let delivery = output.finish(code, stopped);
+    let (result, _code, delivery) = result;
     eprintln!(
         "summaries_dropped={} events_dropped={} events_sampled_out={} writers_unfinished={} output_failed={}",
         delivery.summaries_dropped,

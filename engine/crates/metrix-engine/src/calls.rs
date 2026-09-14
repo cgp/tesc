@@ -23,11 +23,12 @@ use hyper::{
     header::{HeaderName, HeaderValue},
     http::uri::Authority,
 };
-use metrix_plan::{Body, Call, Defaults, Mix, OnFailure, RepeatUntil, SessionPolicy, Target};
+use metrix_plan::{Call, Defaults, Mix, OnFailure, RepeatUntil, SessionPolicy, Target};
 
 use crate::assertions::Check;
 use crate::dataset::Datasets;
 use crate::extract::Extractor;
+use crate::generate::Generators;
 use crate::template::{Scope, Template, Unbound, Values};
 
 /// Headers the transport owns. A plan that sets one of these is describing a
@@ -72,6 +73,11 @@ impl Reads {
     }
 }
 
+/// True when a header belongs to the transport rather than to the plan.
+pub(crate) fn transport_managed(name: &str) -> bool {
+    TRANSPORT_MANAGED.contains(&name.to_ascii_lowercase().as_str())
+}
+
 /// A request, ready to send.
 pub(crate) struct Prepared {
     pub uri: Uri,
@@ -97,6 +103,9 @@ pub(crate) struct RequestTemplate {
     /// find nothing, and poll to its ceiling against a service that answered
     /// correctly the first time.
     reads: Reads,
+    /// The generator this call is built with, and the arguments it is handed. An
+    /// index into the plan's generators, resolved at load like every other reference.
+    pub generate: Option<Attachment>,
     /// The whole request, when nothing in it depends on the scope. The ordinary
     /// case, and the one that must cost nothing per send.
     fixed: Option<Prepared>,
@@ -177,6 +186,54 @@ impl RequestTemplate {
         })
     }
 
+    /// Lay what a generator returned over what the call rendered.
+    ///
+    /// Only the parts it returned: a generator that had to return the whole request
+    /// would force a plan to move its headers out of the call document and into a
+    /// script to change one of them. A returned `query` replaces the call's rather
+    /// than merging with it, because a generator building a query has decided what
+    /// the request asks for and a leftover parameter underneath would be a request
+    /// nobody wrote.
+    pub fn apply(
+        &self,
+        prepared: &mut Prepared,
+        built: crate::generate::Built,
+    ) -> Result<(), String> {
+        if built.path.is_some() || built.query.is_some() {
+            let mut target = built.path.unwrap_or_else(|| prepared.uri.path().to_owned());
+            match &built.query {
+                Some(query) => {
+                    for (key, value) in query {
+                        target.push(if target.contains('?') { '&' } else { '?' });
+                        target.push_str(&crate::template::encode(key));
+                        target.push('=');
+                        target.push_str(&crate::template::encode(value));
+                    }
+                }
+                None => {
+                    if let Some(existing) = prepared.uri.query() {
+                        target.push('?');
+                        target.push_str(existing);
+                    }
+                }
+            }
+            prepared.uri = format!("{}{target}", self.origin)
+                .parse::<Uri>()
+                .map_err(|_| format!("the generator built {target:?}, which is not a URI"))?;
+        }
+        for (name, value) in built.headers.into_iter().flatten() {
+            let name = HeaderName::from_bytes(name.as_bytes())
+                .map_err(|_| format!("the generator returned {name:?}, which is not a header"))?;
+            let value = HeaderValue::from_str(&value)
+                .map_err(|_| format!("the generator returned a value {name} cannot hold"))?;
+            prepared.headers.insert(name, value);
+        }
+        if let Some(body) = built.body {
+            prepared.body = Bytes::from(body);
+        }
+        Ok(())
+    }
+
     /// One fixed request, for tests that need a template without a bundle.
     #[cfg(test)]
     pub fn fixed_for_test(method: Method, uri: Uri, body: Bytes, timeout: Duration) -> Self {
@@ -193,6 +250,7 @@ impl RequestTemplate {
             extract: Vec::new(),
             assertions: Vec::new(),
             reads: Reads::default(),
+            generate: None,
             fixed: Some(Prepared { uri, headers, body }),
             origin: String::new(),
             path: Template::parse("test", "/", &Datasets::default()).expect("a literal path"),
@@ -216,9 +274,11 @@ impl RequestTemplate {
     /// True when nothing in the request varies, so it can be built once.
     ///
     /// Asked of every piece rather than only of the chain variables: a path holding
-    /// `{{ uuid() }}` reads no variable and is a different request every time.
+    /// `{{ uuid() }}` reads no variable and is a different request every time. A call
+    /// with a generator is never fixed — building it once would be calling the hook
+    /// once, which is the opposite of what a generator is for.
     fn is_fixed(&self) -> bool {
-        self.pieces().all(Template::is_fixed)
+        self.generate.is_none() && self.pieces().all(Template::is_fixed)
     }
 
     fn pieces(&self) -> impl Iterator<Item = &Template> {
@@ -231,6 +291,17 @@ impl RequestTemplate {
             .chain(self.headers.iter().map(|(_, value)| value))
             .chain(std::iter::once(&self.body))
     }
+}
+
+/// A call's attachment to a generator.
+pub(crate) struct Attachment {
+    pub index: usize,
+    /// Leaked, like the chain and step names, because it keys the accumulator map
+    /// that holds this generator's own cost for the life of the run.
+    pub name: &'static str,
+    /// Templated like any other field, so a generator can be handed
+    /// `{{ users.email }}` without knowing datasets exist.
+    pub args: Vec<(String, Template)>,
 }
 
 /// One step of one chain, as the mix names it.
@@ -285,6 +356,7 @@ pub(crate) fn resolve(
     mix: &Mix,
     defined: &BTreeMap<String, Call>,
     datasets: &Datasets,
+    generators: &Generators,
     target: &Target,
     authority: &Authority,
 ) -> Result<Resolved, String> {
@@ -292,6 +364,7 @@ pub(crate) fn resolve(
         defaults: &mix.defaults,
         body_max: mix.capture.body_max_kb as usize * 1024,
         datasets,
+        generators,
         target,
         authority,
     };
@@ -421,6 +494,7 @@ pub(crate) struct Context<'a> {
     pub defaults: &'a Defaults,
     pub body_max: usize,
     pub datasets: &'a Datasets,
+    pub generators: &'a Generators,
     pub target: &'a Target,
     pub authority: &'a Authority,
 }
@@ -436,18 +510,42 @@ fn compile(
         defaults,
         body_max,
         datasets,
+        generators,
         target,
         authority,
     } = *context;
     let at = format!("call {name:?}");
 
-    let body = match &call.body {
-        None => Template::parse(&format!("{at}/body"), "", datasets)?,
-        Some(Body::Inline(text)) => Template::parse(&format!("{at}/body"), text, datasets)?,
-        Some(Body::Generated { .. }) => {
-            return Err(format!("{at}/body: generators are not implemented (B3.6)"));
-        }
-    };
+    let body = Template::parse(
+        &format!("{at}/body"),
+        call.body.as_deref().unwrap_or_default(),
+        datasets,
+    )?;
+
+    let generate = call
+        .generate
+        .as_ref()
+        .map(|generate| {
+            let at = format!("{at}/generate");
+            let mut args = Vec::new();
+            for (name, value) in &generate.args {
+                let at = format!("{at}/args/{name}");
+                // Strings are templated; anything else is passed through as the text
+                // it serialises to, because a hook receives strings either way.
+                let text = match value {
+                    serde_json::Value::String(text) => text.clone(),
+                    other => other.to_string(),
+                };
+                args.push((name.clone(), Template::parse(&at, &text, datasets)?));
+            }
+            let index = generators.resolve(&at, &generate.generator)?;
+            Ok::<_, String>(Attachment {
+                index,
+                name: generators.leaked(index),
+                args,
+            })
+        })
+        .transpose()?;
 
     let path = Template::parse(&format!("{at}/path"), &call.path, datasets)?;
     require(
@@ -468,7 +566,7 @@ fn compile(
         let key = HeaderName::from_bytes(key.as_bytes())
             .map_err(|_| format!("{at}/headers: invalid header name"))?;
         require(
-            !TRANSPORT_MANAGED.contains(&key.as_str()),
+            !transport_managed(key.as_str()),
             &format!("{at}/headers: {key} is managed by the transport and cannot be set"),
         )?;
         headers.push((
@@ -509,6 +607,7 @@ fn compile(
         extract,
         assertions,
         reads,
+        generate,
         fixed: None,
         origin: format!("{scheme}://{authority}"),
         path,
