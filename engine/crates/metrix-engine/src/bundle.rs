@@ -1,4 +1,13 @@
-//! Compile the B1.2 subset once. Unsupported semantics must never be silently ignored.
+//! Compile the bundle once, before a single request is sent.
+//!
+//! Unsupported semantics must never be silently ignored: a plan that names something
+//! this engine cannot do is refused, with the path to the field that says so. The
+//! alternative is a run that completes and measures something other than what was
+//! asked for, which is the one failure this tool cannot afford.
+//!
+//! Calls are resolved here rather than executed from: `calls.rs` turns every `call`
+//! a step names into the request it will send, so an unresolvable reference in the
+//! sixth chain is a load-time error rather than a surprise four minutes in.
 
 use std::{
     collections::BTreeMap,
@@ -8,15 +17,11 @@ use std::{
     time::Duration,
 };
 
-use bytes::Bytes;
-use hyper::{
-    HeaderMap, Method, Uri,
-    header::{HeaderName, HeaderValue},
-};
-use metrix_plan::{Body, CallFile, LoadMode, LoadModel, Mix, SessionPolicy, Target, Targets};
+use metrix_plan::{Call, CallFile, LoadMode, LoadModel, Mix, SessionPolicy, Target, Targets};
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 
+use crate::calls::{self, RequestTemplate};
 use crate::schedule::Schedule;
 
 pub struct Plan {
@@ -27,6 +32,9 @@ pub struct Plan {
     pub(crate) step: String,
     pub(crate) call: String,
     pub(crate) target: Target,
+    /// The step the executor sends. One, until B3.2 walks a chain and B3.3 mixes
+    /// several -- but it is now chosen out of everything that resolved, rather than
+    /// being the only thing that was ever looked at.
     pub(crate) request: Arc<RequestTemplate>,
     pub(crate) rate: f64,
     pub(crate) duration: Duration,
@@ -43,17 +51,20 @@ pub struct Plan {
     pub(crate) allow_generator_limited: bool,
 }
 
-pub(crate) struct RequestTemplate {
-    pub method: Method,
-    pub uri: Uri,
-    pub headers: HeaderMap,
-    pub body: Bytes,
-    pub timeout: Duration,
-}
-
 impl Plan {
     pub fn bundle_root(&self) -> &Path {
         &self.root
+    }
+
+    /// The request this plan will send, for tests that need to see what compiled.
+    /// Exposed as an opaque handle rather than the field, so nothing outside the
+    /// engine can assemble a request of its own from the parts.
+    #[doc(hidden)]
+    pub fn request_for_test(&self) -> RequestView<'_> {
+        RequestView {
+            uri: &self.request.uri,
+            method: &self.request.method,
+        }
     }
 
     pub fn load(root: &Path) -> Result<Self, String> {
@@ -175,108 +186,56 @@ impl Plan {
             worker_threads > 0,
             "mix.json/engine/worker_threads: must be positive",
         )?;
-        require(
-            mix.chains.len() == 1,
-            "mix.json/chains: B1.2 requires one single-call chain",
-        )?;
-        let chain = &mix.chains[0];
-        require(
-            chain.percent == 100.0 && chain.steps.len() == 1 && !chain.name.is_empty(),
-            "mix.json/chains/0: requires a name, 100 percent and exactly one step",
-        )?;
-        require(
-            chain.session == SessionPolicy::Fresh && chain.pool_size.is_none(),
-            "mix.json/chains/0/session: B1.2 supports stateless fresh sessions only",
-        )?;
-        let step = &chain.steps[0];
-        require(
-            !step.id.is_empty()
-                && step.overrides.is_none()
-                && step.delay_ms.is_none()
-                && step.on_failure.is_none()
-                && step.repeat_until.is_none(),
-            "mix.json/chains/0/steps/0: requires an id; overrides, delays and failure/repeat policies are not implemented",
-        )?;
-        let mut calls = BTreeMap::new();
+        let mut defined: BTreeMap<String, Call> = BTreeMap::new();
         for file in &mix.calls {
             for (name, call) in read::<CallFile>(&root, file, &mut documents)? {
                 require(
-                    !name.is_empty() && calls.insert(name, call).is_none(),
-                    "mix.json/calls: empty or duplicate call name",
+                    !name.is_empty(),
+                    "mix.json/calls: a call name must not be empty",
+                )?;
+                require(
+                    defined.insert(name.clone(), call).is_none(),
+                    &format!(
+                        "mix.json/calls: {name:?} is defined in more than one file; a step \
+                         naming it could not say which"
+                    ),
                 )?;
             }
         }
-        let call = calls
-            .get(&step.call)
-            .ok_or("mix.json/chains/0/steps/0/call: unresolved call reference")?;
+
+        // Every chain, every step, every reference -- not only the one that will be
+        // sent. The layers that use the rest arrive in B3.2 and B3.3; the resolution
+        // they will use is a property of the document, and is checked as one.
+        let resolved = calls::resolve(&mix, &defined, &target, &authority)?;
+
         require(
-            call.assertions.is_empty() && call.extract.is_empty(),
-            "call: assertions and extraction are not implemented",
+            resolved.chains.len() == 1,
+            "mix.json/chains: mixing several chains is not implemented yet (B3.3)",
         )?;
-        let body = match &call.body {
-            None => Bytes::new(),
-            Some(Body::Inline(text)) => {
-                static_text(text)?;
-                Bytes::copy_from_slice(text.as_bytes())
-            }
-            Some(Body::Generated { .. }) => {
-                return Err("call/body: generators are not implemented".into());
-            }
-        };
-        static_text(&call.path)?;
+        let chain = &resolved.chains[0];
         require(
-            call.path.starts_with('/') && !call.path.starts_with("//") && !call.path.contains('#'),
-            "call/path: expected an origin-relative path without a fragment",
+            chain.percent == 100.0,
+            "mix.json/chains/0/percent: a single chain takes all of the traffic",
         )?;
-        let mut path = call.path.clone();
-        for (name, value) in &call.query {
-            static_text(name)?;
-            static_text(value)?;
-            path.push(if path.contains('?') { '&' } else { '?' });
-            path.push_str(&encode_query(name));
-            path.push('=');
-            path.push_str(&encode_query(value));
-        }
-        let scheme = if target.tls.enabled { "https" } else { "http" };
-        let uri = format!("{scheme}://{authority}{path}")
-            .parse::<Uri>()
-            .map_err(|_| "call/path: invalid HTTP URI")?;
-        let mut headers = HeaderMap::new();
-        for (name, value) in mix.defaults.headers.iter().chain(call.headers.iter()) {
-            static_text(value)?;
-            let name = HeaderName::from_bytes(name.as_bytes())
-                .map_err(|_| "call/headers: invalid header name")?;
-            require(
-                !matches!(
-                    name.as_str(),
-                    "host"
-                        | "connection"
-                        | "proxy-connection"
-                        | "keep-alive"
-                        | "upgrade"
-                        | "transfer-encoding"
-                        | "content-length"
-                        | "te"
-                        | "trailer"
-                ),
-                "call/headers: transport-managed header is not allowed",
-            )?;
-            headers.insert(
-                name,
-                HeaderValue::from_str(value).map_err(|_| "call/headers: invalid header value")?,
-            );
-        }
-        headers.insert(
-            hyper::header::HOST,
-            HeaderValue::from_str(authority.as_str())
-                .map_err(|_| "target: invalid HTTP authority")?,
-        );
-        let timeout =
-            Duration::from_millis(call.timeout_ms.or(mix.defaults.timeout_ms).unwrap_or(5000));
         require(
-            !timeout.is_zero() && std::time::Instant::now().checked_add(timeout).is_some(),
-            "call/timeout_ms: must be positive and representable by the monotonic clock",
+            chain.session == SessionPolicy::Fresh && chain.pool_size.is_none(),
+            "mix.json/chains/0/session: stateless fresh sessions only (B3.9)",
         )?;
+        require(
+            chain.steps.len() == 1,
+            "mix.json/chains/0/steps: chaining is not implemented yet (B3.2)",
+        )?;
+        let written = &mix.chains[0].steps[0];
+        require(
+            written.overrides.is_none()
+                && written.delay_ms.is_none()
+                && written.on_failure.is_none()
+                && written.repeat_until.is_none(),
+            "mix.json/chains/0/steps/0: overrides, delays and failure/repeat policies are not implemented (B3.4)",
+        )?;
+        let step = &chain.steps[0];
+        let request = Arc::clone(&resolved.requests[&step.call]);
+        let timeout = resolved.longest_timeout();
         require(
             span.checked_add(timeout)
                 .and_then(|d| std::time::Instant::now().checked_add(d))
@@ -284,7 +243,7 @@ impl Plan {
             "mix.json/phases: timeline duration including drain is not representable",
         )?;
         let calibration_shape = crate::calibration::Shape {
-            request_body_bytes: body.len(),
+            request_body_bytes: request.body.len(),
             tls: target.tls.enabled,
             chain_depth: 1,
             generation: "static".into(),
@@ -310,13 +269,7 @@ impl Plan {
             step: step.id.clone(),
             call: step.call.clone(),
             target,
-            request: Arc::new(RequestTemplate {
-                method: call.method.to_string().parse().expect("plan method enum"),
-                uri,
-                headers,
-                body,
-                timeout,
-            }),
+            request,
             rate,
             duration,
             baseline,
@@ -383,30 +336,17 @@ fn bundle_hash(documents: &BTreeMap<String, Vec<u8>>) -> String {
     format!("sha256:{:x}", hash.finalize())
 }
 
-fn static_text(value: &str) -> Result<(), String> {
-    require(
-        !value.contains("{{") && !value.contains("}}"),
-        "call: templates are not implemented",
-    )
+/// What a test may see of a compiled request.
+#[doc(hidden)]
+pub struct RequestView<'a> {
+    pub uri: &'a hyper::Uri,
+    pub method: &'a hyper::Method,
 }
 
-fn require(condition: bool, message: &str) -> Result<(), String> {
+pub(crate) fn require(condition: bool, message: &str) -> Result<(), String> {
     if condition {
         Ok(())
     } else {
         Err(message.into())
     }
-}
-
-fn encode_query(value: &str) -> String {
-    use std::fmt::Write;
-    let mut encoded = String::new();
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
-            encoded.push(char::from(byte));
-        } else {
-            write!(encoded, "%{byte:02X}").expect("writing to String");
-        }
-    }
-    encoded
 }

@@ -23,7 +23,7 @@ pub mod targets;
 
 pub use call::{Assertion, Body, Call, CallFile, Condition};
 pub use common::{Dur, Method, Selector};
-pub use mix::{Chain, Load, LoadMode, LoadModel, Mix, Phases, SessionPolicy, Step};
+pub use mix::{Chain, Defaults, Load, LoadMode, LoadModel, Mix, Phases, SessionPolicy, Step};
 pub use targets::{Target, Targets};
 
 /// The statistical floor: 30s at 75 RPS. Supports p50 and p95 solidly, p99 coarsely

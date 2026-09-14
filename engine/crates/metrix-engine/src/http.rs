@@ -26,7 +26,7 @@ use tokio::{
 };
 use tokio_rustls::TlsConnector;
 
-use crate::bundle::RequestTemplate;
+use crate::calls::RequestTemplate;
 
 #[cfg(test)]
 mod tests;

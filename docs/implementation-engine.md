@@ -92,7 +92,7 @@ Buildable and testable with nothing but a shell, a bundle, and the mock target.
 
 ### B3 — Calls, chains, and the mixture
 
-- [ ] **B3.1** — Calls as a separate document; `call` references resolved from mix steps
+- [x] **B3.1** — Calls as a separate document; `call` references resolved from mix steps
 - [ ] **B3.2** — Chaining: sequential steps, variable scope, JSONPath + XPath extraction (§5)
 - [ ] **B3.3** — Chains with percentages of a total rate; sum-to-100 validation (§4.5)
 - [ ] **B3.4** — Assertions, `on_failure`, `repeat_until`, chain-abort accounting, expected-failure chains

@@ -192,3 +192,124 @@ fn symlinks_cannot_escape_the_bundle() {
     std::os::unix::fs::symlink(outside.path(), dir.path().join("calls/ping.json")).unwrap();
     assert!(Plan::load(dir.path()).err().unwrap().contains("escapes"));
 }
+
+/// B3.1: a `call` reference is resolved wherever it is written, not only where the
+/// executor happens to look. The chains below are all refused for *other* reasons
+/// until B3.2 and B3.3 land -- what is checked here is that the reference itself is
+/// judged first, and that the message names the step that wrote it.
+mod resolution {
+    use super::*;
+
+    /// Two chains, the second naming a call that does not exist. Only the first
+    /// would ever have been compiled before.
+    fn two_chains(second_call: &str) -> Value {
+        json!([
+            {"name": "a", "percent": 50, "session": "fresh",
+             "steps": [{"id": "get", "call": "ping"}]},
+            {"name": "b", "percent": 50, "session": "fresh",
+             "steps": [{"id": "get", "call": second_call}]}
+        ])
+    }
+
+    fn load_with(chains: Value) -> Result<(), String> {
+        let dir = tempfile::tempdir().unwrap();
+        bundle(dir.path(), "127.0.0.1:1".parse().unwrap(), "http1");
+        edit(dir.path(), "mix.json", |doc| doc["chains"] = chains);
+        Plan::load(dir.path()).map(drop)
+    }
+
+    #[test]
+    fn a_reference_in_a_later_chain_is_resolved_too() {
+        let error = load_with(two_chains("nowhere")).unwrap_err();
+        // The chain that named it, not "chain 0" and not a bare "unresolved".
+        assert!(error.contains("chains/1/steps/0/call"), "{error}");
+        assert!(error.contains("nowhere"), "{error}");
+    }
+
+    #[test]
+    fn resolving_happens_before_the_limits_on_what_can_run_yet() {
+        // Both chains resolve, so the refusal is about mixing rather than about a
+        // name. Getting this order wrong would report "one chain only" for a plan
+        // whose real problem is a typo.
+        let error = load_with(two_chains("ping")).unwrap_err();
+        assert!(error.contains("B3.3"), "{error}");
+    }
+
+    #[test]
+    fn two_chains_cannot_share_a_name() {
+        let error = load_with(json!([
+            {"name": "same", "percent": 50, "session": "fresh",
+             "steps": [{"id": "get", "call": "ping"}]},
+            {"name": "same", "percent": 50, "session": "fresh",
+             "steps": [{"id": "get", "call": "ping"}]}
+        ]))
+        .unwrap_err();
+        // The name keys every series and every SLO; two of them is a report that
+        // cannot say which chain it is about.
+        assert!(error.contains("chains/1/name"), "{error}");
+    }
+
+    #[test]
+    fn two_steps_of_one_chain_cannot_share_an_id() {
+        let error = load_with(json!([
+            {"name": "a", "percent": 100, "session": "fresh",
+             "steps": [{"id": "same", "call": "ping"}, {"id": "same", "call": "ping"}]}
+        ]))
+        .unwrap_err();
+        assert!(error.contains("steps/1/id"), "{error}");
+    }
+
+    #[test]
+    fn a_chain_with_no_steps_sends_nothing_and_says_so() {
+        let error = load_with(json!([
+            {"name": "a", "percent": 100, "session": "fresh", "steps": []}
+        ]))
+        .unwrap_err();
+        assert!(error.contains("chains/0/steps"), "{error}");
+    }
+
+    #[test]
+    fn a_call_nobody_invokes_is_not_compiled() {
+        // It is read and parsed -- a malformed file is still a malformed file -- but
+        // a path it declares is never sent, so refusing the run over it would be
+        // refusing over a request that does not exist.
+        let dir = tempfile::tempdir().unwrap();
+        bundle(dir.path(), "127.0.0.1:1".parse().unwrap(), "http1");
+        edit(dir.path(), "calls/ping.json", |doc| {
+            doc["unused"] = json!({"method": "GET", "path": "/{{ never_bound }}"});
+        });
+        Plan::load(dir.path()).unwrap();
+    }
+
+    #[test]
+    fn one_name_defined_in_two_files_is_refused_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        bundle(dir.path(), "127.0.0.1:1".parse().unwrap(), "http1");
+        support::write(
+            dir.path(),
+            "calls/again.json",
+            &json!({"ping": {"method": "GET", "path": "/elsewhere"}}),
+        );
+        edit(dir.path(), "mix.json", |doc| {
+            doc["calls"] = json!(["calls/ping.json", "calls/again.json"]);
+        });
+        let error = Plan::load(dir.path()).map(drop).unwrap_err();
+        // A step naming it could not say which one it meant.
+        assert!(error.contains("ping"), "{error}");
+    }
+
+    #[test]
+    fn the_compiled_request_is_the_one_the_step_named() {
+        let dir = tempfile::tempdir().unwrap();
+        bundle(dir.path(), "127.0.0.1:1".parse().unwrap(), "http1");
+        edit(dir.path(), "calls/ping.json", |doc| {
+            doc["other"] = json!({"method": "POST", "path": "/other"});
+        });
+        edit(dir.path(), "mix.json", |doc| {
+            doc["chains"][0]["steps"][0]["call"] = json!("other");
+        });
+        let plan = Plan::load(dir.path()).unwrap();
+        assert_eq!(plan.request_for_test().uri.path(), "/other");
+        assert_eq!(plan.request_for_test().method, "POST");
+    }
+}
