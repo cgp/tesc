@@ -11,6 +11,10 @@ dependencies = [
     "boto3>=1.35",
     "asyncssh>=2.19",
     "httpx>=0.28",
+    # OpenAPI documents are written in YAML more often than in JSON. It arrives
+    # transitively with uvicorn's standard extra; named here because generation
+    # depends on it directly and a transitive dependency is not a promise.
+    "pyyaml>=6",
 ]
 
 [project.scripts]

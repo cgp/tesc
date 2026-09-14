@@ -31,6 +31,10 @@ const state = {
   //: the bundle preview asked for while it is open. Editor actions read the form
   //: into it; background updates leave its DOM alone.
   planDraft: null,
+  //: The paste panel, when a description is being turned into calls. Holds the
+  //: mode (a new plan, or new calls for an existing one), what has been pasted, and
+  //: the server's reason if it would not read it.
+  planNew: null,
   //: What the server says about the draft as it stands -- the problems and the
   //: arithmetic. Never computed here: the browser renders this answer and reaches
   //: none of it, so a form cannot save what a hand-written file would be rejected

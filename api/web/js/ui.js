@@ -24,6 +24,7 @@ const PATHS = {
   ],
   "chart-line": ["M4 19l16 0", "M4 15l4 -6l4 2l4 -5l4 4"],
   "chevron-down": ["M6 9l6 6l6 -6"],
+  check: ["M5 12l5 5l10 -10"],
   "chevron-up": ["M6 15l6 -6l6 6"],
   clipboard: [
     "M9 5h-2a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-12a2 2 0 0 0 -2 -2h-2",

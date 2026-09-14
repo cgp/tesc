@@ -201,11 +201,23 @@ The run-time counterpart is the `target_unreachable` annotation: a target that p
 
 HAR and access-log sources are the valuable ones, because they answer the question a schema cannot: what does this service *actually* get asked for? A plan whose mixture comes from observed traffic is worth considerably more than one whose weights were guessed.
 
+**The document is posted, never fetched from a URL.** A control plane that retrieves whatever address it is handed is a request forwarder sitting inside the network it exists to observe, which is a larger thing than a plan generator and not a decision anybody makes by asking for a skeleton. The same rule applies inside a document: a local `$ref` is resolved, a remote one is left where it is.
+
+**Nothing is copied out of a capture except the shape of the request.** A HAR from a browser session carries session cookies, bearer tokens and whatever was typed into the login form, and a plan is a file that ends up in a repository. Method, path and status are read; bodies and headers are not, and the todo list says how many were left behind. Authentication belongs in the mix's `auth` block, which knows how to refresh a credential and keeps it out of the documents.
+
+**The one guess a traffic source makes is which path segments are identifiers.** `/api/orders/12345` and `/api/orders/67890` are one operation, and left as literals a week of logs becomes four thousand calls. Numeric, UUID and long-hex segments become templates — and every call that had one carries a todo saying so, because a service whose routes really are numeric deserves to see the guess rather than find it later.
+
 ### 8.3 Draft semantics
 
 **No chain inference.** Guessing chains from repeated id values across a capture is unreliable in exactly the cases that matter, and a wrong chain is worse than none — it yields a plan that runs cleanly while testing a flow the service does not have. Generation emits single-step chains only; chaining is the LLM's job (it has the codebase, a far better source than a traffic capture) or the author's.
 
-Generated plans come back marked `"draft": true` with `todo` annotations on fields needing human or LLM attention — guessed weights, placeholder values, unchained operations that probably belong in a sequence. The UI surfaces these as a checklist on the Config screen, and `draft: true` plans are flagged when run, so a provisional mixture is never mistaken for a reviewed one.
+Generated plans come back marked as drafts, with `todo` entries on the fields needing human or LLM attention — guessed weights, placeholder values, unchained operations that probably belong in a sequence. The Plans page surfaces these as a checklist, and a draft is marked as one everywhere it appears, so a provisional mixture is never mistaken for a reviewed one.
+
+**The marker is a `draft.json` sidecar, not a field in `mix.json`.** That document's shape belongs to the engine, and the plan hash covers its bytes: a control-plane review state has no business appearing in a schema the load generator parses, or moving the identity of a run. Clearing the marker is its own action rather than a side effect of saving — editing one percentage is not a review, and a flag that cleared itself on the first edit would mark every generated plan reviewed a minute after it was opened.
+
+**A draft warns; it does not refuse.** A generated skeleton runs, which is the point of generating one. What it cannot do is pass for a mixture somebody chose. Blocking it outright would only teach people to delete the marker.
+
+**Regenerating replaces the calls and leaves the mixture alone.** This is what the document split is for: the mechanical half goes stale when the service changes and the judgment half does not, so `POST /api/plans/{name}/regenerate` rewrites `calls/generated.json` and does not touch `mix.json`. A regeneration that would leave a chain naming a call the service no longer has is refused rather than written — the plan would still load, right up until somebody tried to run it.
 
 The intended loop, end to end:
 

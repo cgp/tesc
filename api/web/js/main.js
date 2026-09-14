@@ -317,7 +317,11 @@ async function openPlan(name) {
         // from the stored plan, and the page has to be able to say when the two have
         // come apart.
         saved: doc,
-        detail: { calls: detail.call_details, notes: detail.notes },
+        // The whole response, not a copy of the fields the view happens to read
+        // today. Narrowing it here means every field the route grows has to be
+        // remembered in two places, and the one that was forgotten is the one that
+        // does not appear on screen.
+        detail,
         profile: get().profiles[0]?.name ?? null,
         preview: null,
         error: null,
@@ -457,6 +461,69 @@ async function downloadBundle() {
   }
 }
 
+/**
+ * Turn a pasted description into a plan, or into new calls for one.
+ *
+ * Both go through the same panel because they are the same act: read the service,
+ * write the mechanical half. The difference is what is kept — a new plan gets a
+ * starter mixture, a regeneration leaves the tuned one exactly where it was.
+ */
+async function runDescribe() {
+  const panel = get().planNew;
+  const form = document.querySelector("[data-describe-form]");
+  if (!panel || !form) return;
+  const fields = plans.readDescribe(form);
+  const pending = { ...panel, ...fields, error: null };
+  set({ planNew: pending });
+
+  if (!fields.content.trim()) {
+    set({ planNew: { ...pending, error: "Paste the document first." } });
+    return;
+  }
+  try {
+    if (panel.mode === "regenerate") {
+      const result = await api.regenerateCalls(panel.plan, {
+        source: fields.source,
+        content: fields.content,
+      });
+      set({ planNew: null });
+      notify(
+        result.added.length || result.removed.length
+          ? `Calls replaced: ${count(result.added.length, "new call")}, ` +
+              `${result.removed.length} gone. The mixture is untouched.`
+          : "Calls replaced. Nothing about the service had changed."
+      );
+      await onRouteChange();
+      return;
+    }
+    const created = await api.generatePlan(fields);
+    set({ planNew: null });
+    notify(
+      `Generated ${created.name} from ${fields.source} — ` +
+        `${count(created.draft?.todos?.length ?? 0, "thing")} to decide.`
+    );
+    location.hash = `#/plans/${encodeURIComponent(created.name)}`;
+  } catch (error) {
+    // Back into the panel with the server's message and whatever was pasted. A
+    // rejected twelve-thousand-line document must not have to be pasted twice.
+    set({ planNew: { ...pending, error: error.message } });
+  }
+}
+
+/** Stop marking a generated plan as unreviewed. */
+async function acceptDraft() {
+  const draft = get().planDraft;
+  if (!draft) return;
+  try {
+    set({ error: null });
+    await api.acceptDraft(draft.name);
+    notify("Marked reviewed. It is a plan like any other now.");
+    await onRouteChange();
+  } catch (error) {
+    set({ error: error.message });
+  }
+}
+
 async function startObserving(profileName) {
   try {
     const { recording_id: id } = await api.startRecording({ profile: profileName });
@@ -591,7 +658,7 @@ async function onRouteChange() {
     // Leaving the page abandons the draft, for the same reason: an editor that
     // reappears later over a plan somebody had stopped thinking about is worse than
     // one that closes.
-    ...(route.name === "plans" ? {} : { planDraft: null, planCheck: null }),
+    ...(route.name === "plans" ? {} : { planDraft: null, planCheck: null, planNew: null }),
   });
   await load(route);
 }
@@ -1021,6 +1088,13 @@ document.addEventListener("click", (event) => {
     toggleBaseline(recording, button.dataset.baseline === "1");
   }
   if (action === "plan-reload") reloadPlans();
+  if (action === "plan-new") set({ planNew: { mode: "create", source: "openapi" } });
+  if (action === "calls-regenerate") {
+    set({ planNew: { mode: "regenerate", plan: get().planDraft?.name, source: "openapi" } });
+  }
+  if (action === "describe-cancel") set({ planNew: null });
+  if (action === "describe-run") runDescribe();
+  if (action === "draft-accept") acceptDraft();
   if (action === "plan-edit") location.hash = `#/plans/${encodeURIComponent(plan)}`;
   if (action === "plan-cancel") location.hash = "#/plans";
   if (action === "plan-save") savePlan();
@@ -1119,6 +1193,14 @@ function moved(steps, index, direction) {
 document.addEventListener("change", (event) => {
   if (event.target.closest('[data-change-action="draft-reload"]')) syncDraft();
 
+  // The source select changes the hint under it, and the panel holds a document
+  // somebody pasted: read the whole panel back before redrawing it.
+  const describing = event.target.closest("[data-describe-form] select");
+  if (describing) {
+    const form = describing.form;
+    set({ planNew: { ...get().planNew, ...plans.readDescribe(form) } });
+  }
+
   const field = event.target.closest("[data-plan-form] input, [data-plan-form] select");
   if (field) {
     if (field.dataset.derives === "percent") shareFromRate(field);
@@ -1149,6 +1231,10 @@ document.addEventListener("submit", (event) => {
   if (event.target.matches("[data-plan-form]")) {
     event.preventDefault();
     savePlan();
+  }
+  if (event.target.matches("[data-describe-form]")) {
+    event.preventDefault();
+    runDescribe();
   }
 });
 

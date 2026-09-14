@@ -305,3 +305,19 @@
   background: var(--tblr-bg-surface-secondary);
   cursor: default;
 }
+
+/* A pasted service description. Monospace because it is a document being read as
+   much as typed, and a fixed height because the page it sits on has to stay
+   navigable with a twelve-thousand-line OpenAPI file in it. */
+.metrix-paste {
+  font-family: var(--metrix-mono);
+  font-size: .8125rem;
+  white-space: pre;
+  overflow: auto;
+  max-height: 28rem;
+}
+
+/* The generator's handover note. Wide measure rather than full width: these are
+   sentences, and a sentence spanning a 1900px window is one nobody finishes. */
+.metrix-todos { max-width: 100ch; margin: 0; padding-left: 1.25rem; }
+.metrix-todos > li + li { margin-top: .375rem; }

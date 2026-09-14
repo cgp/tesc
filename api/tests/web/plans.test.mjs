@@ -45,7 +45,8 @@ class FakeFormData {
 }
 Object.defineProperty(globalThis, "FormData", { configurable: true, value: FakeFormData });
 
-const { render, readForm, shareFromRate, verdict } = await import("../../web/js/plans.js");
+const { render, readDescribe, readForm, shareFromRate, verdict } =
+  await import("../../web/js/plans.js");
 
 const FIGURES = {
   mode: "fixed",
@@ -124,7 +125,7 @@ function editorState(patch = {}) {
       name: "shop",
       doc: DOC,
       detail: {
-        calls: [
+        call_details: [
           {
             name: "search",
             description: "Full-text search",
@@ -426,4 +427,99 @@ test("the bundle says when the form has moved on from the stored plan", () => {
   // A bundle is assembled from the plan on disk. An export that quietly omits what
   // is on screen is worse than one that refuses.
   assert.match(render(edited), /changes that are not saved/);
+});
+
+/* ------------------------------------------------------- generating from a source */
+
+test("the generator offers every source and says what each one knows", () => {
+  const markup = render(listState({ planNew: { mode: "create", source: "openapi" } }));
+  for (const source of ["openapi", "wsdl", "har", "access_log", "routes"]) {
+    assert.match(markup, new RegExp(`value="${source}"`));
+  }
+  // The difference that matters is not the file format: two of these counted real
+  // traffic and three describe a shape.
+  assert.match(markup, /Weights are flat/);
+  assert.match(markup, /not fetched/);
+});
+
+test("a rejected document comes back with what was pasted still in it", () => {
+  const markup = render(
+    listState({
+      planNew: {
+        mode: "create",
+        source: "openapi",
+        content: "openapi: 3.0.0\nbroken:",
+        error: "openapi: no `paths` object",
+      },
+    })
+  );
+  assert.match(markup, /no `paths` object/);
+  // Twelve thousand lines must not have to be pasted twice.
+  assert.match(markup, /openapi: 3.0.0/);
+});
+
+test("regenerating is the same panel, and says what it leaves alone", () => {
+  const markup = render(
+    listState({ planNew: { mode: "regenerate", plan: "shop", source: "openapi" } })
+  );
+  assert.match(markup, /Regenerate calls/);
+  assert.match(markup, /mixture is left alone/);
+  // No name box: the plan already has one.
+  assert.doesNotMatch(markup, /name="describe.name"/);
+});
+
+test("the panel is read back as three fields and nothing else", () => {
+  const fields = readDescribe(
+    form({
+      "describe.name": "  shop  ",
+      "describe.source": "har",
+      "describe.content": "  {\"log\": {}}  ",
+    })
+  );
+  assert.equal(fields.name, "shop");
+  assert.equal(fields.source, "har");
+  // The document keeps its whitespace: a YAML document is whitespace.
+  assert.equal(fields.content, '  {"log": {}}  ');
+});
+
+test("a generated plan carries its todos as a checklist", () => {
+  const state = editorState();
+  state.planDraft.detail.draft = {
+    draft: true,
+    source: "openapi",
+    observed_weights: false,
+    todos: [
+      { where: "mix.json/chains", message: "the shares are an even split" },
+      { where: "calls/generated.json/getpet/path", message: "{{ petId }} has no source" },
+    ],
+  };
+  const markup = render(state);
+  assert.match(markup, /Generated from openapi/);
+  assert.match(markup, /the shares are an even split/);
+  assert.match(markup, /Mark reviewed/);
+  // What the weights are, said where the weights are questioned.
+  assert.match(markup, /nothing in a service description says what it actually gets asked for/);
+});
+
+test("observed weights are not apologised for", () => {
+  const state = editorState();
+  state.planDraft.detail.draft = {
+    draft: true,
+    source: "har",
+    observed_weights: true,
+    todos: [],
+  };
+  const markup = render(state);
+  assert.match(markup, /came from counted traffic/);
+  assert.doesNotMatch(markup, /even split/);
+});
+
+test("a plan nobody generated has no draft card at all", () => {
+  assert.doesNotMatch(render(editorState()), /Mark reviewed/);
+});
+
+test("the list marks which plans are still skeletons", () => {
+  const drafted = { ...PLAN, draft: { source: "openapi", todos: [] } };
+  assert.match(render(listState({ plans: [drafted] })), /badge bg-purple-lt/);
+  assert.doesNotMatch(render(listState()), /badge bg-purple-lt/);
 });

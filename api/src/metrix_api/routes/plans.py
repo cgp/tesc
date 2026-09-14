@@ -10,8 +10,9 @@ import json
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
+from pydantic import BaseModel, Field
 
-from metrix_api import plans
+from metrix_api import generate, plans
 from metrix_api.config import Config
 from metrix_api.profiles import ProfileError, load_profile
 
@@ -48,6 +49,8 @@ def _summary(plan: plans.Plan) -> dict[str, Any]:
             "duration": load.get("duration"),
         },
         "notes": plan.notes,
+        # What is still this tool's guesswork rather than somebody's decision.
+        "draft": plan.draft,
         # The arithmetic behind the percentages, and everything wrong with them.
         # Computed here so the browser renders an answer rather than reaching one.
         "figures": plans.figures(plan),
@@ -65,6 +68,137 @@ def list_plans(request: Request) -> dict[str, Any]:
     """
     found, broken = plans.list_plans(_config(request))
     return {"plans": [_summary(p) for p in found], "broken": broken}
+
+
+class Generate(BaseModel):
+    """A service description, and what to call the plan made from it."""
+
+    name: str
+    source: str = Field(description="openapi, wsdl, har, access_log or routes")
+    content: str = Field(description="The document itself, not a URL to fetch it from")
+    save: bool = True
+
+
+class Regenerate(BaseModel):
+    """A newer description of the same service."""
+
+    source: str
+    content: str
+
+
+@router.post("/generate", status_code=201)
+def generate_plan(request: Request, body: Generate) -> dict[str, Any]:
+    """Turn a service description into a draft plan.
+
+    The mechanical half of authoring (§8.1): one call per operation, parameters from
+    the schema's own examples and types, assertions from the codes it declares, and a
+    starter mixture with flat weights. There is no model in here — the same document
+    gives the same plan, so a diff between two generated plans means the service
+    changed.
+
+    What comes back is marked a draft and carries its todos. The judgment half —
+    which calls matter, what a real mixture looks like, which of these belong in a
+    sequence — is left to whoever reads it, and the todo list is the handover note.
+
+    The document is posted rather than fetched from a URL. A control plane that
+    retrieves whatever address it is handed is a request forwarder sitting inside
+    someone's network, which is a larger thing than a plan generator.
+    """
+    config = _config(request)
+    if not plans.NAME.match(body.name):
+        raise HTTPException(
+            status_code=422,
+            detail=f"plan {body.name!r}: names are letters, digits, dot, dash, underscore",
+        )
+    try:
+        draft = generate.generate(body.source, body.content, name=body.name)
+    except generate.GenerationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if not body.save:
+        # A preview: everything the save would write, written nowhere. Useful for
+        # looking at what a description turns into before committing a name to it.
+        return draft.to_document()
+
+    root = plans.plan_path(config, body.name)
+    if root.exists():
+        raise HTTPException(
+            status_code=409,
+            detail=f"a plan named {body.name!r} already exists; regenerate its calls "
+            "instead, which leaves the mixture alone",
+        )
+    generate.write(root, draft)
+    try:
+        plan = plans.load_plan(config, body.name)
+    except plans.PlanError as exc:  # pragma: no cover - generation validates as it writes
+        raise HTTPException(status_code=500, detail=f"generated an unreadable plan: {exc}") from exc
+    return {**_summary(plan), "call_details": plans.call_details(plan)}
+
+
+@router.post("/{name}/regenerate")
+def regenerate_calls(name: str, request: Request, body: Regenerate) -> dict[str, Any]:
+    """Read the service again, and replace only the calls.
+
+    This is what the document split is for (§8.1). The calls are the mechanical half
+    and go stale when the service changes; the mixture is the judgment half and does
+    not. Regenerating rewrites `calls/generated.json` and does not touch `mix.json`,
+    so a tuned mixture survives an API change.
+
+    A regeneration that would leave a chain naming a call the service no longer has
+    is refused rather than written. The plan would still load — until somebody tried
+    to run it — and a plan that breaks at the moment of running is the failure this
+    tool exists to move earlier.
+    """
+    config = _config(request)
+    existing = _load(request, name)
+    try:
+        draft = generate.generate(body.source, body.content, name=name)
+    except generate.GenerationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    before = set(existing.call_names)
+    after = set(draft.calls)
+    orphaned = sorted(
+        f"{chain.get('name')}/{step.get('id')} calls {step.get('call')!r}"
+        for chain in existing.chains
+        for step in chain.get("steps", [])
+        if step.get("call") not in after
+    )
+    if orphaned:
+        raise HTTPException(
+            status_code=409,
+            detail="the new description does not define every call this mixture uses: "
+            + "; ".join(orphaned),
+        )
+
+    root = plans.plan_path(config, name)
+    (root / generate.CALLS_FILE).parent.mkdir(parents=True, exist_ok=True)
+    (root / generate.CALLS_FILE).write_bytes(plans.document_bytes(draft.calls))
+    plan = plans.load_plan(config, name)
+    return {
+        **_summary(plan),
+        "call_details": plans.call_details(plan),
+        # What moved, because a regeneration that changed nothing and one that
+        # rewrote every call look identical from the outside.
+        "added": sorted(after - before),
+        "removed": sorted(before - after),
+        "unchanged": sorted(after & before),
+    }
+
+
+@router.delete("/{name}/draft")
+def accept_draft(name: str, request: Request) -> dict[str, Any]:
+    """Say a generated plan has been read. Removes the draft marker.
+
+    Deliberately its own action rather than a side effect of saving: editing one
+    percentage is not a review, and a flag that cleared itself on the first edit
+    would mark every generated plan reviewed a minute after it was made.
+    """
+    _load(request, name)
+    if not plans.accept_draft(_config(request), name):
+        raise HTTPException(status_code=404, detail=f"plan {name!r} is not a draft")
+    plan = plans.load_plan(_config(request), name)
+    return {**_summary(plan), "call_details": plans.call_details(plan)}
 
 
 @router.get("/{name}")

@@ -17,6 +17,17 @@
 import { count, escape } from "./format.js";
 import { empty, icon } from "./ui.js";
 
+// What a description can be. The label says what each one is good for, because the
+// difference that matters is not the file format: two of these counted real traffic
+// and three of them describe a shape.
+const SOURCES = [
+  ["openapi", "OpenAPI 3 (JSON or YAML)", "Every operation, its parameters and the codes it declares. Weights are flat."],
+  ["wsdl", "WSDL 1.1", "SOAP operations, with an envelope built from the schema."],
+  ["har", "HAR capture", "Real paths and real frequencies. Bodies and headers are not copied."],
+  ["access_log", "Access log", "Common or combined format: weights grounded in production traffic."],
+  ["routes", "Route list", "One METHOD /path per line, for when nothing else exists."],
+];
+
 const MODES = ["fixed", "stages", "breakpoint"];
 const MODELS = ["open", "closed"];
 const SESSIONS = ["fresh", "reuse", "pool"];
@@ -32,12 +43,15 @@ export function blankStep(call) {
 
 export function selectState(state) {
   return state.planDraft
-    ? [state.planDraft, state.planCheck, state.profiles]
-    : [state.plans, state.brokenPlans, state.plansReadAt];
+    ? [state.planDraft, state.planCheck, state.profiles, state.planNew]
+    : [state.plans, state.brokenPlans, state.plansReadAt, state.planNew];
 }
 
 export function render(state) {
   rendered = signature(state);
+  // The paste panel wins over both views: it is a question being answered, and the
+  // page behind it is what the answer is for.
+  if (state.planNew) return describe(state.planNew);
   if (state.planDraft) return editor(state);
   return list(state);
 }
@@ -78,7 +92,25 @@ export function help() {
 
       <p><strong>Calls are read-only</strong> (§20.3). What is offered instead is the
       bundle: export it, change the call in the file with the tooling and review a
-      code change gets, and put it back.</p>`,
+      code change gets, and put it back.</p>
+
+      <p><strong>A plan can be generated from a description of the service</strong>
+      (§8) — an OpenAPI or WSDL document, a HAR capture, an access log, or a bare
+      list of routes. That is the mechanical half of the job: one call per operation,
+      parameters from the schema's own examples, assertions from the codes it
+      declares. There is no model in it, so the same document always gives the same
+      plan and a diff between two of them means the service changed.</p>
+
+      <p>What generation will never do is <strong>invent a chain</strong>. Guessing
+      that one call feeds another is unreliable in exactly the cases that matter, and
+      a wrong chain is worse than none: it runs cleanly while testing a flow the
+      service does not have. Every generated chain is one step long, and the todo
+      list says where a sequence probably belongs.</p>
+
+      <p>A generated plan stays marked as a draft until somebody says otherwise. It
+      runs — that is the point of generating one — but its weights are an even split
+      and its volume is a placeholder, and a provisional mixture that has stopped
+      looking provisional is how a guess gets quoted as a measurement.</p>`,
   };
 }
 
@@ -112,6 +144,9 @@ function list(state) {
           one into the plans directory, or unpack an exported bundle into it — the
           two are the same shape on purpose.`,
         action: `<div class="btn-list justify-content-center">
+                   <button class="btn btn-primary" data-action="plan-new">
+                     ${icon("plus")} Generate from a description
+                   </button>
                    ${reloadButton(state.plansReadAt)}
                  </div>`,
       })
@@ -126,7 +161,12 @@ function list(state) {
         targets — those come from a profile when the bundle is assembled, which is
         why one plan runs against staging and production with no edit.
       </p>
-      ${reloadButton(state.plansReadAt)}
+      <div class="btn-list">
+        ${reloadButton(state.plansReadAt)}
+        <button class="btn btn-primary" data-action="plan-new">
+          ${icon("plus")} Generate
+        </button>
+      </div>
     </div>
     ${state.plans.map((plan) => planCard(plan)).join("")}
   </div>`;
@@ -175,6 +215,7 @@ function planCard(plan) {
           ${count(plan.calls.length, "call")}</div>
       </div>
       <div class="card-actions d-flex align-items-center gap-2">
+        ${plan.draft ? `<span class="badge bg-purple-lt" title="Generated and not yet reviewed">draft</span>` : ""}
         ${verdictBadge(plan)}
         <button class="btn btn-sm" data-action="plan-edit" data-plan="${name}">
           ${icon("pencil")} Edit
@@ -220,6 +261,100 @@ function verdictBadge(plan) {
   return `<span class="badge bg-green-lt">ready</span>`;
 }
 
+/**
+ * Paste a description; get a plan.
+ *
+ * The document is pasted rather than fetched from a URL. A control plane that
+ * retrieves whatever address it is handed is a request forwarder sitting inside
+ * somebody's network, which is a larger thing than a plan generator and a decision
+ * nobody made when they asked for a skeleton.
+ */
+function describe(panel) {
+  const error = panel.error
+    ? `<div class="alert alert-danger" role="alert">
+         <div class="d-flex">
+           <div class="me-3">${icon("alert-triangle")}</div>
+           <div>
+             <h4 class="alert-title">${escape(
+               panel.mode === "regenerate" ? "Not regenerated" : "Not generated"
+             )}</h4>
+             <div>${escape(panel.error)}</div>
+           </div>
+         </div>
+       </div>`
+    : "";
+
+  const chosen = panel.source ?? SOURCES[0][0];
+  const described = SOURCES.find(([value]) => value === chosen)?.[2] ?? "";
+
+  return `<form class="metrix-stack" data-describe-form novalidate>
+    ${error}
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <h3 class="card-title">${
+            panel.mode === "regenerate" ? "Regenerate calls" : "Generate a plan"
+          }</h3>
+          <div class="card-subtitle">${
+            panel.mode === "regenerate"
+              ? "Read the service again and replace the calls. The mixture is left alone — that is what the two documents are for."
+              : "The mechanical half: one call per operation, assertions from the codes the service declares. Weights, chains and judgment stay with you."
+          }</div>
+        </div>
+        <div class="card-actions d-flex align-items-center gap-2">
+          <button type="button" class="btn btn-sm" data-action="describe-cancel">Cancel</button>
+          <button type="button" class="btn btn-sm btn-primary" data-action="describe-run">
+            ${icon("list-check")} ${panel.mode === "regenerate" ? "Replace calls" : "Generate"}
+          </button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="metrix-fields">
+          ${
+            panel.mode === "regenerate"
+              ? ""
+              : text("describe.name", "Plan name", panel.name, {
+                  required: true,
+                  hint: "Letters, digits, dot, dash, underscore. Used as the directory name.",
+                })
+          }
+          <div class="metrix-field">
+            <label class="form-label" for="f-describe.source">Source</label>
+            <select class="form-select" id="f-describe.source" name="describe.source">
+              ${SOURCES.map(
+                ([value, label]) =>
+                  `<option value="${escape(value)}"${value === chosen ? " selected" : ""}>
+                     ${escape(label)}
+                   </option>`
+              ).join("")}
+            </select>
+            <div class="form-hint">${escape(described)}</div>
+          </div>
+        </div>
+        <div class="mt-3">
+          <label class="form-label" for="f-describe.content">The document</label>
+          <textarea class="form-control metrix-paste" id="f-describe.content"
+                    name="describe.content" rows="16" spellcheck="false"
+                    placeholder="Paste it here.">${escape(panel.content ?? "")}</textarea>
+          <div class="form-hint">Pasted, not fetched: nothing here reaches out to a
+            URL on your behalf.</div>
+        </div>
+      </div>
+    </div>
+  </form>`;
+}
+
+/** Read the generator form back. Three fields, so no merge to do. */
+export function readDescribe(form) {
+  const data = new FormData(form);
+  const value = (name) => (data.get(name) ?? "").toString();
+  return {
+    name: value("describe.name").trim(),
+    source: value("describe.source").trim(),
+    content: value("describe.content"),
+  };
+}
+
 /* ------------------------------------------------------------------ the editor */
 
 function editor(state) {
@@ -259,6 +394,7 @@ function editor(state) {
       ${notes(draft.detail?.notes)}
     </div>
 
+    ${draftCard(draft)}
     ${loadCard(doc, check)}
     ${chainsCard(doc, check, draft)}
     ${exportCard(state, draft)}
@@ -402,7 +538,7 @@ function loadCard(doc, check) {
 
 function chainsCard(doc, check, draft) {
   const chains = doc.chains ?? [];
-  const calls = draft.detail?.calls ?? [];
+  const calls = draft.detail?.call_details ?? [];
 
   return `<div class="card">
     <div class="card-header">
@@ -602,6 +738,54 @@ function repeatFields(step, at) {
 }
 
 /**
+ * What is still the generator's guesswork, as a list of things to decide.
+ *
+ * A checklist rather than a paragraph, because that is what it is: a generated plan
+ * is a handover, and the todos are the note that came with it. Marking it reviewed is
+ * its own action and not a side effect of saving — editing one percentage is not a
+ * review, and a flag that cleared itself on the first edit would mark every generated
+ * plan reviewed a minute after it was opened.
+ */
+function draftCard(draft) {
+  const marker = draft.detail?.draft;
+  if (!marker) return "";
+  const todos = marker.todos ?? [];
+  return `<div class="card">
+    <div class="card-header">
+      <div>
+        <h3 class="card-title">
+          <span class="badge bg-purple-lt me-2">draft</span>Generated from ${escape(
+            marker.source
+          )}
+        </h3>
+        <div class="card-subtitle">${
+          marker.observed_weights
+            ? "The weights came from counted traffic. Everything else below is still this tool's."
+            : "The weights are an even split: nothing in a service description says what it actually gets asked for."
+        }</div>
+      </div>
+      <div class="card-actions">
+        <button type="button" class="btn btn-sm" data-action="draft-accept"
+                title="Stop marking this plan as unreviewed">
+          ${icon("check")} Mark reviewed
+        </button>
+      </div>
+    </div>
+    ${
+      todos.length
+        ? `<div class="card-body">
+             <ul class="metrix-todos">${todos
+               .map(
+                 (todo) => `<li><code>${escape(todo.where)}</code> — ${escape(todo.message)}</li>`
+               )
+               .join("")}</ul>
+           </div>`
+        : ""
+    }
+  </div>`;
+}
+
+/**
  * The bundle: this plan against one profile's boxes.
  *
  * A profile is required rather than optional, because the only thing the API adds to
@@ -689,7 +873,7 @@ function bundlePreview(preview) {
  * chain like `login-fail` explains itself as expecting a 401.
  */
 function callsCard(draft) {
-  const calls = draft.detail?.calls ?? [];
+  const calls = draft.detail?.call_details ?? [];
   if (!calls.length) return "";
 
   const rows = calls
@@ -723,8 +907,14 @@ function callsCard(draft) {
         <h3 class="card-title">Calls</h3>
         <div class="card-subtitle">Read-only. Request definitions are authored from
           the codebase or generated from a schema; hand-editing one in a browser is
-          how a plan drifts from the service it describes. Change them in the bundle
-          instead.</div>
+          how a plan drifts from the service it describes. Change them in the bundle,
+          or read the service again.</div>
+      </div>
+      <div class="card-actions">
+        <button type="button" class="btn btn-sm" data-action="calls-regenerate"
+                title="Replace the calls from a newer description, leaving the mixture alone">
+          ${icon("refresh")} Regenerate from a description
+        </button>
       </div>
     </div>
     <div class="table-responsive">
@@ -808,9 +998,10 @@ function signature(state) {
     draft.profile ?? null,
     draft.preview?.plan_hash ?? null,
     dirty(draft),
+    Boolean(draft.detail?.draft),
     (state.profiles ?? []).map((profile) => profile.name),
     draft.doc.load?.mode ?? "fixed",
-    (draft.detail?.calls ?? []).map((call) => call.name),
+    (draft.detail?.call_details ?? []).map((call) => call.name),
     (draft.doc.chains ?? []).map((chain) => [
       chain.session ?? "reuse",
       (chain.steps ?? []).map((step) => [
@@ -832,7 +1023,7 @@ function signature(state) {
  * needs markup that is not on the page, which is main.js's cue to render properly.
  */
 export function patch(state) {
-  if (!state.planDraft || signature(state) !== rendered) return false;
+  if (state.planNew || !state.planDraft || signature(state) !== rendered) return false;
   if (!document.querySelector("[data-plan-form]")) return false;
   return patchCheck(state.planCheck);
 }

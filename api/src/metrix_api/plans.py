@@ -53,6 +53,13 @@ SCHEMAS = Path(__file__).resolve().parents[3] / "schema"
 #: are held to the same shape profile names are.
 NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$")
 
+#: Written beside a generated plan and never into the bundle: it records that the
+#: plan is a skeleton nobody has reviewed, and what is still guesswork in it (§8.3).
+#: Deliberately not a field in `mix.json` -- that document's shape belongs to the
+#: engine, the plan hash covers its bytes, and a control-plane review state has no
+#: business moving a run's identity.
+DRAFT = "draft.json"
+
 #: Carried into the bundle untouched: Lua generators and CSV datasets (§4.4). They
 #: are not JSON, nothing here validates them, and — matching the engine — they are
 #: not part of the plan hash, which covers the three documents it parses.
@@ -108,6 +115,8 @@ class Plan:
     extras: dict[str, bytes] = field(default_factory=dict)
     #: Things worth saying about the stored form that are not errors.
     notes: list[str] = field(default_factory=list)
+    #: The `draft.json` sidecar, when the plan was generated and not yet reviewed.
+    draft: dict[str, Any] | None = None
 
     @property
     def call_names(self) -> list[str]:
@@ -189,13 +198,23 @@ def _plan_from(root: Path, name: str, mix: dict[str, Any]) -> Plan:
                     f"{step.get('call')!r} is not defined in any calls file"
                 )
 
+    draft = None
+    if (root / DRAFT).is_file():
+        try:
+            draft = json.loads((root / DRAFT).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            # A marker that will not parse must not make the plan unreadable. The
+            # plan is what matters; losing the todo list is a smaller loss than
+            # losing the mixture, and the note says which happened.
+            notes.append(f"{DRAFT} could not be read, so this plan's todo list is missing")
+
     extras = {}
     for directory in EXTRA_DIRS:
         for path in sorted((root / directory).rglob("*") if (root / directory).is_dir() else []):
             if path.is_file():
                 extras[_posix(path.relative_to(root).as_posix())] = path.read_bytes()
 
-    return Plan(name=name, mix=mix, calls=calls, extras=extras, notes=notes)
+    return Plan(name=name, mix=mix, calls=calls, extras=extras, notes=notes, draft=draft)
 
 
 def _read_json(path: Path, *, where: str) -> dict[str, Any]:
@@ -568,6 +587,20 @@ def check(plan: Plan) -> list[Problem]:
 
     problems.extend(_sample_count_problems(numbers))
     problems.extend(_unbound_problems(plan))
+    if plan.draft:
+        # A warning, never an error. A generated skeleton runs -- that is the point of
+        # generating one -- and what it cannot do is be mistaken for a mixture somebody
+        # chose. Blocking it would only teach people to delete the marker.
+        outstanding = len(plan.draft.get("todos", []))
+        problems.append(
+            Problem(
+                "warning",
+                DRAFT,
+                f"generated from {plan.draft.get('source', 'a description')} and not yet "
+                f"reviewed, with {outstanding} thing(s) still to decide; the weights and "
+                "the volume are this tool's, not anybody's",
+            )
+        )
 
     used = {step.get("call") for chain in plan.chains for step in chain.get("steps", [])}
     for unused in sorted(set(plan.call_names) - used):
@@ -745,6 +778,20 @@ def _unbound_problems(plan: Plan) -> list[Problem]:
 
 def plan_path(config: Config, name: str) -> Path:
     return config.plans_dir / name
+
+
+def accept_draft(config: Config, name: str) -> bool:
+    """Say that a generated plan has been read by somebody. Removes the marker.
+
+    A separate act from saving it. Editing one percentage is not a review, and a flag
+    that cleared itself on the first edit would mark every generated plan reviewed
+    within a minute of being opened.
+    """
+    marker = plan_path(config, name) / DRAFT
+    if not marker.is_file():
+        return False
+    marker.unlink()
+    return True
 
 
 def parse_mix(config: Config, name: str, mix: dict[str, Any]) -> Plan:

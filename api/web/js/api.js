@@ -76,6 +76,14 @@ export const api = {
     request(`/api/plans/${encodeURIComponent(name)}/validate`, json("POST", mix)),
   replacePlan: (name, mix) =>
     request(`/api/plans/${encodeURIComponent(name)}`, json("PUT", mix)),
+  // The document itself, posted. There is no URL form on purpose: a control plane
+  // that fetches whatever address it is handed is a request forwarder inside the
+  // network it is meant to be observing.
+  generatePlan: (body) => request("/api/plans/generate", json("POST", body)),
+  regenerateCalls: (name, body) =>
+    request(`/api/plans/${encodeURIComponent(name)}/regenerate`, json("POST", body)),
+  acceptDraft: (name) =>
+    request(`/api/plans/${encodeURIComponent(name)}/draft`, { method: "DELETE" }),
   bundle: (name, profile) =>
     request(
       `/api/plans/${encodeURIComponent(name)}/bundle?${new URLSearchParams({
