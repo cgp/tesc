@@ -199,6 +199,13 @@ pub(crate) async fn run(
                     report.interrupted,
                 ) {
                     report.snapshot_timing.output_packet.record(elapsed);
+                    if let Some(flush) = report
+                        .last_window
+                        .as_ref()
+                        .and_then(|w| w.snapshot.flush_total)
+                    {
+                        report.snapshot_timing.paired.record(flush + elapsed);
+                    }
                 }
             }
             if !timeline.advance(Instant::now())? {
@@ -226,7 +233,8 @@ pub(crate) async fn run(
                 report.diagnostics.observe(start.elapsed(), active);
                 flush(Recording { slots: &mut slots, workers: &mut workers, warmup_workers: &mut warmup_workers, warmup_interval: &mut warmup_interval, lag: &mut lag, phase, auth: plan.auth.as_ref().map(|auth| auth.snapshot()) },
                     &mut interval_metrics, &mut report, &mut last_snapshot, start.elapsed(), 0, snapshots.as_ref());
-                if let Some(output) = output { if let Some(elapsed) = output.summary(report.last_window.as_ref().expect("flushed window"), phase, &report.diagnostics, timeline.ready(Instant::now(), active) || report.interrupted, report.interrupted) { report.snapshot_timing.output_packet.record(elapsed); } }
+                if let Some(output) = output { if let Some(elapsed) = output.summary(report.last_window.as_ref().expect("flushed window"), phase, &report.diagnostics, timeline.ready(Instant::now(), active) || report.interrupted, report.interrupted) { report.snapshot_timing.output_packet.record(elapsed);
+                    if let Some(flush) = report.last_window.as_ref().and_then(|w| w.snapshot.flush_total) { report.snapshot_timing.paired.record(flush + elapsed); } } }
                 break;
             }
             _ = async { if let Some(deadline) = deadline { tokio::time::sleep_until(deadline).await; } else { std::future::pending::<()>().await; } } => {}
@@ -239,7 +247,8 @@ pub(crate) async fn run(
                 report.diagnostics.observe(start.elapsed(), active);
                 flush(Recording { slots: &mut slots, workers: &mut workers, warmup_workers: &mut warmup_workers, warmup_interval: &mut warmup_interval, lag: &mut lag, phase, auth: plan.auth.as_ref().map(|auth| auth.snapshot()) },
                     &mut interval_metrics, &mut report, &mut last_snapshot, start.elapsed(), active, snapshots.as_ref());
-                if let Some(output) = output { if let Some(elapsed) = output.summary(report.last_window.as_ref().expect("flushed window"), phase, &report.diagnostics, timeline.ready(Instant::now(), active) || report.interrupted, report.interrupted) { report.snapshot_timing.output_packet.record(elapsed); } }
+                if let Some(output) = output { if let Some(elapsed) = output.summary(report.last_window.as_ref().expect("flushed window"), phase, &report.diagnostics, timeline.ready(Instant::now(), active) || report.interrupted, report.interrupted) { report.snapshot_timing.output_packet.record(elapsed);
+                    if let Some(flush) = report.last_window.as_ref().and_then(|w| w.snapshot.flush_total) { report.snapshot_timing.paired.record(flush + elapsed); } } }
                 if phase == Phase::Measure && report.stopped_because.is_none() {
                     if let Some(b) = &plan.breakpoint {
                         if let Some(reason) = crate::breakpoint::assess(&report, if plan.refinement { metrix_plan::mix::StopOn::default() } else { b.stop_on }, plan.breakpoint_baseline_p99) {

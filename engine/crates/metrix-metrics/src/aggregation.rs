@@ -57,6 +57,10 @@ impl Distribution {
     }
 
     pub fn merge(&mut self, other: &Self) {
+        self.overflow += other.overflow;
+        if other.count() == 0 {
+            return;
+        }
         self.hdr
             .add(&other.hdr)
             .expect("identically configured histograms");
@@ -67,11 +71,12 @@ impl Distribution {
             self.max = Some(self.max.map_or(max, |old| old.max(max)));
         }
         self.sum += other.sum;
-        self.overflow += other.overflow;
     }
 
     pub fn reset(&mut self) {
-        self.hdr.reset();
+        if self.count() > 0 {
+            self.hdr.reset();
+        }
         self.min = None;
         self.max = None;
         self.sum = 0;
@@ -634,6 +639,7 @@ pub struct SnapshotSample {
 
 #[derive(Clone, Debug, Default)]
 pub struct SnapshotTiming {
+    pub paired: Distribution,
     pub aggregation: Distribution,
     pub window_construction: Distribution,
     pub flush_total: Distribution,

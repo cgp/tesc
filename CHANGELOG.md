@@ -775,3 +775,7 @@ Validation: `bash scripts/check.sh engine`, `bash scripts/check.sh contract`, an
 ## Snapshot execution-loop diagnostics
 
 Measure aggregation, window construction, complete flush and output-packet construction separately. Emit per-snapshot durations, count-supported target/step totals and stderr maxima to diagnose recurring quarter-second dispatch stalls. Keep queue admission and writer serialization outside packet construction, and omit construction samples when capacity refuses a packet before work starts. Test execution explicitly waived by the user for this instrumentation change.
+
+## Reduce snapshot dispatch work
+
+Add same-snapshot paired flush-plus-packet durations and supported totals. Skip empty histogram count-array merge/reset work while preserving overflow metadata. Share immutable snapshot windows with the output queue and perform writer-specific copying on the writer thread, removing a duplicate histogram clone from arrival dispatch. Owned snapshot consumers retain their copy. Tests explicitly waived while the user measures this path.

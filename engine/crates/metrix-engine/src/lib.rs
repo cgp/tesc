@@ -74,7 +74,7 @@ pub struct Report {
     pub metrics: Accumulator,
     /// Warmup-admitted attempts, including completions after the warmup boundary.
     pub warmup_metrics: Accumulator,
-    pub last_window: Option<Window>,
+    pub last_window: Option<Arc<Window>>,
     pub windows: u64,
     pub windows_dropped: u64,
     /// Iterations that stopped before their last step. Counted apart from failed
@@ -378,7 +378,7 @@ fn flush(
         .snapshot_timing
         .flush_total
         .record(window.snapshot.flush_total.expect("completed flush"));
-    report.last_window = Some(window);
+    report.last_window = Some(Arc::new(window));
 }
 
 fn cause(failure: Failure) -> Cause {

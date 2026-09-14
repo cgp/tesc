@@ -233,7 +233,7 @@ fn execute(args: Args) -> Result<ExitCode, String> {
     );
     let snapshot = &report.snapshot_timing;
     eprintln!(
-        "snapshot_aggregation_samples={} snapshot_aggregation_max_ms={:.3} snapshot_window_samples={} snapshot_window_max_ms={:.3} snapshot_flush_samples={} snapshot_flush_max_ms={:.3} snapshot_output_packet_samples={} snapshot_output_packet_max_ms={:.3}",
+        "snapshot_aggregation_samples={} snapshot_aggregation_max_ms={:.3} snapshot_window_samples={} snapshot_window_max_ms={:.3} snapshot_flush_samples={} snapshot_flush_max_ms={:.3} snapshot_output_packet_samples={} snapshot_output_packet_max_ms={:.3} snapshot_paired_samples={} snapshot_paired_max_ms={:.3}",
         snapshot.aggregation.count(),
         snapshot.aggregation.max_us().unwrap_or(0) as f64 / 1000.0,
         snapshot.window_construction.count(),
@@ -241,7 +241,9 @@ fn execute(args: Args) -> Result<ExitCode, String> {
         snapshot.flush_total.count(),
         snapshot.flush_total.max_us().unwrap_or(0) as f64 / 1000.0,
         snapshot.output_packet.count(),
-        snapshot.output_packet.max_us().unwrap_or(0) as f64 / 1000.0
+        snapshot.output_packet.max_us().unwrap_or(0) as f64 / 1000.0,
+        snapshot.paired.count(),
+        snapshot.paired.max_us().unwrap_or(0) as f64 / 1000.0
     );
     let timing = &report.arrival_timing;
     eprintln!(

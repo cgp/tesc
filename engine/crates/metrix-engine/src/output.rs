@@ -83,7 +83,8 @@ enum Packet {
         identity: Arc<Identity>,
         t_ms: u64,
         phase: Phase,
-        window: Box<Window>,
+        window: Arc<Window>,
+        output_packet: Duration,
         diagnostics: Box<crate::Diagnostics>,
         closing: bool,
         partial: bool,
@@ -340,7 +341,7 @@ impl Output {
         }
         self.note("snapshot_timing_total", Severity::Info, serde_json::json!({
             "aggregation":evidence(&timing.aggregation), "window_construction":evidence(&timing.window_construction),
-            "flush_total":evidence(&timing.flush_total),"output_packet":evidence(&timing.output_packet),"scope":"all phases of this target/step"
+            "flush_total":evidence(&timing.flush_total),"output_packet":evidence(&timing.output_packet),"paired":evidence(&timing.paired),"scope":"all phases of this target/step"
         }));
     }
 
@@ -436,7 +437,7 @@ impl Output {
 
     pub(crate) fn summary(
         &self,
-        window: &Window,
+        window: &Arc<Window>,
         phase: Phase,
         diagnostics: &crate::Diagnostics,
         closing: bool,
@@ -450,15 +451,16 @@ impl Output {
         let mut packet = Packet::Summary {
             identity: self.identity.borrow().clone(),
             t_ms: self.elapsed(),
-            window: Box::new(window.clone()),
+            window: Arc::clone(window),
+            output_packet: Duration::ZERO,
             diagnostics: Box::new(*diagnostics),
             closing,
             partial,
             phase,
         };
         let elapsed = started.elapsed();
-        if let Packet::Summary { window, .. } = &mut packet {
-            window.snapshot.output_packet = Some(elapsed);
+        if let Packet::Summary { output_packet, .. } = &mut packet {
+            *output_packet = elapsed;
         }
         if self.summary.sender.try_send(packet).is_err() {
             self.losses.summaries.fetch_add(1, Ordering::Relaxed);
@@ -888,11 +890,15 @@ fn write_stream(
                 identity: _,
                 t_ms,
                 phase,
-                mut window,
+                window,
+                output_packet,
                 diagnostics,
                 closing,
                 partial,
             } => {
+                // Keep histogram copying and mutation on this writer thread.
+                let mut window = Arc::try_unwrap(window).unwrap_or_else(|shared| (*shared).clone());
+                window.snapshot.output_packet = Some(output_packet);
                 let base = t_ms.saturating_sub(millis(window.to));
                 for (index, (health, traffic_phase)) in [
                     (diagnostics.warmup, Phase::Warmup),
@@ -1014,7 +1020,8 @@ fn write_summary(
             message: "Execution-loop snapshot work; output-packet time excludes queue admission and writer serialization.".into(),
             detail: Some(serde_json::json!({"sample_count":1,"aggregation_us":window.snapshot.aggregation.as_micros(),
                 "window_construction_us":window.snapshot.window_construction.as_micros(),"flush_total_us":total.as_micros(),
-                "output_packet_us":window.snapshot.output_packet.map(|d|d.as_micros())})),
+                "output_packet_us":window.snapshot.output_packet.map(|d|d.as_micros()),
+                "paired_us":window.snapshot.output_packet.map(|d| (total + d).as_micros())})),
         }))?;
     }
     if let Some(timing) = &window.arrival {
