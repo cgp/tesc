@@ -765,3 +765,9 @@ incremental -- the edit loop is exactly where that cache pays for itself.
 
 After a clean and a full rebuild the same tree is 2.32 GiB in 2,951 files. No
 behaviour changed; `scripts/check.sh engine` passes cold.
+
+## Arrival-clock diagnostics
+
+Measure pending-deadline-to-timer-wake and wake-to-dispatch delays independently through a preallocated bounded atomic ring. Emit count-supported timing histograms/percentiles, coalescing and diagnostic loss, skip-batch frequencies and phase-end accounting as summary annotations and final stderr diagnostics. Keep warmup/measure totals separate and scheduling, admission and event schemas unchanged. Tests cover concurrent publication, bounded loss, deferred samples, synthetic executor stalls, phase separation and output conservation.
+
+Validation: `bash scripts/check.sh engine`, `bash scripts/check.sh contract`, and real emitted NDJSON schema validation all pass on Windows.

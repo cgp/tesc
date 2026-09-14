@@ -4,7 +4,7 @@ use crate::{Failure, Plan, http::Observation};
 use chrono::{SecondsFormat, Utc};
 use metrix_metrics::{
     Record,
-    aggregation::{Accumulator, Window},
+    aggregation::{Accumulator, ArrivalTiming, Window},
     events::*,
     stats::percentiles,
 };
@@ -332,6 +332,10 @@ impl Output {
         {
             self.losses.failed.store(true, Ordering::Relaxed);
         }
+    }
+
+    pub(crate) fn arrival_totals(&self, measure: &ArrivalTiming, warmup: &ArrivalTiming) {
+        self.note("arrival_timing_total", if measure.telemetry_dropped + warmup.telemetry_dropped > 0 { Severity::Warn } else { Severity::Info }, serde_json::json!({"measure":arrival_evidence(measure),"warmup":arrival_evidence(warmup)}));
     }
 
     pub(crate) fn step_start(&self, plan: &Plan) {
@@ -911,6 +915,7 @@ fn write_stream(
                     window.queue_depth = window.warmup_queue_depth;
                     window.scheduler_lag = Duration::ZERO;
                     window.scheduler_lag_samples = 0;
+                    window.arrival = None;
                     write_summary(
                         &mut writer,
                         &mut buffer,
@@ -965,6 +970,18 @@ fn write_stream(
     writer.flush()
 }
 
+fn arrival_evidence(timing: &ArrivalTiming) -> serde_json::Value {
+    serde_json::json!({
+        "timer_wake_lateness": {"histogram":timing.timer_wake_lateness.snapshot(),"overflow":timing.timer_wake_lateness.overflow,"percentiles":percentiles(&timing.timer_wake_lateness)},
+        "wake_to_dispatch": {"histogram":timing.wake_to_dispatch.snapshot(),"overflow":timing.wake_to_dispatch.overflow,"percentiles":percentiles(&timing.wake_to_dispatch)},
+        "timer_wakes":timing.timer_wakes,"coalesced_wakes":timing.coalesced_wakes,"telemetry_dropped":timing.telemetry_dropped,
+        "complete":timing.telemetry_dropped == 0,"timer_skipped_arrivals":timing.timer_skipped_arrivals,
+        "dispatches":timing.dispatches,"dispatches_with_skips":timing.dispatches_with_skips,"skipped_arrivals":timing.skipped_arrivals,
+        "max_skipped_per_dispatch":timing.max_skipped_per_dispatch,"phase_end_skipped":timing.phase_end_skipped,
+        "skipped_per_dispatch":{"counts":timing.skipped_per_dispatch,"last_bucket":"31_or_more"}
+    })
+}
+
 fn write_summary(
     writer: &mut dyn Write,
     buffer: &mut Vec<u8>,
@@ -974,6 +991,15 @@ fn write_summary(
     window: &Window,
     dropped: u64,
 ) -> io::Result<()> {
+    if let Some(timing) = &window.arrival {
+        write_record(writer, buffer, &Record::Annotation(Annotation {
+            t_ms, target_id: Some(identity.target.clone()), code: "arrival_timing".into(),
+            severity: if timing.telemetry_dropped > 0 { Severity::Warn } else { Severity::Info },
+            phase: Some(phase), from_ms: t_ms.saturating_sub(millis(window.to.saturating_sub(window.from))), to_ms: Some(t_ms),
+            message: "Separates timer wake lateness from delay reaching arrival dispatch; coalesced wakes are sampled and lost timing evidence is counted. Percentile intervals assume independent stationary samples.".into(),
+            detail: Some(arrival_evidence(timing)),
+        }))?;
+    }
     write_record(writer, buffer, &Record::Annotation(Annotation {
         t_ms, target_id: Some(identity.target.clone()), code: "schedule_corrected_latency".into(), severity: Severity::Info,
         phase: Some(phase), from_ms: t_ms.saturating_sub(millis(window.to.saturating_sub(window.from))), to_ms: Some(t_ms),

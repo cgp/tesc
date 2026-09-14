@@ -41,6 +41,8 @@ use http::SendState;
 
 #[derive(Debug, Default)]
 pub struct Report {
+    pub arrival_timing: metrix_metrics::aggregation::ArrivalTiming,
+    pub warmup_arrival_timing: metrix_metrics::aggregation::ArrivalTiming,
     /// One verdict per bound, merged across every target and rate step the run made
     /// (§16). Unlike the scalars below, these describe the whole run.
     pub slo: Vec<metrix_metrics::events::SloVerdict>,
@@ -224,6 +226,7 @@ async fn run_sweep(
 
 #[derive(Default)]
 struct Lag {
+    arrival: metrix_metrics::aggregation::ArrivalTiming,
     max: Duration,
     samples: u64,
 }
@@ -311,7 +314,14 @@ fn flush(
             || warmup_interval.counters.cancelled > 0
             || warmup_interval.drift.count() > 0
             || warmup_interval.drift.overflow > 0);
+    if phase == Phase::Warmup {
+        report.warmup_arrival_timing.merge(&lag.arrival);
+    } else {
+        report.arrival_timing.merge(&lag.arrival);
+    }
     let window = Window {
+        arrival: (lag.arrival.timer_wakes > 0 || lag.arrival.skipped_arrivals > 0)
+            .then(|| Box::new(lag.arrival.clone())),
         phase,
         warmup_metrics: carry.then(|| Box::new(warmup_interval.clone())),
         warmup_in_flight: warmup_active,
@@ -344,7 +354,9 @@ fn flush(
     report.windows += 1;
     report.last_window = Some(window);
     *last = now;
-    *lag = Lag::default();
+    lag.max = Duration::ZERO;
+    lag.samples = 0;
+    lag.arrival.reset();
 }
 
 fn cause(failure: Failure) -> Cause {

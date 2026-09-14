@@ -891,6 +891,8 @@ Both gauges are sampled at each snapshot and return to zero on drain/cancellatio
 `scheduler_lag_ms` is the maximum lateness of observed 250ms summary timer wakes
 in the interval, including timer resolution and executor delay, rather than an
 estimate from target latency. Missed ticks coalesce into one observed sample.
+Arrival-clock diagnostics distinguish the earliest pending timer deadline → actual timer wake (`timer_wake_lateness`) from actual wake → scheduler dispatch (`wake_to_dispatch`). A bounded 1024-sample telemetry channel transfers timestamps without blocking the timer; both distributions use the shared percentile support rules and carry counts and mergeable histograms in `arrival_timing` summary annotations. Coalesced notifications remain separate samples, including notifications whose arrivals were skipped; phase-end notifications are included. Diagnostic loss is counted explicitly, making the retained timing population incomplete. Counters show notifications, coalescing, dispatches with skips, maximum skips in one dispatch, a bounded skip-batch frequency histogram (exact 0–30, then 31+), and skips accounted at phase end. These answer whether late arrivals originate before the timer wake or while the async loop is busy; the existing 250ms summary-timer lag measures neither. Warmup and measure populations remain separate, and idle phases add no samples. No per-arrival logging, scheduling changes or new stop conditions are introduced.
+
 Final partial windows carry the interval's samples; zero samples means unavailable,
 as stated by the companion annotation. OS resource probes do not run on the request path.
 

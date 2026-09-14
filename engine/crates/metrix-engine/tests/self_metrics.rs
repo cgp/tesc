@@ -135,6 +135,23 @@ async fn scheduler_lag_measures_executor_stalls_and_coalesces_missed_ticks() {
     let windows = collect(receiver);
     assert!(report.max_scheduler_lag >= Duration::from_millis(300));
     assert!(report.skipped_late > 0);
+    let timing = &report.arrival_timing;
+    assert!(timing.wake_to_dispatch.max_us().unwrap() >= 250_000);
+    assert!(timing.coalesced_wakes > 0 && timing.dispatches_with_skips > 0);
+    assert!(timing.max_skipped_per_dispatch >= 10);
+    assert_eq!(
+        timing.timer_wakes,
+        timing.wake_to_dispatch.count() + timing.telemetry_dropped
+    );
+    assert_eq!(timing.skipped_arrivals, report.skipped_late);
+    assert_eq!(
+        windows
+            .iter()
+            .filter_map(|w| w.arrival.as_ref())
+            .map(|a| a.timer_wakes)
+            .sum::<u64>(),
+        timing.timer_wakes
+    );
     assert_eq!(
         windows.iter().map(|w| w.scheduler_lag_samples).sum::<u64>(),
         report.scheduler_lag_samples
@@ -145,4 +162,63 @@ async fn scheduler_lag_measures_executor_stalls_and_coalesces_missed_ticks() {
     );
     assert!(windows.iter().all(|w| w.scheduler_lag_samples <= 1));
     assert!(report.scheduler_lag_samples < 4);
+}
+
+#[tokio::test]
+async fn arrival_timings_are_separate_for_warmup_measure_and_idle_windows() {
+    let server = MockServer::bind("127.0.0.1:0".parse().unwrap(), Config::default())
+        .await
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    support::bundle(dir.path(), server.local_addr().unwrap(), "http1");
+    support::edit(dir.path(), "mix.json", |doc| {
+        doc["phases"]["baseline"] = json!("1s");
+        doc["phases"]["settle"] = json!("1s");
+        doc["load"]["warmup"] = json!("1s");
+    });
+    let server = tokio::spawn(server.run_until(pending()));
+    let (sender, receiver) = mpsc::channel(64);
+    let report = run_with_snapshots(Plan::load(dir.path()).unwrap(), pending(), Some(sender))
+        .await
+        .unwrap();
+    let windows = collect(receiver);
+    for (phase, timing) in [
+        (
+            metrix_metrics::events::Phase::Warmup,
+            &report.warmup_arrival_timing,
+        ),
+        (
+            metrix_metrics::events::Phase::Measure,
+            &report.arrival_timing,
+        ),
+    ] {
+        assert!(timing.timer_wakes > 0);
+        assert_eq!(
+            timing.timer_wakes,
+            timing.wake_to_dispatch.count() + timing.telemetry_dropped
+        );
+        assert_eq!(
+            windows
+                .iter()
+                .filter(|w| w.phase == phase)
+                .filter_map(|w| w.arrival.as_ref())
+                .map(|a| a.timer_wakes)
+                .sum::<u64>(),
+            timing.timer_wakes
+        );
+    }
+    assert!(
+        windows
+            .iter()
+            .filter(|w| matches!(
+                w.phase,
+                metrix_metrics::events::Phase::Baseline | metrix_metrics::events::Phase::Settle
+            ))
+            .all(|w| w.arrival.is_none())
+    );
+    assert_eq!(
+        report.skipped_late,
+        report.arrival_timing.skipped_arrivals + report.warmup_arrival_timing.skipped_arrivals
+    );
+    server.abort();
 }

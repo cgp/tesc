@@ -555,8 +555,77 @@ impl Accumulator {
     }
 }
 
+/// Arrival-clock timing, separate from requests and the 250ms summary timer.
+#[derive(Clone, Debug, Default)]
+pub struct ArrivalTiming {
+    pub timer_wake_lateness: Distribution,
+    pub wake_to_dispatch: Distribution,
+    pub timer_wakes: u64,
+    pub coalesced_wakes: u64,
+    pub telemetry_dropped: u64,
+    pub timer_skipped_arrivals: u64,
+    pub dispatches: u64,
+    pub dispatches_with_skips: u64,
+    pub skipped_arrivals: u64,
+    pub max_skipped_per_dispatch: u64,
+    /// Exact skip counts 0..30; bucket 31 contains 31 or more.
+    pub skipped_per_dispatch: [u64; 32],
+    pub phase_end_skipped: u64,
+}
+
+impl ArrivalTiming {
+    pub fn dispatch(&mut self, skipped: u64, phase_end: bool) {
+        if phase_end {
+            self.phase_end_skipped += skipped;
+        } else {
+            self.dispatches += 1;
+            self.skipped_per_dispatch[skipped.min(31) as usize] += 1;
+            self.dispatches_with_skips += u64::from(skipped > 0);
+            self.max_skipped_per_dispatch = self.max_skipped_per_dispatch.max(skipped);
+        }
+        self.skipped_arrivals += skipped;
+    }
+    pub fn merge(&mut self, other: &Self) {
+        self.timer_wake_lateness.merge(&other.timer_wake_lateness);
+        self.wake_to_dispatch.merge(&other.wake_to_dispatch);
+        self.timer_wakes += other.timer_wakes;
+        self.coalesced_wakes += other.coalesced_wakes;
+        self.telemetry_dropped += other.telemetry_dropped;
+        self.timer_skipped_arrivals += other.timer_skipped_arrivals;
+        self.dispatches += other.dispatches;
+        self.dispatches_with_skips += other.dispatches_with_skips;
+        self.skipped_arrivals += other.skipped_arrivals;
+        self.max_skipped_per_dispatch = self
+            .max_skipped_per_dispatch
+            .max(other.max_skipped_per_dispatch);
+        self.phase_end_skipped += other.phase_end_skipped;
+        for (count, other) in self
+            .skipped_per_dispatch
+            .iter_mut()
+            .zip(other.skipped_per_dispatch)
+        {
+            *count += other;
+        }
+    }
+    pub fn reset(&mut self) {
+        self.timer_wake_lateness.reset();
+        self.wake_to_dispatch.reset();
+        self.timer_wakes = 0;
+        self.coalesced_wakes = 0;
+        self.telemetry_dropped = 0;
+        self.timer_skipped_arrivals = 0;
+        self.dispatches = 0;
+        self.dispatches_with_skips = 0;
+        self.skipped_arrivals = 0;
+        self.max_skipped_per_dispatch = 0;
+        self.phase_end_skipped = 0;
+        self.skipped_per_dispatch.fill(0);
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Window {
+    pub arrival: Option<Box<ArrivalTiming>>,
     pub phase: events::Phase,
     pub warmup_metrics: Option<Box<Accumulator>>,
     pub warmup_in_flight: usize,
@@ -587,4 +656,52 @@ pub struct AuthCounts {
     pub refresh_us: u64,
     /// Virtual-user time spent waiting on somebody else's refresh.
     pub blocked_us: u64,
+}
+
+#[cfg(test)]
+mod arrival_tests {
+    use super::*;
+    #[test]
+    fn interval_merges_preserve_samples_skips_and_maxima_then_reset() {
+        let mut first = ArrivalTiming::default();
+        first.timer_wake_lateness.record(Duration::from_micros(2));
+        first.wake_to_dispatch.record(Duration::from_millis(20));
+        first.timer_wakes = 1;
+        first.dispatch(4, false);
+        let mut second = ArrivalTiming::default();
+        second.timer_wake_lateness.record(Duration::from_micros(10));
+        second.wake_to_dispatch.record(Duration::from_millis(1));
+        second.timer_wakes = 3;
+        second.telemetry_dropped = 2;
+        second.coalesced_wakes = 2;
+        second.dispatch(1, false);
+        second.dispatch(2, true);
+        first.merge(&second);
+        assert_eq!(first.timer_wakes, 4);
+        assert_eq!(first.telemetry_dropped, 2);
+        assert_eq!(first.timer_wake_lateness.count(), 2);
+        assert_eq!(first.timer_wake_lateness.max_us(), Some(10));
+        assert_eq!(first.wake_to_dispatch.max_us(), Some(20_000));
+        assert_eq!(first.dispatches_with_skips, 2);
+        assert_eq!(first.max_skipped_per_dispatch, 4);
+        assert_eq!(first.skipped_arrivals, 7);
+        assert_eq!(first.phase_end_skipped, 2);
+        assert_eq!(first.skipped_per_dispatch[4], 1);
+        assert_eq!(first.skipped_per_dispatch[1], 1);
+        assert_eq!(
+            first.skipped_per_dispatch.iter().sum::<u64>(),
+            first.dispatches
+        );
+        first.reset();
+        assert_eq!(first.timer_wake_lateness.count(), 0);
+        assert_eq!(first.skipped_per_dispatch.iter().sum::<u64>(), 0);
+        assert_eq!(
+            first.timer_wakes
+                + first.telemetry_dropped
+                + first.skipped_arrivals
+                + first.max_skipped_per_dispatch
+                + first.coalesced_wakes,
+            0
+        );
+    }
 }

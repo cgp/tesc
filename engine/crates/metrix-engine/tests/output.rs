@@ -145,6 +145,38 @@ async fn streams_conserve_counts_identify_requests_and_never_capture_secrets() {
             .filter(|r| matches!(r, Record::Summary(_)))
             .count()
     );
+    let totals = summaries
+        .iter()
+        .find_map(|r| match r {
+            Record::Annotation(a) if a.code == "arrival_timing_total" => {
+                Some(&a.detail.as_ref().unwrap()["measure"])
+            }
+            _ => None,
+        })
+        .unwrap();
+    let sample_count = totals["wake_to_dispatch"]["histogram"]["count"]
+        .as_u64()
+        .unwrap();
+    assert!(sample_count > 0);
+    assert_eq!(
+        totals["wake_to_dispatch"]["percentiles"]["p99"]["count"].as_u64(),
+        Some(sample_count)
+    );
+    assert!(totals["wake_to_dispatch"]["percentiles"]["p99"]["value_us"].is_null());
+    let interval_samples: u64 = summaries
+        .iter()
+        .filter_map(|r| match r {
+            Record::Annotation(a) if a.code == "arrival_timing" => {
+                a.detail.as_ref().unwrap()["wake_to_dispatch"]["histogram"]["count"].as_u64()
+            }
+            _ => None,
+        })
+        .sum();
+    assert_eq!(interval_samples, sample_count);
+    assert_eq!(
+        totals["timer_wakes"].as_u64().unwrap(),
+        sample_count + totals["telemetry_dropped"].as_u64().unwrap()
+    );
     assert_eq!(summaries.first(), events.first());
     assert!(!summaries.iter().any(|r| matches!(r, Record::Request(_))));
     assert!(!events.iter().any(|r| matches!(r, Record::Summary(_))));

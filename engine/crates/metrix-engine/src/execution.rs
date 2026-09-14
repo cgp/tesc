@@ -158,9 +158,14 @@ pub(crate) async fn run(
             initial_connection_counted = true;
         }
         if timeline.ready(Instant::now(), active) {
+            if let Some(clock) = &mut timeline.clock {
+                let checkpoint = clock.checkpoint();
+                clock.record(checkpoint, &mut lag.arrival);
+            }
             if let Some(schedule) = &mut timeline.schedule {
                 let (arrival, late) = schedule.due(Instant::now());
                 debug_assert!(arrival.is_none());
+                lag.arrival.dispatch(late, true);
                 report.offered += late;
                 let h = report.diagnostics.phase_mut(phase);
                 h.offered += late;
@@ -209,6 +214,7 @@ pub(crate) async fn run(
         tokio::select! {
             biased;
             _ = &mut shutdown => {
+                if let Some(clock) = &mut timeline.clock { let checkpoint = clock.checkpoint(); clock.record(checkpoint, &mut lag.arrival); }
                 report.interrupted = true;
                 report.cancelled = active as u64;
                 for slot in &slots { if slot.active {
@@ -238,6 +244,7 @@ pub(crate) async fn run(
                             report.generator_limited = reason == "generator_limited";
                             report.stopped_because = Some(reason.clone());
                             report.diagnostics.measure.end = start.elapsed();
+                            if let Some(clock) = &mut timeline.clock { let checkpoint = clock.checkpoint(); clock.record(checkpoint, &mut lag.arrival); }
                             timeline.stop(Instant::now(), plan.final_settle);
                             if let Some(output) = output { output.note(&reason, if report.generator_limited { metrix_metrics::Severity::Invalid } else { metrix_metrics::Severity::Warn }, serde_json::json!({"rate":plan.rate})); }
                         }
@@ -374,7 +381,10 @@ pub(crate) async fn run(
                 pool.as_mut().expect("pool while requests are active").release(completion.lease);
             }
             _ = async { timeline.clock.as_ref().expect("traffic clock").tick(&mut timeline.clock_tick).await; }, if timeline.clock.is_some() => {
+                let checkpoint = timeline.clock.as_ref().expect("traffic clock").checkpoint();
                 let (arrival, late) = timeline.schedule.as_mut().expect("traffic schedule").due(Instant::now());
+                lag.arrival.dispatch(late, false);
+                timeline.clock.as_mut().expect("traffic clock").record(checkpoint, &mut lag.arrival);
                 report.offered += late + u64::from(arrival.is_some());
                 let h = report.diagnostics.phase_mut(phase); h.offered += late + u64::from(arrival.is_some()); h.skipped_late += late;
                 report.skipped_late += late;
@@ -409,6 +419,7 @@ pub(crate) async fn run(
         }
     }
     if let Some(output) = output {
+        output.arrival_totals(&report.arrival_timing, &report.warmup_arrival_timing);
         output.percentiles(
             &report.metrics,
             measure_from_ms.expect("output clock"),

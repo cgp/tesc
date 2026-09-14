@@ -231,6 +231,20 @@ fn execute(args: Args) -> Result<ExitCode, String> {
         report.scheduler_lag_samples,
         report.interrupted
     );
+    let timing = &report.arrival_timing;
+    eprintln!(
+        "arrival_timer_wakes={} arrival_timer_wake_samples={} arrival_timer_wake_max_ms={:.3} arrival_dispatch_samples={} arrival_dispatch_max_ms={:.3} arrival_coalesced_wakes={} arrival_telemetry_dropped={} arrival_dispatches_with_skips={} arrival_max_skipped_per_dispatch={} arrival_phase_end_skipped={}",
+        timing.timer_wakes,
+        timing.timer_wake_lateness.count(),
+        timing.timer_wake_lateness.max_us().unwrap_or(0) as f64 / 1000.0,
+        timing.wake_to_dispatch.count(),
+        timing.wake_to_dispatch.max_us().unwrap_or(0) as f64 / 1000.0,
+        timing.coalesced_wakes,
+        timing.telemetry_dropped,
+        timing.dispatches_with_skips,
+        timing.max_skipped_per_dispatch,
+        timing.phase_end_skipped
+    );
     eprintln!(
         "measured_started={} measured_completed={} warmup_started={} warmup_completed={}",
         report.metrics.counters.started,
