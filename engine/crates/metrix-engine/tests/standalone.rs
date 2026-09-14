@@ -94,6 +94,38 @@ async fn standalone_binary_holds_75_rps_for_30_seconds_without_the_api() {
     assert!(values.contains_key("max_send_drift_ms"));
     assert_eq!(number("drift_samples"), number("sent_finished"));
     assert_eq!(number("sent"), number("sent_finished"));
+    assert!(!records.iter().any(|r| matches!(r,
+        metrix_metrics::Record::Annotation(a) if a.code == "planned_sample_count_low"
+    )));
+    let detail = records
+        .iter()
+        .find_map(|r| match r {
+            metrix_metrics::Record::Annotation(a) if a.code == "load_percentiles" => {
+                a.detail.as_ref()
+            }
+            _ => None,
+        })
+        .expect("standalone measured percentiles");
+    assert_eq!(detail["partial"], json!(false));
+    for distribution in ["chain_duration", "request_total", "ttfb"] {
+        let p = &detail[distribution];
+        assert_eq!(p["p99"]["count"], json!(completed));
+        assert_eq!(p["p50"]["support"], json!("stable"));
+        assert_eq!(p["p95"]["support"], json!("stable"));
+        assert_eq!(p["p99"]["support"], json!("crude"));
+        assert_eq!(p["p99_9"]["support"], json!("suppressed"));
+        assert!(p["p99_9"]["value_us"].is_null());
+        assert!(p["p99_9"]["ci95"].is_null());
+        let value = p["p99"]["value_us"].as_u64().unwrap();
+        let ci = &p["p99"]["ci95"];
+        assert!(ci["lower_us"].as_u64().unwrap() <= value);
+        assert!(ci["upper_us"].as_u64().unwrap() >= value);
+        assert!(ci["lower_us"].as_u64().unwrap() >= 9900);
+        let corrected = &detail["schedule_corrected"][distribution];
+        assert_eq!(corrected["p99"]["count"], p["p99"]["count"]);
+        assert_eq!(corrected["p99_9"]["support"], json!("suppressed"));
+        assert!(corrected["p99"]["value_us"].as_u64().unwrap() >= value);
+    }
     assert!(number("scheduler_lag_samples") > 0);
     assert!(values.contains_key("max_scheduler_lag_ms"));
     assert!(elapsed >= Duration::from_secs(30) && elapsed < Duration::from_secs(35));

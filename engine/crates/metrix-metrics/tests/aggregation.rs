@@ -5,6 +5,8 @@ use std::{io::Cursor, time::Duration};
 
 fn sample(us: u64) -> Sample {
     Sample {
+        admission_delay: Duration::ZERO,
+        send_delay: Duration::ZERO,
         chain_duration: Duration::from_micros(us + 100),
         request_duration: Some(Duration::from_micros(us)),
         ttfb: Some(Duration::from_micros(us / 2)),
@@ -16,6 +18,71 @@ fn sample(us: u64) -> Sample {
         connections_opened: 0,
         connection_reused: true,
     }
+}
+
+#[test]
+fn schedule_correction_preserves_real_counts_and_includes_the_right_delay() {
+    let mut worker = Accumulator::default();
+    worker.finish(sample(1000));
+    assert_eq!(worker.total.snapshot(), worker.corrected_total.snapshot());
+    let mut delayed = sample(1000);
+    delayed.admission_delay = Duration::from_millis(20);
+    delayed.send_delay = Duration::from_millis(35);
+    worker.finish(delayed);
+    assert_eq!(worker.chain.snapshot().max_us, Some(1100));
+    assert_eq!(worker.corrected_chain.snapshot().max_us, Some(21_100));
+    assert_eq!(worker.corrected_ttfb.snapshot().max_us, Some(35_500));
+    assert_eq!(worker.corrected_total.snapshot().max_us, Some(36_000));
+    assert_eq!(worker.total.count(), worker.corrected_total.count());
+    assert_eq!(worker.ttfb.count(), worker.corrected_ttfb.count());
+    worker.cancel();
+    assert_eq!(worker.corrected_total.count(), 2);
+    let mut merged = Accumulator::default();
+    merged.merge_and_reset(std::slice::from_mut(&mut worker));
+    assert_eq!(merged.corrected_total.count(), 2);
+    let encoded = merged.corrected_total.snapshot().hdr.unwrap();
+    let bytes = STANDARD.decode(encoded).unwrap();
+    let restored: Histogram<u64> = Deserializer::new()
+        .deserialize(&mut Cursor::new(bytes))
+        .unwrap();
+    assert_eq!(restored.len(), 2);
+    assert!(restored.value_at_quantile(1.0) >= 36_000);
+    assert_eq!(worker.corrected_total.count(), 0);
+    assert_eq!(worker.corrected_chain.count(), 0);
+    assert_eq!(worker.corrected_ttfb.count(), 0);
+    let mut pre_send = sample(1000);
+    pre_send.request_duration = None;
+    pre_send.ttfb = None;
+    pre_send.error = Some(Cause::Connect);
+    merged.finish(pre_send);
+    assert_eq!(merged.corrected_chain.count(), 3);
+    assert_eq!(merged.corrected_total.count(), 2);
+    assert_eq!(merged.corrected_ttfb.count(), 2);
+}
+
+#[test]
+fn corrected_overflow_is_separate_from_raw_and_cannot_gain_support() {
+    let mut worker = Accumulator::default();
+    for _ in 0..1000 {
+        let mut s = sample(1000);
+        s.send_delay = Duration::MAX;
+        worker.finish(s);
+    }
+    assert_eq!(worker.total.count(), 1000);
+    assert_eq!(worker.corrected_total.count(), 0);
+    assert_eq!(worker.corrected_total.overflow, 1000);
+    assert!(
+        metrix_metrics::stats::percentiles(&worker.total)
+            .p99
+            .value_us
+            .is_some()
+    );
+    assert!(
+        metrix_metrics::stats::percentiles(&worker.corrected_total)
+            .p99
+            .value_us
+            .is_none()
+    );
 }
 
 #[test]

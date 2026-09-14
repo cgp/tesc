@@ -71,8 +71,8 @@ the generator's hot-path constraints do not apply to this test target.
 ### 2.3 Fixed-rate execution (B1.2)
 
 `metrix-engine --plan examples/plans/mock-fixed` executes the initial supported
-subset: one target, one 100% chain, one static call, fixed open load, and explicitly
-zero baseline/warmup/settle. Later-step features (assertions, extraction, generators,
+subset: one target, one 100% chain, one static call, fixed open load, and the
+full B2.1 phase timeline. Later-step features (assertions, extraction, generators,
 auth, sessions beyond stateless `fresh`, mixtures, sweeps, SLOs, redirects and target
 Host/SNI overrides) fail before network I/O. This keeps partial execution from
 silently producing a different workload. Bundle files must stay within its root.
@@ -118,8 +118,8 @@ timings are omitted; cancellations use `other` with a fixed message and elapsed
 attempt duration. Transport errors without an exact OS cause use `other`.
 
 All timestamps use one monotonic run clock, including setup and final drain.
-Measure and drain windows are split at the admission boundary; full phase execution
-remains B2.1. Required metadata includes a SHA-256 digest of length-framed relative
+Every phase boundary flushes its partial window. Required metadata includes a
+SHA-256 digest of length-framed relative
 paths and the exact bytes of the mix, targets and referenced call files, sorted by
 path. The frozen v1 schema requires numeric OS resource fields: until CPU, RSS and
 file-descriptor probes land, zero is an unavailable sentinel explicitly identified
@@ -550,7 +550,7 @@ NDJSON carries these populations in B1.4; percentile support rules remain B2.2.
 - Rolling percentiles over time (p50 / p95 / p99 bands)
 - **Phase breakdown:** DNS resolve, TCP connect, TLS handshake, request write, **time-to-first-byte**, body transfer, total. TTFB vs total separates "the server is thinking" from "the response is big or the link is slow."
 - **End-to-end duration** per chain
-- **Corrected latency** (coordinated-omission adjusted, §10) reported alongside raw, never instead of it
+- **Corrected latency** (coordinated-omission adjusted, §12.2) reported alongside raw, never instead of it
 - Latency bucketed by response size — surfaces the "only slow for large accounts" case
 
 ### 9.3 Errors & correctness
@@ -588,7 +588,7 @@ Non-negotiable. Without these a run can't be trusted.
 - **A single green/amber/red "generator healthy" indicator** on the Performance screen, so an invalid run is obvious at a glance rather than after the analysis is written
 
 ### 9.8 Run metadata (reproducibility & comparison)
-Captured every run: plan hash, plan version, engine version, target base URL and profile, target build/commit if discoverable via a health endpoint, start/end timestamps, generator host and hardware, environment tags, free-text note. Without these the Recordings archive becomes a pile of numbers nobody trusts.
+Every `run_started` record carries the plan hash, plan name, engine version, seed, start timestamp, target ids and machine-profile id when calibrated. These fields are the stable standalone identity of a B2 run: the same bundle and seed can be replayed, while the machine profile keeps a generator change from being mistaken for a target change. Later target build data, environment tags and notes are API-owned recording metadata. Without this identity the Recordings archive becomes a pile of numbers nobody trusts.
 
 ---
 
@@ -620,6 +620,23 @@ Every run — with or without load — is a sequence of named phases on one mono
 Phase boundaries are recorded as timestamped events, drawn as vertical annotations on every chart, and available as filters — any statistic can be computed over any phase. The default comparison the UI presents is **baseline vs measure vs settle** for each host metric, as a three-column table alongside the charts.
 
 Both pauses are configurable, defaulted (30s baseline, 60s settle), and can be set to zero. They are on by default because the cost is a minute of wall clock and the benefit is that the numbers mean something.
+
+B2.1 runs this timeline after target connection setup, using one monotonic clock.
+Zero-length baseline, warmup and settle phases are skipped; drain is always marked.
+Baseline and settle emit idle summaries and send no requests. Warmup is optional,
+at the configured fixed rate; `load.duration` covers measure only. The two traffic
+phases have absolute schedules anchored to their boundaries, with expired arrivals
+skipped on late wakes. Warmup connections and request slots carry into measure.
+Each request keeps its admission phase, including its event, send drift and terminal
+result. Separate accumulators exclude all warmup samples from the measured report,
+even when they finish in measure or drain. Such completions produce additional
+`warmup` summaries over the same window; their target rate is zero and companion
+annotations state the current timeline phase. The primary summary carries global
+in-flight/queue gauges; additional warmup summaries carry only warmup gauges.
+Measure results completed during drain remain in measured totals. Drain waits for
+all admitted attempts under their original deadlines, then closes connections and
+starts settle. Ctrl-C cancels requests, flushes the current phase and emits no
+unreached phase transitions. Full phase support remains independent of an observer.
 
 **Delta-from-baseline** is a first-class derived series: for every host metric, the observed value minus its baseline-phase median. This is usually the series you actually want to read, and is what the target-side charts plot by default, with absolute values a toggle away.
 
@@ -717,14 +734,28 @@ What 2250 samples buys, by tail count and by the 95% confidence interval on the 
 
 p99 at the floor is real but blunt: it will not resolve a 10% regression, and it moves run to run on noise alone. The UI therefore **renders p99 with its confidence interval rather than as a bare number**, and suppresses p99.9 below 10,000 samples rather than printing a figure derived from two requests.
 
-The general rule the engine applies: a percentile needs roughly 10 samples beyond it to be crude and 100 to be stable. That is 1,000 samples for a crude p99 and 10,000 for a stable one — 133s at 75 RPS, or 30s at 333 RPS. The run header states which side of that the run sits on.
+The engine's `stats/` implementation requires 10 samples beyond a percentile for
+crude support and 100 for stable support: p50 needs 20/200 samples, p95 200/2,000,
+p99 1,000/10,000, and p99.9 10,000/100,000. The 2,250 floor is a planned-volume
+warning, not a blanket gate. Actual unsampled measured histograms determine support;
+warmup and cancelled attempts do not count. Any histogram overflow suppresses its
+percentiles rather than claiming support from a truncated population.
+
+The frozen histogram records remain mergeable. A final `load_percentiles` annotation
+reports measured chain duration, request total and TTFB, each percentile carrying
+its count, overflow count, support level, nullable value and two-sided 95% interval.
+Intervals use binomial order-statistic ranks (equal tails, with discrete coverage at
+least 95%), expanded outward to HDR bucket bounds. They assume independent samples
+from one stationary population; they do not measure run-to-run variation. Partial
+runs are labelled. `planned_sample_count_low` warns before traffic when measured
+duration × rate is below 2,250; it does not include warmup or idle time.
 
 **Consequence for regression detection:** at the floor, compare **p95** when the question is "did this get worse?" and reserve p99 for "is the tail catastrophic?". The comparison view leads with the metric the sample count can defend rather than always leading with p99.
 
 ### 12.2 Everything else short windows break
 
 1. **Warmup contaminates everything.** JIT, connection pools, caches, autoscalers. The `warmup` window is measured and charted but excluded from the summary, so you can *see* the warmup effect instead of having it silently averaged into your p99.
-2. **Coordinated omission.** In a closed model a slow response delays the next request, so the worst latencies never get sampled. The engine defaults to the open model (requests issued on schedule regardless of outstanding ones) and reports raw and schedule-corrected latency side by side. Raw is what happened; corrected is what someone queued behind it would have experienced.
+2. **Coordinated omission.** In a closed model a slow response delays the next request, hiding latency. The open scheduler reports raw and schedule-corrected latency side by side. Correction measures from the planned arrival: chain duration adds admission delay; request total and TTFB add send-schedule drift. This is the [scheduled-time approach](https://github.com/giltene/wrk2), with one corrected sample per real terminal sample. Skipped arrivals remain explicit shortfalls, with no fabricated samples or interval-based HDR expansion. Pre-send failures have chain samples only; cancellation adds none. Corrected samples retain admission phase, overflow handling and percentile support rules. Each interval's `schedule_corrected_latency` annotation carries mergeable corrected histograms beside the raw summary; final `load_percentiles` adds `schedule_corrected` results. This answers how latency changes when generator delay is included; it cannot recover outcomes of requests never sent.
 3. **Run-to-run variance.** A single 30s run is a sample, not a measurement — and at 2250 samples the p99 noise floor is wide enough that this matters more, not less. Recordings supports **run groups**: the same plan N times, with the spread shown and the observed noise floor stated, so a "regression" smaller than the spread is labelled as one. This is the cheapest available correction to a short-window methodology.
 4. **Time alignment.** Every series is stamped against the run's monotonic start so load and target-side charts overlay exactly. Generator-to-target clock skew is measured at run start and recorded.
 
@@ -772,26 +803,43 @@ The detector set, at minimum:
 
 Free-text operator notes attach to the same list, so machine and human annotations read together.
 
+B2.4 evaluates traffic phases on cumulative 250ms snapshots and phase-end flushes.
+Cap occupancy integrates observed in-flight transitions, clipped to each phase;
+warmup requests still occupying slots count toward the measured cap. Any occupancy
+warns, escalating above 25% of the full measured duration (elapsed duration on
+interruption). Rate compares observed phase-admitted sends with discrete offered
+arrivals after one second, allowing one pending arrival on live snapshots; drain
+and idle time never dilute the denominator. Drops carry separate late, concurrency
+and connection counts. Drift uses actual observed sends, including unfinished
+requests, and records maximum drift and sample count. Drain completions retain
+admission phase. `engine.rate_tolerance_pct` defaults to 2 (0–99 allowed);
+`engine.send_drift_threshold_ms` defaults to the larger of 5ms and one arrival
+period, capped at one hour (explicit values 1–3,600,000 allowed). Both live thresholds
+are strict. Detectors emit on first detection, severity changes and phase-end
+updates, with phase ranges and counts. Final `sample_count_low` lists the raw
+percentiles suppressed by `stats/`, including histogram overflow, and labels partial
+runs. These warnings do not change exit codes; SLO verdicts remain B4.6.
+
 **On `concurrency_cap_reached` specifically:** hitting the cap is not inherently a failure — it is often exactly the closed-model test you intended. What matters is that the headline numbers stop describing the target and start describing the cap, and nothing in a chart shows that. Hence the explicit note, the shaded chart region, and the escalation to `invalid` when the cap dominates the window.
 
 ### 13.2 Tracking our own limits
 
 The generator is measuring instrument and load source at once, so its capability has to be a known quantity rather than an assumption.
 
-**Calibration.** `metrix-engine --calibrate` (a mode of the same binary, so a load box calibrates itself) ramps against a built-in in-process null target to find this machine's ceiling, and against a loopback echo server to find the ceiling including the real socket and TLS path. The difference between the two is itself informative. Calibration is per plan *shape*, not per plan — body size, TLS on/off, chain depth, and body-generation mode are what move the number, so a small matrix is measured and stored as a **machine profile** with the hardware it was measured on.
+**Calibration.** `metrix-engine --plan bundle/ --calibrate` is a mode of the same binary, so a load box calibrates itself without a target or control plane. It measures an in-process null loop and a persistent-connection loopback echo; TLS-shaped plans run the echo through a locally generated TLS server and client. The profile records both rates, using 90% of observed loopback throughput as the ceiling. It samples one worker and the configured worker count, stores `machine-profile.json` beside the three plan documents, and binds it to architecture, logical and physical core counts, request-body bytes, TLS, chain depth, and generation mode. A changed machine or shape must be calibrated again rather than silently reusing a stale ceiling.
 
 **Worker threads.** `engine.worker_threads` (default: physical cores − 1) sets the Tokio runtime's thread count, with `connections_per_host` and optional core pinning alongside. Raising it is the first lever for generator headroom, and calibration is per thread count — so the machine profile records a ceiling curve across thread counts rather than a single number, and the headroom check below knows what raising it would buy.
 
 Worth stating plainly: **the services in scope are expected to cap out well below the generator's ceiling**, which is the comfortable case — it means the measurement is of the target throughout. The threading knob exists for the exception, and the calibration curve is what tells you which case you are in *before* the run rather than after. If a target genuinely outruns a tuned single box, the honest output is the `generator_limited` annotation, not a bigger number.
 
-**Headroom check, before the run starts.** Demanded RPS (accounting for chain multiplication — §5) is compared against the calibrated ceiling:
+**Headroom check, before the run starts.** Demanded RPS (accounting for chain multiplication — §5) is compared against the calibrated loopback ceiling. No profile means no check; a matching bundle-local profile makes the ratio available in `generator.headroom_ratio` and the run-start record:
 
 | Headroom | Behavior |
 |---|---|
 | < 50% of ceiling | Proceed |
 | 50–70% | Proceed, `info` annotation recording the ratio |
 | 70–90% | Warn before start; run carries a `warn` annotation |
-| > 90% | Refuse by default; requires explicit override, and the run is annotated `invalid` |
+| > 90% | Refuse by default; `engine.allow_generator_limited: true` permits it and emits an `invalid` annotation |
 
 In breakpoint mode this is also what caps `max_rate` by default (§11.3) — the search stops at the point where the tool would begin measuring itself.
 
@@ -809,8 +857,7 @@ Both gauges are sampled at each snapshot and return to zero on drain/cancellatio
 in the interval, including timer resolution and executor delay, rather than an
 estimate from target latency. Missed ticks coalesce into one observed sample.
 Final partial windows carry the interval's samples; zero samples means unavailable,
-as stated by the companion annotation. Detector thresholds and calibration remain
-B2.4–B2.5. OS resource probes do not run on the request path.
+as stated by the companion annotation. OS resource probes do not run on the request path.
 
 **In run metadata,** the calibrated ceiling, the machine profile id, and the observed peak headroom are recorded (§9.8). Without this, a comparison across a generator hardware change silently attributes a generator improvement to the target.
 

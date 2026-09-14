@@ -2,7 +2,12 @@
 
 use crate::{Failure, Plan, http::Observation};
 use chrono::{SecondsFormat, Utc};
-use metrix_metrics::{Record, aggregation::Window, events::*};
+use metrix_metrics::{
+    Record,
+    aggregation::{Accumulator, Window},
+    events::*,
+    stats::percentiles,
+};
 use std::{
     collections::BTreeMap,
     fs::OpenOptions,
@@ -17,7 +22,7 @@ use std::{
 };
 use tokio::sync::mpsc;
 
-const RESERVED: usize = 8;
+const RESERVED: usize = 16;
 // Histogram windows are much larger than scalar request packets.
 const SUMMARY_CAPACITY: usize = 32;
 const EVENTS_CAPACITY: usize = 1024;
@@ -36,6 +41,7 @@ struct Identity {
     step: String,
     call: String,
     rate: f64,
+    headroom_ratio: Option<f64>,
 }
 
 struct RequestData {
@@ -59,8 +65,17 @@ enum Packet {
         t_ms: u64,
         phase: Phase,
         window: Box<Window>,
+        diagnostics: Box<crate::Diagnostics>,
+        closing: bool,
+        partial: bool,
     },
     Request(RequestData),
+    Percentiles {
+        t_ms: u64,
+        from_ms: u64,
+        partial: bool,
+        metrics: Box<Accumulator>,
+    },
 }
 
 impl Packet {
@@ -68,6 +83,7 @@ impl Packet {
         match self {
             Self::Fence(_) => unreachable!("fences do not produce records"),
             Self::Summary { t_ms, .. } => *t_ms,
+            Self::Percentiles { t_ms, .. } => *t_ms,
             Self::Request(request) => request.t_ms,
             Self::Record(record) => match record.as_ref() {
                 Record::RunStarted(r) => r.t_ms,
@@ -135,6 +151,7 @@ impl Output {
             step: plan.step.clone(),
             call: plan.call.clone(),
             rate: plan.rate,
+            headroom_ratio: plan.headroom_ratio,
         });
         let losses = Arc::new(Losses::default());
         let start = Instant::now();
@@ -179,7 +196,10 @@ impl Output {
             plan_hash: plan.hash.clone(),
             plan_name: plan.name.clone(),
             seed,
-            machine_profile: None,
+            machine_profile: plan
+                .machine_profile
+                .as_ref()
+                .map(|profile| profile.id.clone()),
             targets: vec![plan.target.id.clone()],
             histogram_encoding: HISTOGRAM_ENCODING.into(),
         }));
@@ -195,11 +215,72 @@ impl Output {
             message: "Zero in cpu_pct, rss_bytes and open_fds means unavailable; OS resource probes are not implemented yet.".into(),
             detail: Some(serde_json::json!({"unavailable": ["cpu_pct", "rss_bytes", "open_fds"]})),
         }));
+        let planned = plan.duration.as_secs_f64() * plan.rate;
+        if planned < metrix_plan::MIN_SAMPLES as f64 {
+            output.lifecycle(Record::Annotation(Annotation {
+                t_ms: 0, target_id: Some(plan.target.id.clone()), code: "planned_sample_count_low".into(), severity: Severity::Warn,
+                phase: Some(Phase::Measure), from_ms: 0, to_ms: None,
+                message: "Planned measured volume is below 2250 requests; actual histogram counts determine percentile support.".into(),
+                detail: Some(serde_json::json!({"planned_samples": planned, "minimum_samples": metrix_plan::MIN_SAMPLES})),
+            }));
+        }
+        if let (Some(ratio), Some(profile)) = (plan.headroom_ratio, plan.machine_profile.as_ref()) {
+            let severity = if ratio > 0.9 {
+                Severity::Invalid
+            } else if ratio > 0.7 {
+                Severity::Warn
+            } else {
+                Severity::Info
+            };
+            output.lifecycle(Record::Annotation(Annotation {
+                t_ms: 0,
+                target_id: Some(plan.target.id.clone()),
+                code: "generator_headroom".into(),
+                severity,
+                phase: None,
+                from_ms: 0,
+                to_ms: None,
+                message: if ratio > 0.9 {
+                    "Demand exceeds 90% of the calibrated generator ceiling; this overridden run is invalid for target capacity claims."
+                } else if ratio > 0.7 {
+                    "Demand uses more than 70% of the calibrated generator ceiling."
+                } else if ratio >= 0.5 {
+                    "Demand uses at least half of the calibrated generator ceiling."
+                } else {
+                    "Demand is below half of the calibrated generator ceiling."
+                }.into(),
+                detail: Some(serde_json::json!({
+                    "demand_rps": plan.rate,
+                    "ceiling_rps": profile.ceiling(plan.worker_threads),
+                    "headroom_ratio": ratio,
+                    "machine_profile": profile.id,
+                    "overridden": plan.allow_generator_limited,
+                })),
+            }));
+        }
         Ok(output)
     }
 
     pub(crate) fn elapsed(&self) -> u64 {
         millis(self.start.elapsed())
+    }
+
+    /// Calculate final statistics on the writer thread, after the load path stops.
+    pub(crate) fn percentiles(&self, metrics: &Accumulator, from_ms: u64, partial: bool) {
+        let t_ms = self.elapsed();
+        if self
+            .summary
+            .sender
+            .try_send(Packet::Percentiles {
+                t_ms,
+                from_ms: from_ms.min(t_ms),
+                partial,
+                metrics: Box::new(metrics.clone()),
+            })
+            .is_err()
+        {
+            self.losses.failed.store(true, Ordering::Relaxed);
+        }
     }
 
     fn lifecycle(&self, record: Record) {
@@ -223,7 +304,14 @@ impl Output {
         }));
     }
 
-    pub(crate) fn summary(&self, window: &Window, phase: Phase) {
+    pub(crate) fn summary(
+        &self,
+        window: &Window,
+        phase: Phase,
+        diagnostics: &crate::Diagnostics,
+        closing: bool,
+        partial: bool,
+    ) {
         if self.summary.sender.capacity() <= RESERVED
             || self
                 .summary
@@ -232,6 +320,9 @@ impl Output {
                     t_ms: self.elapsed(),
                     phase,
                     window: Box::new(window.clone()),
+                    diagnostics: Box::new(*diagnostics),
+                    closing,
+                    partial,
                 })
                 .is_err()
         {
@@ -438,6 +529,7 @@ fn write_stream(
     let mut buffer = Vec::with_capacity(4096);
     let mut last_losses = (0, 0, 0);
     let mut started = false;
+    let mut detectors = [crate::detectors::Seen::default(); 2];
     while let Some(packet) = receiver.blocking_recv() {
         let packet = match packet {
             Packet::Fence(sender) => {
@@ -489,18 +581,116 @@ fn write_stream(
         let record = match packet {
             Packet::Fence(_) => unreachable!("fences handled above"),
             Packet::Record(record) => *record,
+            Packet::Percentiles {
+                t_ms,
+                from_ms,
+                partial,
+                metrics,
+            } => {
+                let raw = [
+                    percentiles(&metrics.chain),
+                    percentiles(&metrics.total),
+                    percentiles(&metrics.ttfb),
+                ];
+                let mut suppressed = Vec::new();
+                for (name, p) in ["chain_duration", "request_total", "ttfb"]
+                    .into_iter()
+                    .zip(&raw)
+                {
+                    for (q, p) in [
+                        ("p50", &p.p50),
+                        ("p95", &p.p95),
+                        ("p99", &p.p99),
+                        ("p99.9", &p.p99_9),
+                    ] {
+                        if p.support == metrix_metrics::stats::Support::Suppressed {
+                            suppressed.push(serde_json::json!({"distribution": name, "percentile": q, "count": p.count, "overflow": p.overflow, "reason": p.suppression}));
+                        }
+                    }
+                }
+                if !suppressed.is_empty() {
+                    write_record(&mut writer, &mut buffer, &Record::Annotation(Annotation {
+                        t_ms, target_id: Some(identity.target.clone()), code: "sample_count_low".into(), severity: Severity::Warn,
+                        phase: Some(Phase::Measure), from_ms, to_ms: Some(t_ms),
+                        message: "Raw latency percentiles were withheld because their recorded population cannot support them.".into(),
+                        detail: Some(serde_json::json!({"partial": partial, "suppressed": suppressed})),
+                    }))?;
+                }
+                Record::Annotation(Annotation {
+                t_ms, target_id: Some(identity.target.clone()), code: "load_percentiles".into(), severity: Severity::Info,
+                phase: Some(Phase::Measure), from_ms, to_ms: Some(t_ms),
+                message: "Measured latency percentiles with actual sample counts and binomial order-statistic 95% intervals; warmup is excluded. Intervals assume independent stationary samples.".into(),
+                detail: Some(serde_json::json!({
+                    "partial": partial, "chain": identity.chain, "step": identity.step,
+                    "chain_duration": raw[0],
+                    "request_total": raw[1],
+                    "ttfb": raw[2],
+                    "schedule_corrected": {
+                        "method": "scheduled_arrival", "synthetic_samples": 0, "includes_skipped_arrivals": false,
+                        "chain_duration": percentiles(&metrics.corrected_chain),
+                        "request_total": percentiles(&metrics.corrected_total),
+                        "ttfb": percentiles(&metrics.corrected_ttfb),
+                    },
+                })),
+            })
+            }
             Packet::Summary {
                 t_ms,
                 phase,
-                window,
+                mut window,
+                diagnostics,
+                closing,
+                partial,
             } => {
-                write_record(&mut writer, &mut buffer, &Record::Annotation(Annotation {
-                    t_ms, target_id: Some(identity.target.clone()), code: "generator_self_metrics".into(), severity: Severity::Info,
-                    phase: Some(phase), from_ms: t_ms.saturating_sub(millis(window.to.saturating_sub(window.from))), to_ms: Some(t_ms),
-                    message: "Sample counts for this interval's maximum send drift and summary timer wake lateness; zero samples means no observation.".into(),
-                    detail: Some(serde_json::json!({"drift_samples": window.metrics.drift.count(), "drift_overflow": window.metrics.drift.overflow, "scheduler_lag_samples": window.scheduler_lag_samples})),
-                }))?;
-                summary_record(identity, t_ms, phase, &window, current.1)
+                let base = t_ms.saturating_sub(millis(window.to));
+                for (index, (health, traffic_phase)) in [
+                    (diagnostics.warmup, Phase::Warmup),
+                    (diagnostics.measure, Phase::Measure),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    for annotation in crate::detectors::annotations(
+                        health,
+                        *diagnostics,
+                        traffic_phase,
+                        (base, t_ms),
+                        closing,
+                        partial,
+                        &mut detectors[index],
+                    ) {
+                        let mut annotation = annotation;
+                        annotation.target_id = Some(identity.target.clone());
+                        write_record(&mut writer, &mut buffer, &Record::Annotation(annotation))?;
+                    }
+                }
+                write_summary(
+                    &mut writer,
+                    &mut buffer,
+                    identity,
+                    t_ms,
+                    phase,
+                    &window,
+                    current.1,
+                )?;
+                if let Some(metrics) = window.warmup_metrics.take() {
+                    window.metrics = *metrics;
+                    window.in_flight = window.warmup_in_flight;
+                    window.queue_depth = window.warmup_queue_depth;
+                    window.scheduler_lag = Duration::ZERO;
+                    window.scheduler_lag_samples = 0;
+                    write_summary(
+                        &mut writer,
+                        &mut buffer,
+                        identity,
+                        t_ms,
+                        Phase::Warmup,
+                        &window,
+                        current.1,
+                    )?;
+                }
+                started = true;
+                continue;
             }
             Packet::Request(data) => Record::Request(RequestEvent {
                 t_ms: data.t_ms,
@@ -541,6 +731,45 @@ fn write_stream(
         started = true;
     }
     writer.flush()
+}
+
+fn write_summary(
+    writer: &mut dyn Write,
+    buffer: &mut Vec<u8>,
+    identity: &Identity,
+    t_ms: u64,
+    phase: Phase,
+    window: &Window,
+    dropped: u64,
+) -> io::Result<()> {
+    write_record(writer, buffer, &Record::Annotation(Annotation {
+        t_ms, target_id: Some(identity.target.clone()), code: "schedule_corrected_latency".into(), severity: Severity::Info,
+        phase: Some(phase), from_ms: t_ms.saturating_sub(millis(window.to.saturating_sub(window.from))), to_ms: Some(t_ms),
+        message: "Latency from planned arrival, including generator delay; raw latency remains in the summary. Skipped arrivals have no synthetic samples.".into(),
+        detail: Some(serde_json::json!({
+            "method": "scheduled_arrival", "synthetic_samples": 0, "includes_skipped_arrivals": false,
+            "chain": identity.chain, "step": identity.step, "timeline_phase": window.phase,
+            "chain_duration": window.metrics.corrected_chain.snapshot(),
+            "request_total": window.metrics.corrected_total.snapshot(),
+            "ttfb": window.metrics.corrected_ttfb.snapshot(),
+            "overflow": {
+                "chain_duration": window.metrics.corrected_chain.overflow,
+                "request_total": window.metrics.corrected_total.overflow,
+                "ttfb": window.metrics.corrected_ttfb.overflow,
+            },
+        })),
+    }))?;
+    write_record(writer, buffer, &Record::Annotation(Annotation {
+        t_ms, target_id: Some(identity.target.clone()), code: "generator_self_metrics".into(), severity: Severity::Info,
+        phase: Some(phase), from_ms: t_ms.saturating_sub(millis(window.to.saturating_sub(window.from))), to_ms: Some(t_ms),
+        message: "Sample counts for this interval's maximum send drift and summary timer wake lateness; zero samples means no observation.".into(),
+        detail: Some(serde_json::json!({"drift_samples": window.metrics.drift.count(), "drift_overflow": window.metrics.drift.overflow, "scheduler_lag_samples": window.scheduler_lag_samples, "timeline_phase": window.phase})),
+    }))?;
+    write_record(
+        writer,
+        buffer,
+        &summary_record(identity, t_ms, phase, window, dropped),
+    )
 }
 
 fn write_record(writer: &mut dyn Write, buffer: &mut Vec<u8>, record: &Record) -> io::Result<()> {
@@ -608,7 +837,7 @@ fn summary_record(
         target_id: identity.target.clone(),
         phase,
         window_ms: millis(window.to.saturating_sub(window.from)),
-        target_rate: if phase == Phase::Measure {
+        target_rate: if matches!(phase, Phase::Measure | Phase::Warmup) && window.phase == phase {
             identity.rate
         } else {
             0.0
@@ -631,7 +860,7 @@ fn summary_record(
             rss_bytes: 0,
             open_fds: 0,
             scheduler_lag_ms: window.scheduler_lag.as_secs_f64() * 1000.0,
-            headroom_ratio: None,
+            headroom_ratio: identity.headroom_ratio,
             events_dropped: dropped,
         },
     })

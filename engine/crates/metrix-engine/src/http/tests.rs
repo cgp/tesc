@@ -105,6 +105,55 @@ fn template(uri: &str, timeout: Duration) -> Arc<RequestTemplate> {
 }
 
 #[tokio::test]
+async fn late_admission_and_pre_send_wait_are_in_corrected_latency_for_both_protocols() {
+    let server = TlsTarget::start(&[b"h2", b"http/1.1"]).await;
+    for version in [HttpVersion::Http1, HttpVersion::Http2] {
+        let admitted = Instant::now();
+        let scheduled = admitted - Duration::from_millis(200);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let completion = execute(Some(Job {
+            lease: Lease {
+                connection: None,
+                replacement: false,
+            },
+            endpoint: Arc::new(server.endpoint(version, true, "localhost")),
+            template: template("https://localhost/echo", Duration::from_secs(3)),
+            admitted,
+            scheduled,
+            send_state: Arc::new(SendState::default()),
+        }))
+        .await;
+        let o = completion.observation;
+        assert_eq!(o.error, None);
+        assert_eq!(o.admission_delay, Duration::from_millis(200));
+        assert!(o.drift >= Duration::from_millis(250));
+        let mut metrics = Accumulator::default();
+        metrics.finish(metrix_metrics::aggregation::Sample {
+            chain_duration: o.total,
+            admission_delay: o.admission_delay,
+            send_delay: o.drift,
+            request_duration: o.request_duration,
+            ttfb: o.ttfb,
+            drift: None,
+            status: o.status,
+            error: None,
+            bytes_sent: 0,
+            bytes_received: o.bytes_received,
+            connections_opened: o.connections_opened,
+            connection_reused: o.connection_reused,
+        });
+        assert_eq!(metrics.corrected_total.count(), 1);
+        assert_eq!(
+            metrics.corrected_chain.snapshot(),
+            metrics.corrected_total.snapshot()
+        );
+        assert!(metrics.corrected_total.snapshot().min_us.unwrap() >= 250_000);
+        assert!(metrics.corrected_ttfb.snapshot().min_us.unwrap() >= 250_000);
+        assert!(metrics.corrected_total.snapshot().min_us > metrics.total.snapshot().min_us);
+    }
+}
+
+#[tokio::test]
 async fn tls_handshake_wait_is_queued_until_a_pre_send_timeout() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -131,6 +180,7 @@ async fn tls_handshake_wait_is_queued_until_a_pre_send_timeout() {
         worker: 0,
         iteration: 0,
         admitted: now,
+        phase: metrix_metrics::events::Phase::Measure,
         send_state: Arc::clone(&state),
         send_recorded: false,
         future: ReusableBoxFuture::new(execute(Some(Job {
@@ -154,6 +204,8 @@ async fn tls_handshake_wait_is_queued_until_a_pre_send_timeout() {
             .is_err()
     );
     let mut workers = vec![Accumulator::default()];
+    let mut warmup_workers = vec![Accumulator::default()];
+    let mut warmup_interval = Accumulator::default();
     let mut interval = Accumulator::default();
     let mut report = crate::Report::default();
     let mut lag = crate::Lag::default();
@@ -162,6 +214,9 @@ async fn tls_handshake_wait_is_queued_until_a_pre_send_timeout() {
         crate::Recording {
             slots: &mut slots,
             workers: &mut workers,
+            warmup_workers: &mut warmup_workers,
+            warmup_interval: &mut warmup_interval,
+            phase: metrix_metrics::events::Phase::Measure,
             lag: &mut lag,
         },
         &mut interval,
@@ -183,6 +238,9 @@ async fn tls_handshake_wait_is_queued_until_a_pre_send_timeout() {
         crate::Recording {
             slots: &mut slots,
             workers: &mut workers,
+            warmup_workers: &mut warmup_workers,
+            warmup_interval: &mut warmup_interval,
+            phase: metrix_metrics::events::Phase::Measure,
             lag: &mut lag,
         },
         &mut interval,

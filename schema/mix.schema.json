@@ -705,6 +705,13 @@
       "description": "Generator-side tuning. Raising `worker_threads` is the first lever for headroom.",
       "type": "object",
       "properties": {
+        "allow_generator_limited": {
+          "description": "Permit a run above the calibrated generator ceiling. The run is marked invalid.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "connections_per_host": {
           "type": [
             "integer",
@@ -718,6 +725,24 @@
             "boolean",
             "null"
           ]
+        },
+        "rate_tolerance_pct": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "maximum": 99,
+          "minimum": 0
+        },
+        "send_drift_threshold_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "maximum": 3600000,
+          "minimum": 1
         },
         "worker_threads": {
           "description": "Default: physical cores minus one.",

@@ -1,14 +1,14 @@
 //! Standalone bundle execution and the shared schema generator.
 
 use clap::Parser;
-use metrix_engine::{Output, Plan, run_with_output};
+use metrix_engine::{Output, Plan, calibrate, run_with_output, write_profile};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 #[derive(Parser)]
 #[command(about = "Run a fixed-rate HTTP plan without a control plane")]
 struct Args {
-    /// Bundle directory. B1.2 supports one static call, one target and zero phases.
+    /// Bundle directory. Supports one static call, one target and a complete phase timeline.
     #[arg(
         long,
         required_unless_present = "emit_schemas",
@@ -18,6 +18,9 @@ struct Args {
     /// Write JSON Schemas generated from the shared Rust types.
     #[arg(long)]
     emit_schemas: Option<PathBuf>,
+    /// Measure this machine for the bundle's request shape and write machine-profile.json.
+    #[arg(long, conflicts_with = "emit_schemas")]
+    calibrate: bool,
     /// NDJSON interval summaries and lifecycle records. '-' writes to stdout.
     #[arg(long, default_value = "-")]
     summary: PathBuf,
@@ -76,7 +79,25 @@ fn execute(args: Args) -> Result<ExitCode, String> {
         }
         return Ok(ExitCode::SUCCESS);
     }
-    let plan = Plan::load(&args.plan.expect("clap requires --plan"))?;
+    let plan_path = args.plan.expect("clap requires --plan");
+    let plan = if args.calibrate {
+        Plan::load_for_calibration(&plan_path)?
+    } else {
+        Plan::load(&plan_path)?
+    };
+    if args.calibrate {
+        let profile = calibrate(&plan)?;
+        write_profile(plan.bundle_root(), &profile)?;
+        serde_json::to_writer_pretty(std::io::stdout(), &profile)
+            .map_err(|_| "cannot write calibration result")?;
+        println!();
+        eprintln!(
+            "wrote {} ({})",
+            plan.bundle_root().join("machine-profile.json").display(),
+            profile.id
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(plan.worker_threads)
         .enable_all()
@@ -144,10 +165,17 @@ fn execute(args: Args) -> Result<ExitCode, String> {
         report.skipped_connections,
         report.peak_in_flight,
         report.max_send_drift.as_secs_f64() * 1000.0,
-        report.metrics.drift.count(),
+        report.metrics.drift.count() + report.warmup_metrics.drift.count(),
         report.max_scheduler_lag.as_secs_f64() * 1000.0,
         report.scheduler_lag_samples,
         report.interrupted
+    );
+    eprintln!(
+        "measured_started={} measured_completed={} warmup_started={} warmup_completed={}",
+        report.metrics.counters.started,
+        report.metrics.counters.completed,
+        report.warmup_metrics.counters.started,
+        report.warmup_metrics.counters.completed
     );
     Ok(if report.interrupted {
         ExitCode::from(130)

@@ -525,3 +525,42 @@ This is a work log, not a reference — it records *what happened*, not *how thi
 - The form patches its own figures rather than re-rendering: every committed field re-checks the mixture, and rebuilding the markup each time would take the focus out from under somebody tabbing through the chains. It falls back to a full render when the shape changes — a session policy that grows a pool size, a step added, a mode switched.
 - Verified: `scripts/check.sh` all green — 559 passed, 1 skipped, 142 front-end tests.
 - **Open question for the engine track**: `PERCENT_EPSILON` is 0.01, but its comment says it exists so that `16.67 x 6` is not a validation failure — that totals 100.02 and is rejected. The API matches the constant rather than the comment, and a test pins that, so the two sides cannot disagree; which of the two is right is a decision for `metrix-plan`.
+## 2026-09-13 — Engine B2.1
+
+- Implemented baseline, optional warmup, measure, drain and settle with absolute traffic schedules and boundary snapshots. Idle phases emit summaries without sending requests; drain retains each admitted request's original timeout and closes the pool before settle.
+- Kept request events and samples tied to admission phase, including late warmup completions and cancellations. Separate warmup accumulators and summaries prevent measured histograms and counters from including warmup work. Moved the execution future onto the heap for the Windows CLI stack.
+- Updated the engine design and checklist; B2.1 is complete and B2.2 is next. Added phase, cancellation, timeout, default and overflow coverage plus schema validation of real phase streams.
+- Validation: bash scripts/check.sh passed, including Rust tests and the 75 RPS standalone acceptance run, 384 API tests (5 skipped), 67 front-end tests, schema drift and emitted NDJSON contract checks.
+
+## 2026-09-13 — Engine B2.2
+
+- Added load-percentile support in Rust stats/: 10 tail samples for crude support, 100 for stable support, with p99.9 suppressed below 10,000 samples. Every percentile carries its histogram count, overflow count, support, nullable value and binomial order-statistic 95% interval expanded to HDR bucket bounds. Overflow and unrepresentable counts suppress claims.
+- Warn before traffic when planned measured volume is below 2,250. Emit final measured chain, request-total and TTFB percentiles through the frozen annotation contract; calculations run on the writer thread. Warmup and cancellation samples are excluded, event sampling leaves counts intact, and interrupted reports are labelled partial.
+- Updated design and checklist: B2.2 complete, B2.3 next. Validation: bash scripts/check.sh passed, including exact interval coverage and support-boundary tests, the standalone 75 RPS/30s percentile report, 384 API tests (5 skipped), 67 front-end tests and frozen-schema checks of genuine output.
+
+## 2026-09-13 — Engine B2.3
+
+- Added schedule-corrected chain duration, request total and TTFB beside raw latency. Each terminal sample has one corrected counterpart measured from planned arrival, including admission or send delay; skipped arrivals stay explicit shortfalls and cancellation creates no latency samples.
+- Retained corrected HDR histograms through worker merges, phase boundaries and drain. Emit interval histograms with overflow counts and final percentiles with the existing sample-support and confidence-interval rules through the frozen annotation contract. Warmup remains separate and serialization stays on writer threads.
+- Updated design and checklist: B2.3 complete, B2.4 next. Validation: bash scripts/check.sh passed, including HTTP/1.1 and HTTP/2 delay tests, correction arithmetic, HDR round-trip, overflow and count conservation, the standalone 75 RPS/30s run, 384 API tests (5 skipped), 67 front-end tests and emitted-stream schema checks.
+
+## 2026-09-13 — Engine B2.4
+
+- Added concurrency-cap, offered-rate, send-drift, and low-sample-count annotations. Detectors account for traffic phases, partial runs, cap occupancy, and actual admitted sends; percentile suppression uses the shared stats support rules.
+- Added validated bundle settings for rate tolerance and send-drift thresholds, and regenerated the compatible mix schema. Annotation generation stays on the bounded output writer and preserves the frozen NDJSON contract.
+- Completed B2.4; B2.5 calibration and headroom is next.
+- Validation: full `bash scripts/check.sh` passed, including Rust checks and tests, standalone execution, 384 API tests (5 skipped), 67 frontend tests, generated schemas, and emitted NDJSON validation.
+
+## 2026-09-13 — Engine B2.5
+
+- Added `metrix-engine --plan bundle/ --calibrate`, which stores a hardware- and shape-bound `machine-profile.json` in the bundle. It measures null-executor and loopback echo ceilings at one and configured worker counts, including a local TLS path for TLS-shaped plans.
+- Added bundle-local headroom preflight. Matching profiles populate run metadata and summary health; demand above 90% of the conservative loopback ceiling is refused before output or target setup unless `engine.allow_generator_limited` explicitly permits an invalid annotated run.
+- Completed B2.5; B2.6 run metadata is next.
+- Validation: full `bash scripts/check.sh` passed, including Rust checks and tests, standalone execution, API and frontend tests, generated schemas, and emitted NDJSON validation.
+
+## 2026-09-13 — Engine B2.6
+
+- Completed standalone run identity: `run_started` now has integration coverage for its plan hash, engine version, explicit CLI seed, and optional calibrated machine-profile id without changing the frozen NDJSON schema.
+- Clarified which reproducibility metadata the engine owns and which remains API recording metadata.
+- Completed B2.6; B3.1 separate call resolution is next.
+- Validation: full `bash scripts/check.sh` passed, including Rust checks and tests, standalone execution, API and frontend tests, generated schemas, and emitted NDJSON validation.

@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 use crate::schedule::Schedule;
 
 pub struct Plan {
+    root: std::path::PathBuf,
     pub(crate) name: String,
     pub(crate) hash: String,
     pub(crate) chain: String,
@@ -29,9 +30,17 @@ pub struct Plan {
     pub(crate) request: Arc<RequestTemplate>,
     pub(crate) rate: f64,
     pub(crate) duration: Duration,
+    pub(crate) baseline: Duration,
+    pub(crate) warmup: Duration,
+    pub(crate) settle: Duration,
     pub(crate) concurrency: usize,
     pub(crate) connections: usize,
     pub worker_threads: usize,
+    pub detector_config: crate::DetectorConfig,
+    pub(crate) calibration_shape: crate::calibration::Shape,
+    pub(crate) machine_profile: Option<crate::MachineProfile>,
+    pub(crate) headroom_ratio: Option<f64>,
+    pub(crate) allow_generator_limited: bool,
 }
 
 pub(crate) struct RequestTemplate {
@@ -43,7 +52,21 @@ pub(crate) struct RequestTemplate {
 }
 
 impl Plan {
+    pub fn bundle_root(&self) -> &Path {
+        &self.root
+    }
+
     pub fn load(root: &Path) -> Result<Self, String> {
+        Self::load_inner(root, true)
+    }
+
+    /// Calibration replaces a stale local profile, so it deliberately ignores one while
+    /// compiling the plan shape.
+    pub fn load_for_calibration(root: &Path) -> Result<Self, String> {
+        Self::load_inner(root, false)
+    }
+
+    fn load_inner(root: &Path, load_machine_profile: bool) -> Result<Self, String> {
         let root = root
             .canonicalize()
             .map_err(|_| "--plan: cannot open bundle directory")?;
@@ -61,12 +84,6 @@ impl Plan {
         require(
             mix.load.stages.is_empty() && mix.load.breakpoint.is_none(),
             "mix.json/load: stages and breakpoint are not implemented",
-        )?;
-        require(
-            mix.phases.baseline.is_zero()
-                && mix.phases.settle.is_zero()
-                && mix.load.warmup.is_none_or(|d| d.is_zero()),
-            "mix.json/phases: set baseline, warmup and settle to zero until B2.1",
         )?;
         require(
             mix.auth.is_none() && mix.datasets.is_empty() && mix.generators.is_empty(),
@@ -115,6 +132,35 @@ impl Plan {
             .ok_or("mix.json/load/rate: required for fixed load")?;
         let duration = mix.load.duration.as_duration();
         Schedule::validate(rate, duration)?;
+        let tolerance = mix.engine.rate_tolerance_pct.unwrap_or(2);
+        let explicit_drift = mix.engine.send_drift_threshold_ms;
+        require(
+            tolerance < 100 && explicit_drift.is_none_or(|ms| (1..=3_600_000).contains(&ms)),
+            "mix.json/engine: detector tolerance must be 0..99 and drift threshold 1..3600000ms",
+        )?;
+        let detector_config = crate::DetectorConfig {
+            rate_tolerance_pct: tolerance,
+            drift_threshold: explicit_drift
+                .map(Duration::from_millis)
+                .unwrap_or_else(|| {
+                    Duration::from_secs_f64((1.0 / rate).min(3600.0)).max(Duration::from_millis(5))
+                }),
+        };
+        let baseline = mix.phases.baseline.as_duration();
+        let warmup = mix.load.warmup.map_or(Duration::ZERO, |d| d.as_duration());
+        let settle = mix.phases.settle.as_duration();
+        if !warmup.is_zero() {
+            Schedule::validate(rate, warmup)?;
+        }
+        let span = baseline
+            .checked_add(warmup)
+            .and_then(|d| d.checked_add(duration))
+            .and_then(|d| d.checked_add(settle))
+            .ok_or("mix.json/phases: timeline duration is not representable")?;
+        require(
+            std::time::Instant::now().checked_add(span).is_some(),
+            "mix.json/phases: timeline duration is not representable",
+        )?;
         let concurrency = mix.load.max_concurrency.unwrap_or(200) as usize;
         let connections = mix.engine.connections_per_host.unwrap_or(256) as usize;
         require(
@@ -231,7 +277,33 @@ impl Plan {
             !timeout.is_zero() && std::time::Instant::now().checked_add(timeout).is_some(),
             "call/timeout_ms: must be positive and representable by the monotonic clock",
         )?;
+        require(
+            span.checked_add(timeout)
+                .and_then(|d| std::time::Instant::now().checked_add(d))
+                .is_some(),
+            "mix.json/phases: timeline duration including drain is not representable",
+        )?;
+        let calibration_shape = crate::calibration::Shape {
+            request_body_bytes: body.len(),
+            tls: target.tls.enabled,
+            chain_depth: 1,
+            generation: "static".into(),
+        };
+        let machine_profile = if load_machine_profile {
+            crate::MachineProfile::load(&root, &calibration_shape, worker_threads)?
+        } else {
+            None
+        };
+        let headroom_ratio = machine_profile
+            .as_ref()
+            .map(|profile| rate / profile.ceiling(worker_threads));
+        let allow_generator_limited = mix.engine.allow_generator_limited.unwrap_or(false);
+        require(
+            headroom_ratio.is_none_or(|ratio| ratio <= 0.9 || allow_generator_limited),
+            "mix.json/load/rate: exceeds 90% of the calibrated generator ceiling; set engine/allow_generator_limited to true to run with an invalid annotation",
+        )?;
         Ok(Self {
+            root,
             name: mix.name.clone(),
             hash: bundle_hash(&documents),
             chain: chain.name.clone(),
@@ -247,9 +319,17 @@ impl Plan {
             }),
             rate,
             duration,
+            baseline,
+            warmup,
+            settle,
             concurrency,
             connections,
             worker_threads,
+            detector_config,
+            calibration_shape,
+            machine_profile,
+            headroom_ratio,
+            allow_generator_limited,
         })
     }
 }
