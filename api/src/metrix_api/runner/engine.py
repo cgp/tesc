@@ -100,6 +100,7 @@ async def run_engine(
     bundle: Path,
     started_at: datetime,
     stop: asyncio.Event,
+    targets: tuple[str, ...] = (),
     binary: Path | None = None,
     grace: float = GRACE,
 ) -> EngineRun:
@@ -131,7 +132,15 @@ async def run_engine(
         stderr=asyncio.subprocess.PIPE,
     )
 
-    ingest = Ingest(conn=conn, recording_id=recording_id, started_at=started_at)
+    ingest = Ingest(
+        conn=conn,
+        recording_id=recording_id,
+        started_at=started_at,
+        # The recording's boxes, which is what the engine's phase timeline is written
+        # against: the engine names its load target, and the host samples are filed
+        # under the boxes being watched (§3.4).
+        targets=targets,
+    )
     errors: list[str] = []
 
     async def read_summary() -> None:

@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from metrix_api import plans
 from metrix_api import profiles as profile_store
 from metrix_api.config import Config
 from metrix_api.deps import get_config
@@ -33,6 +34,12 @@ def get_registry(request: Request) -> Registry:
 
 class StartRequest(BaseModel):
     profile: str
+    #: Name a plan and the recording sends traffic while it watches. Without one it
+    #: is an observation: the same collectors, nothing generating load.
+    plan: str | None = None
+    #: Which of the profile's endpoints take traffic, if not all of them. Never
+    #: changes what is watched -- the two are different sockets on different boxes.
+    targets: list[str] | None = None
     interval_s: float = Field(default=1.0, gt=0, le=3600)
     groups: list[str] | None = None
     note: str | None = None
@@ -44,6 +51,14 @@ async def start_recording(
     config: Config = Depends(get_config),
     registry: Registry = Depends(get_registry),
 ) -> dict[str, Any]:
+    """Start watching an environment, and optionally send a plan at it.
+
+    One route for both because they are one thing: a load run is an observation with
+    traffic attached, and everything downstream -- the live table, the stream, the
+    stop button, the archive -- is the same either way. The difference is `kind`,
+    which keeps an environment watched at rest out of the same series as the same
+    environment under load.
+    """
     from datetime import timedelta
 
     try:
@@ -51,19 +66,34 @@ async def start_recording(
     except profile_store.ProfileError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    common = {
+        "interval": timedelta(seconds=body.interval_s),
+        "groups": body.groups,
+        "note": body.note,
+    }
     try:
-        live = await registry.start(
-            config,
-            profile,
-            interval=timedelta(seconds=body.interval_s),
-            groups=body.groups,
-            note=body.note,
-        )
+        if body.plan:
+            live = await registry.start_load(
+                config, profile, body.plan, only=body.targets, **common
+            )
+        else:
+            live = await registry.start(config, profile, **common)
+    except plans.PlanError as exc:
+        # A plan that does not exist is a 404; one that exists and will not run is a
+        # 422. Telling those apart is the difference between "typo" and "fix your mix".
+        status = 404 if str(exc).startswith("no plan ") else 422
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
     except RecordingError as exc:
-        # A profile with nothing to collect from is the caller's mistake, not a fault.
+        # A profile with nothing to collect from, a plan that cannot run, or no engine
+        # to run it: the caller's situation rather than a fault.
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    return {"recording_id": live.recording_id, "profile": profile.name, "status": "running"}
+    return {
+        "recording_id": live.recording_id,
+        "profile": profile.name,
+        "plan": live.plan_name,
+        "status": "running",
+    }
 
 
 @router.post("/{recording_id}/stop")

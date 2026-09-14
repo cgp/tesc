@@ -800,24 +800,26 @@ function exportCard(state, draft) {
   // would use. Saying so beside the button is the difference between an export that
   // is out of date and an export that lies about what is in it.
   const unsaved = dirty(draft)
-    ? `<div class="mt-3 severity-warn">The form has changes that are not saved. A
-         bundle is assembled from the stored plan, so they are not in it.</div>`
+    ? `<div class="mt-3 severity-warn">The form has changes that are not saved. A run
+         and a bundle are both assembled from the stored plan, so they would not
+         include them.</div>`
     : "";
 
   if (!profiles.length) {
     return `<div class="card">
-      <div class="card-header"><h3 class="card-title">Bundle</h3></div>
-      <div class="card-body text-secondary">A bundle needs a profile: the plan says
-        what to send, and the profile says where. Make one on the Profiles page.</div>
+      <div class="card-header"><h3 class="card-title">Run it</h3></div>
+      <div class="card-body text-secondary">A run needs a profile: the plan says what
+        to send, and the profile says where. Make one on the Profiles page.</div>
     </div>`;
   }
 
   return `<div class="card">
     <div class="card-header">
       <div>
-        <h3 class="card-title">Bundle</h3>
+        <h3 class="card-title">Run it</h3>
         <div class="card-subtitle">The runnable directory: this mixture, its calls,
-          and one profile's boxes as <code>targets.json</code>.</div>
+          and one profile's boxes as <code>targets.json</code>. Run it here, or take
+          the same directory away and run it by hand.</div>
       </div>
     </div>
     <div class="card-body">
@@ -827,6 +829,9 @@ function exportCard(state, draft) {
         })}
       </div>
       <div class="btn-list mt-3">
+        <button type="button" class="btn btn-primary" data-action="plan-run">
+          ${icon("player-play")} Run against ${escape(chosen)}
+        </button>
         <button type="button" class="btn" data-action="bundle-preview">
           ${icon("clipboard")} Show what it contains
         </button>

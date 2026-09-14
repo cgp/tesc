@@ -638,6 +638,34 @@ function exportMenu(recording) {
  * what goes and exactly what stays.
  */
 /**
+ * What sent the traffic, for a run that had any.
+ *
+ * The hash rather than only the name: a plan is edited, and two runs of "checkout"
+ * are the same plan only if the bytes the engine read were the same. It is what the
+ * series is filed under, so it is what makes a comparison across runs legitimate.
+ */
+function planField(recording) {
+  if (!recording.plan_name) return "";
+  const hash = recording.plan_hash
+    ? `<div class="text-secondary"><code class="metrix-path">${escape(
+        recording.plan_hash
+      )}</code></div>`
+    : `<div class="text-secondary">no hash: the engine never reported one</div>`;
+  const exit =
+    recording.engine_exit_code == null
+      ? ""
+      : ` <span class="badge ${
+          recording.engine_exit_code === 0 ? "bg-green-lt" : "bg-red-lt"
+        }">engine exit ${recording.engine_exit_code}</span>`;
+  return field(
+    "Plan",
+    `<a href="#/plans/${encodeURIComponent(recording.plan_name)}">${escape(
+      recording.plan_name
+    )}</a>${exit}${hash}`
+  );
+}
+
+/**
  * The way into the sweep view.
  *
  * Offered only where there is something to compare. One box is a recording; two or
@@ -713,6 +741,7 @@ function detail(recording) {
               .join(", ") || "—"
           )}
           ${field("Metrics", String(recording.metrics.length))}
+          ${planField(recording)}
           ${field(
             "Request data",
             recording.purged_at

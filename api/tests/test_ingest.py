@@ -518,3 +518,92 @@ class TestRoutes:
         body = TestClient(create_app(home)).get(f"/api/recordings/{recording_id}/load").json()
         assert body["ran"] is False
         assert body["engine_exit_code"] is None, "no engine ran is not exit 0"
+
+
+class TestWhatProducedTheRun:
+    """`run_started` is where a stored run gets its identity (design-engine B2.6)."""
+
+    def test_the_plan_and_the_engine_are_pinned_to_the_recording(self, db, recording) -> None:
+        ingest_for(db, recording).record(started_record())
+        row = store.get(db, recording)
+        # The plan hash is what a series is filed under, so a run without it cannot
+        # be told apart from a run of a plan that has since been edited.
+        assert row.plan_hash == "sha256:x"
+        assert row.plan_name == "p"
+        assert row.engine_version == "0.0.0"
+
+    def test_a_field_the_engine_did_not_send_is_left_alone(self, db, recording) -> None:
+        record = {k: v for k, v in started_record().items() if k != "machine_profile"}
+        ingest_for(db, recording).record(record)
+        stored = db.execute(
+            "SELECT machine_profile, seed FROM recording WHERE id = ?", (recording,)
+        ).fetchone()
+        # Not written as null over something, and not invented: an uncalibrated run
+        # has no machine profile, which is a fact rather than a gap.
+        assert stored["machine_profile"] is None
+        assert stored["seed"] == 1
+
+
+class TestThePhaseTimeline:
+    """The engine owns the phases; the recording inherits them (design-engine 10.1)."""
+
+    def phases(self, db, recording) -> list[tuple]:
+        return [
+            (row["phase"], row["from_ms"], row["to_ms"])
+            for row in store.phases(db, recording)
+        ]
+
+    def run_through(self, db, recording, *, targets=("task-a1b2c3",)) -> Ingest:
+        ingest = Ingest(
+            conn=db, recording_id=recording, started_at=STARTED, targets=tuple(targets)
+        )
+        ingest.record(started_record())
+        for t_ms, phase in [(7, "baseline"), (1026, "warmup"), (2014, "measure"),
+                            (3014, "drain"), (5025, "settle")]:
+            ingest.record({"type": "phase_changed", "t_ms": t_ms, "target_id": "load-target",
+                           "phase": phase})
+        ingest.record({"type": "run_finished", "t_ms": 6033, "exit_code": 0})
+        return ingest
+
+    def test_each_transition_closes_the_window_before_it(self, db, recording) -> None:
+        self.run_through(db, recording)
+        # Shifted onto the recording's clock: the engine started 11 seconds after it.
+        assert self.phases(db, recording) == [
+            ("baseline", 11007, 12026),
+            ("warmup", 12026, 13014),
+            ("measure", 13014, 14014),
+            ("drain", 14014, 16025),
+            ("settle", 16025, 17033),
+        ]
+
+    def test_the_last_phase_is_closed_by_the_end_of_the_run(self, db, recording) -> None:
+        self.run_through(db, recording)
+        settle = [p for p in self.phases(db, recording) if p[0] == "settle"][0]
+        # Left open it would read as a window that never ended, and every figure over
+        # it would silently include whatever came later.
+        assert settle[2] is not None
+
+    def test_phases_are_written_against_the_boxes_being_watched(self, db, recording) -> None:
+        self.run_through(db, recording)
+        filed = {row["target_id"] for row in store.phases(db, recording)}
+        # Not "load-target", which is where the traffic went. Host samples are filed
+        # under the boxes statistics come from, and a phase filed anywhere else is a
+        # window nothing can be read over.
+        assert filed == {"task-a1b2c3"}
+
+    def test_a_phase_before_the_clock_is_counted_rather_than_guessed_at(
+        self, db, recording
+    ) -> None:
+        ingest = Ingest(
+            conn=db, recording_id=recording, started_at=STARTED, targets=("task-a1b2c3",)
+        )
+        ingest.record({"type": "phase_changed", "t_ms": 7, "target_id": "x", "phase": "baseline"})
+        assert ingest.unplaced == 1
+        assert self.phases(db, recording) == []
+
+    def test_a_recording_with_no_targets_records_no_phases(self, db, recording) -> None:
+        # Nothing to file them against. Silent rather than inventing a target row.
+        ingest = Ingest(conn=db, recording_id=recording, started_at=STARTED)
+        ingest.record(started_record())
+        ingest.record({"type": "phase_changed", "t_ms": 7, "target_id": "x", "phase": "baseline"})
+        assert self.phases(db, recording) == []

@@ -40,6 +40,28 @@ function recording(patch = {}) {
   };
 }
 
+/** The detail page for one recording, with only the fields a test cares about. */
+function detail(patch = {}) {
+  return render({
+    selectedRecording: {
+      ...recording(patch),
+      metrics: [],
+      phases: [],
+      annotations: [],
+      gaps: [],
+      targets: ["box-a"],
+      summary: null,
+      comparison: null,
+      recovery: null,
+      inventory: null,
+      hosts: {},
+      disks: {},
+    },
+    recordings: [],
+    archive: { filters: {}, facets: {}, total: 0 },
+  });
+}
+
 function view(recordings, archive = {}) {
   return render({
     selectedRecording: null,
@@ -217,4 +239,21 @@ test("the delete button counts what it will take once something is picked", () =
   // Said on the button, not only in the dialog: the difference between the two
   // destructive actions should be legible before either is pressed.
   assert.match(markup, /A purge keeps the figures; this does not/);
+});
+
+test("a launched run says what sent the traffic, hash and all", () => {
+  const markup = detail({
+    plan_name: "checkout",
+    plan_hash: "sha256:2991b369",
+    engine_exit_code: 0,
+  });
+  assert.match(markup, /#\/plans\/checkout/);
+  // The hash, not only the name: two runs of "checkout" are the same plan only if
+  // the bytes the engine read were the same.
+  assert.match(markup, /sha256:2991b369/);
+  assert.match(markup, /engine exit 0/);
+});
+
+test("an observation carries no plan row at all", () => {
+  assert.doesNotMatch(detail({}), />Plan</);
 });

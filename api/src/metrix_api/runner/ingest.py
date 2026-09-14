@@ -96,6 +96,12 @@ class Ingest:
     stopped_because: str | None = None
     #: Chains and steps seen, so a caller can describe the run without a query.
     chains: set[str] = field(default_factory=set)
+    #: Every target of the recording, which is what the engine's phase timeline is
+    #: written against. Empty means phases are not recorded -- see `_phase`.
+    targets: tuple[str, ...] = ()
+    #: The phase currently open, and when it opened, so a transition can close the
+    #: one before it. The engine names a boundary, not a span.
+    _open: tuple[str, int] | None = None
 
     def line(self, text: str) -> None:
         """Apply one NDJSON line. Blank lines are skipped, not an error."""
@@ -122,11 +128,13 @@ class Ingest:
             self._summary(record)
         elif kind == "annotation":
             self._annotation(record)
+        elif kind == "phase_changed":
+            self._phase(record)
         elif kind == RUN_FINISHED:
             self._finish(record)
-        # phase_changed, target_started/finished and request records are read by
-        # later steps; they are counted here and deliberately not invented into
-        # tables nothing yet reads.
+        # target_started/finished and request records are read by later steps; they
+        # are counted here and deliberately not invented into tables nothing yet
+        # reads.
 
     # ------------------------------------------------------------------ the clock
 
@@ -148,6 +156,74 @@ class Ingest:
             # rather than failing: a clock that moved is worth a note, not a lost run.
             offset = 0.0
         self.offset_ms = round(offset)
+        self._identity(record)
+
+    def _identity(self, record: dict[str, Any]) -> None:
+        """Pin what produced this run onto the recording.
+
+        The engine owns these four (design-engine B2.6) and the recording has columns
+        waiting for them: which plan by name and by hash, which engine, and which seed
+        it was given. Without them a stored run cannot be told apart from another run
+        of a plan that has since been edited -- and the plan hash is what a series is
+        identified by, so the whole history depends on this landing.
+        """
+        fields = {
+            "plan_name": record.get("plan_name"),
+            "plan_hash": record.get("plan_hash"),
+            "engine_version": record.get("engine_version"),
+            "seed": record.get("seed"),
+            "machine_profile": record.get("machine_profile"),
+        }
+        present = {key: value for key, value in fields.items() if value is not None}
+        if not present:
+            return
+        assignments = ", ".join(f"{key} = ?" for key in present)
+        with transaction(self.conn):
+            self.conn.execute(
+                f"UPDATE recording SET {assignments} WHERE id = ?",
+                (*present.values(), self.recording_id),
+            )
+
+    # ----------------------------------------------------------------- the phases
+
+    def _phase(self, record: dict[str, Any]) -> None:
+        """The engine's timeline becomes the recording's.
+
+        The engine owns the phases (design-engine 10.1) and the observer is watching
+        whatever the run is pointed at, so a `baseline` the engine declares is the
+        window every host sample in it was collected during. They are written against
+        the recording's own targets rather than the engine's: the boxes traffic is
+        sent to and the boxes statistics are read from are different sockets and
+        usually different machines (§3.4), and a phase filed under a target with no
+        samples is a window nothing can be read over.
+
+        One timeline, because the engine runs one target. A sequential sweep gives
+        each target its own, and this will have to say which timeline a host sample
+        belongs to rather than assuming there is only one.
+        """
+        at = self.at(record.get("t_ms", 0))
+        phase = record.get("phase")
+        if at is None or not isinstance(phase, str) or not self.targets:
+            # Before `run_started` there is no clock to place this on, and with no
+            # targets there is nothing to file it against. Counted, not guessed at.
+            if at is None:
+                self.unplaced += 1
+            return
+        self._close(at)
+        with transaction(self.conn):
+            for target in self.targets:
+                store.start_phase(self.conn, self.recording_id, target, phase, at)
+        self._open = (phase, at)
+
+    def _close(self, at: int) -> None:
+        """End the phase that was open. A boundary closes one and opens the next."""
+        if self._open is None:
+            return
+        phase, _ = self._open
+        with transaction(self.conn):
+            for target in self.targets:
+                store.end_phase(self.conn, self.recording_id, target, phase, at)
+        self._open = None
 
     def at(self, engine_t_ms: int) -> int | None:
         """One engine timestamp on the recording's clock."""
@@ -311,6 +387,11 @@ class Ingest:
     def _finish(self, record: dict[str, Any]) -> None:
         self.exit_code = record.get("exit_code")
         self.stopped_because = record.get("stopped_because")
+        # The last phase has no transition after it, so the end of the run is what
+        # closes it. Left open, it would read as a window that never ended.
+        end = self.at(record.get("t_ms", 0))
+        if end is not None:
+            self._close(end)
         with transaction(self.conn):
             self.conn.execute(
                 "UPDATE recording SET engine_exit_code = ?, stopped_because = ? WHERE id = ?",

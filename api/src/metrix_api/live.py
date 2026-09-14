@@ -23,11 +23,12 @@ import json
 import logging
 import sqlite3
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from metrix_api import plans
 from metrix_api.analysis import ENVIRONMENT
 from metrix_api.config import Config
 from metrix_api.discovery.ecs import Clients
@@ -35,7 +36,8 @@ from metrix_api.discovery.resolve import Resolver
 from metrix_api.observer.collector import Clock
 from metrix_api.observer.metrics import Annotation, Gap, Sample
 from metrix_api.profiles import Profile
-from metrix_api.recording import Recorder, start_observation
+from metrix_api.recording import Recorder, RecordingError, start_observation
+from metrix_api.runner.engine import engine_binary, run_engine
 from metrix_api.stats import summarize
 from metrix_api.store import recordings as store
 from metrix_api.store.db import connect, migrate
@@ -149,6 +151,9 @@ class LiveRecording:
     hub: Hub
     conn: sqlite3.Connection
     profile_name: str
+    #: The plan this run is sending, when one is attached. None for an observation,
+    #: which is the same recorder with nothing generating traffic.
+    plan_name: str | None = None
     #: Latest value per metric per target. The snapshot a new subscriber receives, so
     #: a late joiner is immediately correct rather than blank until the next change.
     latest: dict[str, dict[str, float]] = field(default_factory=dict)
@@ -168,6 +173,20 @@ class LiveRecording:
     _values: dict[tuple[str, str], list[float]] = field(default_factory=dict)
     #: First and last sample time per target: the Start/Finish diagnostic of 14.2.
     _spans: dict[str, dict[str, int]] = field(default_factory=dict)
+    #: The engine, when one is attached: the task supervising it, the event that asks
+    #: it to finish, and what it said when it did.
+    _engine: asyncio.Task | None = None
+    _engine_stop: asyncio.Event | None = None
+    engine_error: str | None = None
+    #: Called once the recording has closed itself, so whoever is holding it can let
+    #: go. A load run ends when the traffic does rather than when somebody asks, so
+    #: the registry cannot be the only thing that removes it.
+    _on_finished: Callable[[str], None] | None = None
+    #: True once somebody has begun closing this recording. Two callers is the
+    #: ordinary case rather than a race: the engine finishing and a person pressing
+    #: Stop can arrive in either order, and the second must not stop the recorder a
+    #: second time on a connection the first has already closed.
+    _closing: bool = False
 
     @property
     def recording_id(self) -> str:
@@ -231,6 +250,15 @@ class LiveRecording:
         return {
             "recording_id": self.recording_id,
             "profile": self.profile_name,
+            # A load run and an observation look the same on this page until
+            # something goes wrong with the traffic, and then the difference is the
+            # first thing worth knowing.
+            "plan": self.plan_name,
+            "engine_error": self.engine_error,
+            # Whether any box in this run has a collector. A load run against
+            # somebody else's service has none, and a table with no rows in it
+            # should say which of those it is rather than looking broken.
+            "collecting": bool(self.recorder.profile.observed),
             "status": store.RUNNING if self.recorder.running else store.FINISHED,
             "elapsed_ms": self.recorder.clock.now_ms(),
             "targets": [e.id for e in self.recorder.profile.observed],
@@ -273,7 +301,70 @@ class LiveRecording:
     def start_ticker(self) -> None:
         self._ticker = asyncio.create_task(self._tick())
 
-    async def stop(self) -> store.RecordingRow:
+    async def attach(self, engine: Awaitable[Any], stop: asyncio.Event) -> None:
+        """Run the engine alongside the observer, and end the recording when it ends.
+
+        A load run finishes when the traffic does. The observer has no opinion about
+        when that is -- it would happily keep collecting -- so the engine's exit is
+        what closes the recording, and a person pressing Stop asks the engine to
+        finish rather than stopping the collectors out from under it.
+        """
+        self._engine_stop = stop
+
+        async def supervise() -> None:
+            try:
+                await engine
+            except Exception as exc:  # noqa: BLE001 - surfaced on the recording
+                # The run still happened, and whatever the observer collected is
+                # worth keeping. What is lost is the load half, and saying so beats
+                # a recording that simply stops with no reason attached.
+                log.exception("engine failed for recording %s", self.recording_id)
+                self.engine_error = str(exc)
+                self.hub.publish("annotation", {
+                    "code": "engine_failed",
+                    "severity": "invalid",
+                    "target_id": None,
+                    "from_ms": self.recorder.clock.now_ms(),
+                    "to_ms": None,
+                    "message": f"the load generator failed: {exc}",
+                })
+                store.add_annotation(self.conn, self.recording_id, Annotation(
+                    code="engine_failed",
+                    severity="invalid",
+                    from_ms=self.recorder.clock.now_ms(),
+                    message=f"the load generator failed: {exc}",
+                ))
+            finally:
+                await self.stop()
+
+        self._engine = asyncio.create_task(supervise())
+
+    async def _finish_engine(self) -> None:
+        """Ask the engine to finish, and wait for it.
+
+        Skipped when the caller *is* the supervising task, which is the ordinary way
+        a load run ends: the engine exited, and the task is now closing the recording
+        it was attached to. Waiting on itself there would hang the run forever.
+        """
+        if self._engine is None or self._engine is asyncio.current_task():
+            return
+        if self._engine_stop is not None:
+            self._engine_stop.set()
+        with contextlib.suppress(Exception):
+            await self._engine
+
+    async def stop(self) -> store.RecordingRow | None:
+        """Close the recording. `None` when somebody else is already closing it.
+
+        The second caller is not an error and not a race. A load run ends when the
+        engine ends, and a person can press Stop at the same moment; whichever
+        arrives first does the work, and the other is told there was nothing left to
+        do rather than stopping a recorder that has already let go of its database.
+        """
+        if self._closing:
+            return None
+        self._closing = True
+        await self._finish_engine()
         if self._ticker is not None:
             self._ticker.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -282,6 +373,8 @@ class LiveRecording:
         self.hub.publish("status", {"status": row.status, "duration_ms": row.duration_ms})
         self.hub.close()
         self.conn.close()
+        if self._on_finished is not None:
+            self._on_finished(self.recording_id)
         return row
 
 
@@ -342,6 +435,124 @@ class Registry:
 
         live.start_ticker()
         self._live[live.recording_id] = live
+        return live
+
+    async def start_load(
+        self,
+        config: Config,
+        profile: Profile,
+        plan_name: str,
+        *,
+        only: list[str] | None = None,
+        interval: timedelta = TICK,
+        groups: list[str] | None = None,
+        note: str | None = None,
+        clients: Clients | None = None,
+    ) -> LiveRecording:
+        """Send a plan at a profile, and watch the boxes while it runs.
+
+        A load run is an observation with traffic attached: the same recorder, the
+        same collectors, the same live view. What is added is a generator pointed at
+        the same environment, and one clock resolving the two (design-api 17.2, and
+        the contract's C1).
+
+        The order matters. The plan is refused before anything is opened if it cannot
+        run, and the engine binary is looked for before a row exists -- a recording
+        created for a run that never starts is a recording somebody has to explain
+        later. The bundle is assembled *after* the observer starts, from the profile
+        the observer actually resolved, so the boxes traffic goes to are the boxes
+        this recording is about rather than whatever discovery said a minute ago.
+        """
+        plan = plans.load_plan(config, plan_name)
+        problems = plans.check(plan)
+        if not plans.ready(problems):
+            raise RecordingError(
+                f"plan {plan_name!r} cannot run yet: "
+                + "; ".join(f"{p.where}: {p.message}" for p in problems if p.severity == "error")
+            )
+        if engine_binary() is None:
+            raise RecordingError(
+                "no engine binary: set METRIX_ENGINE, or build one with "
+                "`cargo build --manifest-path engine/Cargo.toml`"
+            )
+
+        conn = connect(config.database)
+        migrate(conn)
+        # Taken together, and that pairing is the point: the recorder's clock is
+        # monotonic and has no wall time in it, while the engine reports the wall
+        # instant of its own zero. One of each, read in the same breath, is what lets
+        # the two timelines be resolved into one.
+        clock = Clock.start()
+        started_at = datetime.now(UTC)
+
+        recorder = await start_observation(
+            conn,
+            profile,
+            interval=interval,
+            groups=groups,
+            note=note,
+            clock=clock,
+            resolver=Resolver(conn=conn, aws=config.aws, clients=clients),
+            kind="load",
+            plan_name=plan_name,
+        )
+
+        try:
+            bundle = plans.assemble(plan, recorder.profile, only=only)
+            exported = bundle.write(config.run_dir(recorder.recording_id) / "plan.snapshot")
+        except Exception as exc:
+            # The row exists and nothing ran. Marked failed rather than left running
+            # forever or deleted: it is a real attempt, and the reason it did not
+            # start is worth keeping.
+            store.add_annotation(
+                conn,
+                recorder.recording_id,
+                Annotation(
+                    code="bundle_failed",
+                    severity="invalid",
+                    from_ms=0,
+                    message=f"the plan could not be assembled for this profile: {exc}",
+                ),
+            )
+            await recorder.stop(status=store.FAILED)
+            conn.close()
+            raise RecordingError(f"plan {plan_name!r} could not be assembled: {exc}") from exc
+
+        live = LiveRecording(
+            recorder=recorder,
+            hub=Hub(),
+            conn=conn,
+            profile_name=profile.name,
+            plan_name=plan_name,
+            # Discarding a key that is already gone: a person pressing Stop takes
+            # it out of the registry first, and the recording closing itself must not
+            # then fail on its way out.
+            _on_finished=lambda key: self._live.pop(key, None),
+        )
+        recorder.tee_sample = live.note_sample
+        recorder.tee_gap = live.note_gap
+        live.start_ticker()
+        self._live[live.recording_id] = live
+
+        stop = asyncio.Event()
+        await live.attach(
+            run_engine(
+                conn,
+                live.recording_id,
+                bundle=exported,
+                started_at=started_at,
+                stop=stop,
+                targets=tuple(store.get(conn, live.recording_id).targets),
+            ),
+            stop,
+        )
+        log.info(
+            "recording %s running plan %s (%s) against profile %s",
+            live.recording_id,
+            plan_name,
+            bundle.hash,
+            profile.name,
+        )
         return live
 
     async def stop(self, recording_id: str) -> store.RecordingRow | None:

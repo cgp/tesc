@@ -35,6 +35,12 @@ export function connect(recordingId) {
         summaries: snapshot.summaries ?? {},
         spans: snapshot.spans ?? {},
         phase: snapshot.phase,
+        // What is sending the traffic, and whether anything is being watched. A run
+        // against a service nobody can log into has no host rows and never will,
+        // which the table has to say rather than sit empty.
+        plan: snapshot.plan ?? null,
+        collecting: snapshot.collecting,
+        engineError: snapshot.engine_error ?? null,
         gaps: get().live?.gaps ?? [],
         annotations: get().live?.annotations ?? [],
         connection: "live",

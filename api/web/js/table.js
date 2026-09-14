@@ -45,7 +45,30 @@ export function render(state) {
   const recording = state.selectedRecording;
   const sort = state.tableSort ?? null;
 
-  if (live && live.summaries) return card(liveModel(live), sort);
+  if (live && live.summaries) {
+    // A run with nothing to collect from has no rows and never will. Saying so is
+    // the difference between a page that is waiting and a page that is broken.
+    // Counting metrics, not targets: the pooled row is always present, so an empty
+    // run still arrives with one key in it.
+    const nothing = !Object.values(live.summaries).some((byMetric) =>
+      Object.keys(byMetric ?? {}).length
+    );
+    if (live.collecting === false && nothing) {
+      return empty({
+        icon: "player-play",
+        title: live.plan ? `Running ${live.plan}` : "Running",
+        body: `No endpoint of this profile has a collector, so there are no host
+          statistics to show. The load figures land on the
+          <a href="#/recordings/${encodeURIComponent(live.recordingId)}">recording</a>
+          when the run finishes.`,
+        action: `<button class="btn btn-outline-danger" data-action="stop"
+                         data-recording="${escape(live.recordingId)}">
+                   ${icon("player-stop")} Stop
+                 </button>`,
+      });
+    }
+    return card(liveModel(live), sort);
+  }
   if (!recording) {
     return empty({
       icon: "chart-line",
@@ -75,6 +98,7 @@ function liveModel(live) {
     connection: live.connection,
     phase: live.phase,
     elapsedMs: live.elapsedMs,
+    plan: live.plan ?? null,
     summaries: live.summaries ?? {},
     spans: live.spans ?? {},
     latest: live.latest ?? {},
@@ -249,6 +273,7 @@ function spanText(span) {
 
 function metaText(model) {
   const parts = [duration(model.elapsedMs)];
+  if (model.plan) parts.push(`sending ${model.plan}`);
   if (model.phase) parts.push(`${model.phase} phase`);
   const pooled = model.summaries[ENVIRONMENT] ?? {};
   const samples = Object.values(pooled)[0]?.n;

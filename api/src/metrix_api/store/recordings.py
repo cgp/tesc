@@ -81,6 +81,12 @@ class RecordingRow:
     #: having had any: one is a decision somebody made and the other is a run with
     #: no engine attached, and a page that conflates them is lying about evidence.
     purged_at: str | None = None
+    #: Which plan this run sent, when one was attached. None for an observation.
+    plan_name: str | None = None
+    #: What the engine called that plan, over the exact bytes it read. Part of a run's
+    #: series identity, and the reason a plan's bytes are written deterministically.
+    plan_hash: str | None = None
+    engine_version: str | None = None
     #: How the engine ended, for a load run. None for observation-only: "no engine
     #: ran" and "the engine exited 0" are different facts.
     engine_exit_code: int | None = None
@@ -114,6 +120,9 @@ class RecordingRow:
             is_baseline=bool(row["is_baseline"]),
             note=row["note"],
             purged_at=row["purged_at"],
+            plan_name=row["plan_name"],
+            plan_hash=row["plan_hash"],
+            engine_version=row["engine_version"],
             engine_exit_code=row["engine_exit_code"],
             stopped_because=row["stopped_because"],
         )
@@ -130,8 +139,15 @@ def create(
     interval_s: float,
     note: str | None = None,
     started_at: datetime | None = None,
+    plan_name: str | None = None,
 ) -> RecordingRow:
-    """Open a recording and pin what it is running against."""
+    """Open a recording and pin what it is running against.
+
+    `plan_name` is written now because it is known now. The rest of a run's identity
+    -- the plan hash, the engine version, the seed -- comes from the engine's own
+    `run_started` and is filled in when that arrives, because those are facts about
+    what ran rather than about what was asked for.
+    """
     stamp = (started_at or datetime.now(UTC)).strftime("%Y-%m-%dT%H:%M:%SZ")
     key = series_key(profile, kind=kind, api_version=api_version, interval_s=interval_s)
 
@@ -140,11 +156,11 @@ def create(
             """
             INSERT INTO recording
                 (id, kind, status, profile, addressing_mode, api_version, series_key,
-                 started_at, note)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 started_at, note, plan_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (recording_id, kind, RUNNING, profile.name, profile.addressing, api_version,
-             key, stamp, note),
+             key, stamp, note, plan_name),
         )
         for position, endpoint in enumerate(endpoints, start=1):
             conn.execute(

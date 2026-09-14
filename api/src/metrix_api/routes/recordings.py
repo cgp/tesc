@@ -39,6 +39,13 @@ def _row(recording: store.RecordingRow) -> dict[str, Any]:
         "worst": recording.worst,
         "note": recording.note,
         "targets": recording.targets,
+        # What sent the traffic, for a load run. The hash is what the engine called
+        # the plan over the exact bytes it read, and is part of what a run is filed
+        # under -- so a row that carries one can be traced back to a document.
+        "plan_name": recording.plan_name,
+        "plan_hash": recording.plan_hash,
+        "engine_version": recording.engine_version,
+        "engine_exit_code": recording.engine_exit_code,
     }
 
 

@@ -503,6 +503,14 @@ Alongside each chain: implied iterations/s, implied req/s given its step count, 
 
 **Saving and running are separate.** A mixture with errors still saves, because half-finished is a normal state to leave an afternoon's work in and an editor that refuses to save loses it. What errors stop is assembly: `GET /api/plans/{name}/bundle` refuses and names them, since the engine would reject the same document a moment later and a zip that cannot run still looks like an artifact. A bundle is assembled from the plan **on disk**, so the page says when the form has moved on from it.
 
+**Running is the same act as assembling, one step further.** `POST /api/recordings` takes a profile, and naming a plan alongside it makes the recording a load run: the observer starts watching the boxes, the bundle is assembled from the plan on disk and the profile as it resolves *now*, and the engine is spawned against it. A load run is an observation with traffic attached — the same recorder, the same collectors, the same live view, the same Stop button — and the difference is `kind`, which keeps an environment watched at rest out of the same series as the same environment under load.
+
+The order is the interesting part. The plan is refused before anything is opened if it cannot run, and the engine binary is looked for before a row exists, because a recording created for a run that never started is a recording somebody has to explain later. The bundle is assembled *after* the observer starts, from the profile the observer actually resolved, so the boxes traffic goes to are the boxes the recording is about.
+
+**A run ends when the traffic does.** The observer has no opinion about when that is, so the engine's exit closes the recording, and pressing Stop asks the engine to finish rather than stopping the collectors out from under it. Both can happen at once — an engine finishing and a person pressing Stop race by nature — and whichever arrives first does the work.
+
+**A run with nothing to watch is still a run.** Measuring a service nobody can log into is ordinary, so a load run against a profile with no collector is allowed, pinned to the boxes it sends to, and annotated to say the host statistics are absent rather than failed. An observation of the same profile is still refused: watching nothing is not a measurement.
+
 **A save cannot move the plan hash.** The editor writes back the document it loaded with only the fields the form owns replaced — auth, datasets, generators, capture, SLOs and engine tuning survive a save they were never shown in, and are listed as carried so that "preserved" does not look like "gone". The bytes are written by the same rule the bundle is hashed under, so re-saving an unchanged plan is a no-op at the byte level rather than a rename of its whole series (§17.2).
 
 ### 20.2 Editing targets

@@ -216,3 +216,40 @@ test("a live table re-renders when the sort changes, since patching cannot reord
   assert.notDeepEqual(selectState(sorted), selectState(unsorted));
   assert.equal(patch({ live: null }), false);
 });
+
+test("a run with nothing to collect from says so instead of sitting empty", () => {
+  const markup = render({
+    live: {
+      recordingId: "2026-09-14T00-00-00Z_abcd",
+      plan: "mock-fixed",
+      collecting: false,
+      // The pooled row is always present, even when nothing was collected.
+      summaries: { "*": {} },
+      connection: "live",
+    },
+    selectedRecording: null,
+    tableSort: null,
+  });
+  assert.match(markup, /Running mock-fixed/);
+  assert.match(markup, /no endpoint of this profile has a collector/i);
+  // And still offers the way out: it is a live run, however little it shows.
+  assert.match(markup, /data-action="stop"/);
+});
+
+test("a live load run says what it is sending", () => {
+  const markup = render({
+    live: {
+      recordingId: "2026-09-14T00-00-00Z_abcd",
+      plan: "checkout",
+      collecting: true,
+      elapsedMs: 4000,
+      phase: "measure",
+      summaries: { "*": { "cpu.busy": { metric: "cpu.busy", n: 4, p50: 12 } } },
+      spans: {},
+      connection: "live",
+    },
+    selectedRecording: null,
+    tableSort: null,
+  });
+  assert.match(markup, /sending checkout/);
+});

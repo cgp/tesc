@@ -549,6 +549,41 @@ async function acceptDraft() {
   }
 }
 
+/**
+ * Send this plan at the chosen profile, and watch while it runs.
+ *
+ * The stored plan, not the form: a run is assembled from what is on disk, which is
+ * why the card says so when the two have come apart. Landing on the live table
+ * rather than staying here, because the next thing worth looking at is the numbers.
+ */
+async function runPlan() {
+  const draft = syncPlan();
+  if (!draft?.profile) return;
+  try {
+    set({ error: null });
+    const started = await api.startRecording({
+      profile: draft.profile,
+      plan: draft.name,
+    });
+    set({
+      live: {
+        recordingId: started.recording_id,
+        connection: "live",
+        latest: {},
+        targets: [],
+        metrics: [],
+      },
+    });
+    stream.connect(started.recording_id);
+    notify(`Running ${draft.name} against ${draft.profile}.`);
+    location.hash = "#/performance/stats";
+  } catch (error) {
+    // The server refuses a plan that cannot run and names the reasons; it is the
+    // same gate the bundle is behind, so the message is one somebody can act on.
+    set({ error: error.message });
+  }
+}
+
 async function startObserving(profileName) {
   try {
     const { recording_id: id } = await api.startRecording({ profile: profileName });
@@ -1123,6 +1158,7 @@ document.addEventListener("click", (event) => {
   if (action === "plan-edit") location.hash = `#/plans/${encodeURIComponent(plan)}`;
   if (action === "plan-cancel") location.hash = "#/plans";
   if (action === "plan-save") savePlan();
+  if (action === "plan-run") runPlan();
   if (action === "bundle-preview") previewBundle();
   if (action === "bundle-download") downloadBundle();
   if (action === "chain-add") {

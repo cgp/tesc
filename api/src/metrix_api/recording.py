@@ -292,6 +292,8 @@ async def start_observation(
     note: str | None = None,
     clock: Clock | None = None,
     resolver: Resolver | None = None,
+    kind: str = "observation",
+    plan_name: str | None = None,
 ) -> Recorder:
     """Open a recording and begin collecting.
 
@@ -324,11 +326,24 @@ async def start_observation(
         pinned = resolution.stored
 
     observed = profile.observed
+    watched = observed
     if not observed:
-        raise RecordingError(
-            f"profile {profile.name!r} has no endpoint with a collector; set "
-            "`collect.transport` to ssh or scrape on at least one endpoint"
-        )
+        if kind == "observation":
+            raise RecordingError(
+                f"profile {profile.name!r} has no endpoint with a collector; set "
+                "`collect.transport` to ssh or scrape on at least one endpoint"
+            )
+        # A load run against boxes nobody can log into is a real thing to want: the
+        # target is somebody else's, and what is being measured is what it does under
+        # traffic. The run is pinned to the boxes it sends to instead, so it still
+        # says what it ran against, and the absence of host numbers is annotated
+        # rather than left to look like a collector that failed.
+        watched = profile.targets
+        if not watched:
+            raise RecordingError(
+                f"profile {profile.name!r} has no endpoint to send traffic to either; "
+                "there is nothing for this run to do"
+            )
 
     # Fail before opening a row if a transport cannot even be constructed.
     for endpoint in observed:
@@ -342,15 +357,36 @@ async def start_observation(
         conn,
         recording_id=recording_id,
         profile=profile,
-        endpoints=observed,
-        kind="observation",
+        endpoints=watched,
+        # A load run is the same observation with traffic attached, so it is the
+        # same recorder and the same collectors. What differs is the kind, which
+        # separates the two in the archive and in series identity: an environment
+        # watched at rest and the same environment under load are not comparable,
+        # and grouping them into one series would compare them.
+        kind=kind,
         api_version=__version__,
         interval_s=interval.total_seconds(),
         note=note,
+        plan_name=plan_name,
     )
 
     if pinned is not None:
         inventories.pin(conn, recording_id, pinned.id)
+
+    if not observed:
+        store.add_annotation(
+            conn,
+            recording_id,
+            Annotation(
+                code="no_host_collection",
+                severity="info",
+                from_ms=0,
+                message=(
+                    f"no endpoint of profile {profile.name!r} has a collector, so this "
+                    "run has no host statistics; the load figures stand on their own"
+                ),
+            ),
+        )
 
     recorder = Recorder(
         conn=conn,

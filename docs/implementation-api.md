@@ -136,7 +136,7 @@ Nothing here requires the engine. Through A3 the product is a host-observation t
 - [x] **A4.4** — `POST /api/plans/generate` — calls from OpenAPI/WSDL, starter mix (§8)
 - [x] **A4.5** — Sweep comparison view (§17.6)
 
-**Done when:** a run launched from the browser shows load and host metrics against one clock.
+**Done when:** a run launched from the browser shows load and host metrics against one clock. **Met.** `POST /api/recordings` with a plan starts the observer, assembles the bundle from the profile as it resolves, and runs the engine against it; the engine's phases and its run identity land on the recording, and the run closes itself when the traffic stops.
 
 ---
 
