@@ -49,14 +49,13 @@ pub(crate) async fn run(
             phase: Phase::Measure,
             send_state: Arc::new(SendState::default()),
             send_recorded: false,
-            chain: plan.chain_name(),
+            chain: plan.chains[0].name,
             future: ReusableBoxFuture::new(chain::run(None)),
         });
     }
     // Seeded with the plan's own chains and steps, so every window reports all of
     // them: a chain that sent nothing during a window did nothing, which is a
     // measurement rather than an absence.
-    let steps: Vec<&'static str> = plan.chain_steps.steps.iter().map(|step| step.id).collect();
     let mut workers: Vec<_> = (0..plan.worker_threads.min(plan.concurrency))
         .map(|_| Accumulator::default())
         .collect();
@@ -71,8 +70,15 @@ pub(crate) async fn run(
         .chain(warmup_workers.iter_mut())
         .chain([&mut interval_metrics, &mut warmup_interval])
     {
-        accumulator.declare(plan.chain_name(), &steps);
+        for compiled in &plan.chains {
+            let steps: Vec<&'static str> = compiled.steps.iter().map(|step| step.id).collect();
+            accumulator.declare(compiled.name, &steps);
+        }
     }
+    // Which chain each arrival runs. Deterministic and exactly proportional: a
+    // percentage is a claim about what the service was asked for, and a run that got
+    // 19.3% of one chain because of sampling noise measured a mixture nobody wrote.
+    let mut mixture = chain::Mixture::new(plan.weights.clone());
     let mut lag = Lag::default();
     let start = Instant::now();
     report.diagnostics = crate::Diagnostics::new(
@@ -168,7 +174,7 @@ pub(crate) async fn run(
                 report.cancelled = active as u64;
                 for slot in &slots { if slot.active {
                     if slot.phase == Phase::Warmup { warmup_workers[slot.worker].cancel_chain(slot.chain); } else { workers[slot.worker].cancel_chain(slot.chain); }
-                    if let Some(output) = output { output.cancel(slot.iteration, slot.phase, slot.admitted.elapsed()); }
+                    if let Some(output) = output { output.cancel(slot.iteration, slot.phase, slot.chain, slot.admitted.elapsed()); }
                 } }
                 report.diagnostics.observe(start.elapsed(), active);
                 flush(Recording { slots: &mut slots, workers: &mut workers, warmup_workers: &mut warmup_workers, warmup_interval: &mut warmup_interval, lag: &mut lag, phase },
@@ -202,11 +208,12 @@ pub(crate) async fn run(
                 let admitted_phase = slots[index].phase;
                 let iteration = slots[index].iteration;
                 let worker = if admitted_phase == Phase::Warmup { &mut warmup_workers[slots[index].worker] } else { &mut workers[slots[index].worker] };
-                let chain_name = plan.chain_name();
+                let chain_name = completion.chain.name;
                 for outcome in &completion.steps {
                     let observation = &outcome.observation;
-                    let step_id = plan.step_name(outcome.index);
-                    if let Some(output) = output { output.request(iteration, admitted_phase, observation, observation.bytes_sent as usize); }
+                    let step = &completion.chain.steps[outcome.index];
+                    let step_id = step.id;
+                    if let Some(output) = output { output.request(iteration, admitted_phase, chain_name, step_id, step.call, observation); }
                     worker.finish_step(&StepSample {
                         chain: chain_name,
                         step: step_id,
@@ -262,14 +269,15 @@ pub(crate) async fn run(
                             slot.send_recorded = false;
                             let admitted = Instant::now();
                             let endpoint = Arc::clone(&pool.as_ref().expect("traffic pool").endpoint);
-                            let future = chain::run(Some(chain::Job { lease, endpoint, chain: Arc::clone(&plan.chain_steps), scheduled, admitted, send_state: Arc::clone(&slot.send_state) }));
+                            let running = Arc::clone(&plan.chains[mixture.next()]);
+                            slot.chain = running.name;
+                            let future = chain::run(Some(chain::Job { lease, endpoint, chain: running, scheduled, admitted, send_state: Arc::clone(&slot.send_state) }));
                             assert!(slot.future.try_set(future).is_ok(), "request future layout changed");
                             slot.active = true;
                             slot.worker = report.admitted as usize % workers.len();
                             slot.iteration = report.admitted;
                             slot.admitted = admitted;
                             slot.phase = phase;
-                            slot.chain = plan.chain_name();
                             if phase == Phase::Warmup { warmup_workers[slot.worker].start_chain(slot.chain); } else { workers[slot.worker].start_chain(slot.chain); }
                             active += 1;
                             report.admitted += 1;

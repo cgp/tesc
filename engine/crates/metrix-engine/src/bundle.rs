@@ -17,7 +17,10 @@ use std::{
     time::Duration,
 };
 
-use metrix_plan::{Call, CallFile, LoadMode, LoadModel, Mix, SessionPolicy, Target, Targets};
+use metrix_plan::{
+    Call, CallFile, LoadMode, LoadModel, Mix, PERCENT_EPSILON, PERCENT_TOTAL, SessionPolicy,
+    Target, Targets,
+};
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 
@@ -28,13 +31,11 @@ pub struct Plan {
     root: std::path::PathBuf,
     pub(crate) name: String,
     pub(crate) hash: String,
-    pub(crate) chain: String,
-    pub(crate) step: String,
-    pub(crate) call: String,
     pub(crate) target: Target,
-    /// The chain the executor runs, steps in order. One chain, until B3.3 mixes
-    /// several.
-    pub(crate) chain_steps: Arc<crate::chain::Compiled>,
+    /// Every chain the mixture holds, each with its steps in order.
+    pub(crate) chains: Vec<Arc<crate::chain::Compiled>>,
+    /// Each chain's share of the total rate, in the same order.
+    pub(crate) weights: Vec<f64>,
     pub(crate) rate: f64,
     pub(crate) duration: Duration,
     pub(crate) baseline: Duration,
@@ -56,24 +57,16 @@ impl Plan {
     }
 
     /// The chain this plan runs, and the steps within it.
-    /// The longest any one request in the chain may take. What the connection pool
-    /// is prepared with, because a pool that gave up sooner than the request it is
-    /// carrying would report the generator's impatience as the service's failure.
+    /// The longest any one request in the mixture may take. What the connection
+    /// pool is prepared with, because a pool that gave up sooner than the request it
+    /// is carrying would report the generator's impatience as the service's failure.
     pub(crate) fn request_timeout(&self) -> Duration {
-        self.chain_steps
-            .steps
+        self.chains
             .iter()
+            .flat_map(|chain| chain.steps.iter())
             .map(|step| step.request.timeout)
             .max()
             .unwrap_or_default()
-    }
-
-    pub(crate) fn chain_name(&self) -> &'static str {
-        self.chain_steps.name
-    }
-
-    pub(crate) fn step_name(&self, index: usize) -> &'static str {
-        self.chain_steps.steps[index].id
     }
 
     /// The first request this plan will send, for tests that need to see what
@@ -81,7 +74,7 @@ impl Plan {
     /// engine can assemble a request of its own from the parts.
     #[doc(hidden)]
     pub fn request_for_test(&self) -> RequestView<'_> {
-        let request = &self.chain_steps.steps[0].request;
+        let request = &self.chains[0].steps[0].request;
         let prepared = request.prepared().expect("a fixed call in a test");
         RequestView {
             uri: &prepared.uri,
@@ -230,44 +223,70 @@ impl Plan {
         // they will use is a property of the document, and is checked as one.
         let resolved = calls::resolve(&mix, &defined, &target, &authority)?;
 
+        // Percentages are a claim about what the service was asked for, so they
+        // have to add up before anything is sent. Named as a shortfall or an excess
+        // and never renormalized: adjusting five chains to accommodate a typo in the
+        // sixth would measure a mixture nobody wrote.
+        let total: f64 = resolved.chains.iter().map(|chain| chain.percent).sum();
         require(
-            resolved.chains.len() == 1,
-            "mix.json/chains: mixing several chains is not implemented yet (B3.3)",
+            (total - PERCENT_TOTAL).abs() <= PERCENT_EPSILON,
+            &format!(
+                "mix.json/chains: the percentages total {total:.4}, which is {:.4} {} 100",
+                (PERCENT_TOTAL - total).abs(),
+                if total < PERCENT_TOTAL {
+                    "short of"
+                } else {
+                    "over"
+                },
+            ),
         )?;
-        let chain = &resolved.chains[0];
-        require(
-            chain.percent == 100.0,
-            "mix.json/chains/0/percent: a single chain takes all of the traffic",
-        )?;
-        require(
-            chain.session == SessionPolicy::Fresh && chain.pool_size.is_none(),
-            "mix.json/chains/0/session: stateless fresh sessions only (B3.9)",
-        )?;
-        for (position, written) in mix.chains[0].steps.iter().enumerate() {
+
+        for (index, chain) in resolved.chains.iter().enumerate() {
             require(
-                written.overrides.is_none()
-                    && written.delay_ms.is_none()
-                    && written.on_failure.is_none()
-                    && written.repeat_until.is_none(),
+                chain.percent > 0.0,
                 &format!(
-                    "mix.json/chains/0/steps/{position}: overrides, delays and                      failure/repeat policies are not implemented (B3.4)"
+                    "mix.json/chains/{index}/percent: a chain at {} never runs; remove it, or give it a share of the traffic",
+                    chain.percent
                 ),
             )?;
+            require(
+                chain.session == SessionPolicy::Fresh && chain.pool_size.is_none(),
+                &format!("mix.json/chains/{index}/session: stateless fresh sessions only (B3.9)"),
+            )?;
+            for (position, written) in mix.chains[index].steps.iter().enumerate() {
+                require(
+                    written.overrides.is_none()
+                        && written.delay_ms.is_none()
+                        && written.on_failure.is_none()
+                        && written.repeat_until.is_none(),
+                    &format!(
+                        "mix.json/chains/{index}/steps/{position}: overrides, delays and failure/repeat policies are not implemented (B3.4)"
+                    ),
+                )?;
+            }
         }
-        let step = &chain.steps[0];
-        // Leaked deliberately: these name the chain and its steps for the life of
+
+        // Leaked deliberately: these name the chains and their steps for the life of
         // the process, and every accumulator map is keyed by them.
-        let chain_steps = Arc::new(crate::chain::Compiled {
-            name: String::leak(chain.name.clone()),
-            steps: chain
-                .steps
-                .iter()
-                .map(|step| crate::chain::Step {
-                    id: String::leak(step.id.clone()),
-                    request: Arc::clone(&resolved.requests[&step.call]),
+        let chains: Vec<_> = resolved
+            .chains
+            .iter()
+            .map(|chain| {
+                Arc::new(crate::chain::Compiled {
+                    name: String::leak(chain.name.clone()),
+                    steps: chain
+                        .steps
+                        .iter()
+                        .map(|step| crate::chain::Step {
+                            id: String::leak(step.id.clone()),
+                            call: String::leak(step.call.clone()),
+                            request: Arc::clone(&resolved.requests[&step.call]),
+                        })
+                        .collect(),
                 })
-                .collect(),
-        });
+            })
+            .collect();
+        let weights: Vec<f64> = resolved.chains.iter().map(|chain| chain.percent).collect();
         let timeout = resolved.longest_timeout();
         require(
             span.checked_add(timeout)
@@ -276,9 +295,13 @@ impl Plan {
             "mix.json/phases: timeline duration including drain is not representable",
         )?;
         let calibration_shape = crate::calibration::Shape {
-            request_body_bytes: calibration_body_bytes(&chain_steps),
+            request_body_bytes: calibration_body_bytes(&chains),
             tls: target.tls.enabled,
-            chain_depth: chain_steps.steps.len() as u32,
+            chain_depth: chains
+                .iter()
+                .map(|chain| chain.steps.len())
+                .max()
+                .unwrap_or(0) as u32,
             generation: "static".into(),
         };
         let machine_profile = if load_machine_profile {
@@ -298,11 +321,9 @@ impl Plan {
             root,
             name: mix.name.clone(),
             hash: bundle_hash(&documents),
-            chain: chain.name.clone(),
-            step: step.id.clone(),
-            call: step.call.clone(),
             target,
-            chain_steps,
+            chains,
+            weights,
             rate,
             duration,
             baseline,
@@ -372,10 +393,10 @@ fn bundle_hash(documents: &BTreeMap<String, Vec<u8>>) -> String {
 /// The body size calibration measures against: the largest a single request in the
 /// chain can be. Calibration asks what this machine can push, and the widest request
 /// is what decides that.
-fn calibration_body_bytes(chain: &crate::chain::Compiled) -> usize {
-    chain
-        .steps
+fn calibration_body_bytes(chains: &[Arc<crate::chain::Compiled>]) -> usize {
+    chains
         .iter()
+        .flat_map(|chain| chain.steps.iter())
         .map(|step| {
             step.request
                 .prepared()

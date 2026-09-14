@@ -37,14 +37,20 @@ struct Losses {
 
 struct Identity {
     target: String,
-    chain: String,
-    step: String,
-    call: String,
+    /// Every chain in the mixture. A run-wide annotation covers all of them, and
+    /// naming one would be naming the wrong one as soon as there are two.
+    chains: Vec<String>,
     rate: f64,
     headroom_ratio: Option<f64>,
 }
 
 struct RequestData {
+    /// Which chain and step this request was. Per record rather than from the run's
+    /// identity: a mixture sends several chains, and a record that named the wrong
+    /// one would be worse than one that named none.
+    chain: &'static str,
+    step: &'static str,
+    call: &'static str,
     t_ms: u64,
     phase: Phase,
     iteration: u64,
@@ -150,9 +156,7 @@ impl Output {
             .map_err(|_| "--events: cannot create output file")?;
         let identity = Arc::new(Identity {
             target: plan.target.id.clone(),
-            chain: plan.chain.clone(),
-            step: plan.step.clone(),
-            call: plan.call.clone(),
+            chains: plan.chains.iter().map(|c| c.name.to_owned()).collect(),
             rate: plan.rate,
             headroom_ratio: plan.headroom_ratio,
         });
@@ -368,18 +372,23 @@ impl Output {
         &self,
         iteration: u64,
         phase: Phase,
+        chain: &'static str,
+        step: &'static str,
+        call: &'static str,
         observation: &Observation,
-        body_len: usize,
     ) {
         self.request_data(RequestData {
             t_ms: self.elapsed(),
             phase,
+            chain,
+            step,
+            call,
             iteration,
             ttfb_us: observation.ttfb.map(micros),
             total_us: micros(observation.request_duration.unwrap_or(observation.total)),
             status: observation.status,
             bytes_sent: if observation.sent.is_some() {
-                body_len as u64
+                observation.bytes_sent
             } else {
                 0
             },
@@ -390,10 +399,21 @@ impl Output {
         });
     }
 
-    pub(crate) fn cancel(&self, iteration: u64, phase: Phase, elapsed: Duration) {
+    pub(crate) fn cancel(
+        &self,
+        iteration: u64,
+        phase: Phase,
+        chain: &'static str,
+        elapsed: Duration,
+    ) {
         self.request_data(RequestData {
             t_ms: self.elapsed(),
             phase,
+            chain,
+            // A cancelled iteration was cut short in flight; which step it was in is
+            // not something the scheduler tracks, and guessing would be worse.
+            step: "",
+            call: "",
             iteration,
             ttfb_us: None,
             total_us: micros(elapsed),
@@ -415,14 +435,17 @@ impl Output {
         &self,
         iteration: u64,
         phase: Phase,
-        chain: &str,
-        step: &str,
+        chain: &'static str,
+        step: &'static str,
         variable: &str,
         truncated: bool,
     ) {
         self.request_data(RequestData {
             t_ms: self.elapsed(),
             phase,
+            chain,
+            step,
+            call: "",
             iteration,
             ttfb_us: None,
             total_us: 0,
@@ -677,7 +700,7 @@ fn write_stream(
                 phase: Some(Phase::Measure), from_ms, to_ms: Some(t_ms),
                 message: "Measured latency percentiles with actual sample counts and binomial order-statistic 95% intervals; warmup is excluded. Intervals assume independent stationary samples.".into(),
                 detail: Some(serde_json::json!({
-                    "partial": partial, "chain": identity.chain, "step": identity.step,
+                    "partial": partial, "chains": identity.chains,
                     "chain_duration": raw[0],
                     "request_total": raw[1],
                     "ttfb": raw[2],
@@ -752,10 +775,10 @@ fn write_stream(
                 t_ms: data.t_ms,
                 target_id: identity.target.clone(),
                 phase: data.phase,
-                chain: identity.chain.clone(),
+                chain: data.chain.to_owned(),
                 iteration: data.iteration,
-                step: identity.step.clone(),
-                call: identity.call.clone(),
+                step: data.step.to_owned(),
+                call: data.call.to_owned(),
                 dns_us: None,
                 connect_us: None,
                 tls_us: None,
@@ -804,7 +827,7 @@ fn write_summary(
         message: "Latency from planned arrival, including generator delay; raw latency remains in the summary. Skipped arrivals have no synthetic samples.".into(),
         detail: Some(serde_json::json!({
             "method": "scheduled_arrival", "synthetic_samples": 0, "includes_skipped_arrivals": false,
-            "chain": identity.chain, "step": identity.step, "timeline_phase": window.phase,
+            "chains": identity.chains, "timeline_phase": window.phase,
             "chain_duration": window.metrics.corrected_chain.snapshot(),
             "request_total": window.metrics.corrected_total.snapshot(),
             "ttfb": window.metrics.corrected_ttfb.snapshot(),

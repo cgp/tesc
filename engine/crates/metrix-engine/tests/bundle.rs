@@ -227,12 +227,15 @@ mod resolution {
     }
 
     #[test]
-    fn resolving_happens_before_the_limits_on_what_can_run_yet() {
-        // Both chains resolve, so the refusal is about mixing rather than about a
-        // name. Getting this order wrong would report "one chain only" for a plan
-        // whose real problem is a typo.
-        let error = load_with(two_chains("ping")).unwrap_err();
-        assert!(error.contains("B3.3"), "{error}");
+    fn a_reference_is_judged_before_the_features_around_it() {
+        // The second chain names a call that does not exist *and* asks for a session
+        // policy that is not implemented. The reference is the one reported: getting
+        // this order wrong tells somebody to change their session policy when their
+        // real problem is a typo.
+        let mut chains = two_chains("nowhere");
+        chains[1]["session"] = json!("reuse");
+        let error = load_with(chains).unwrap_err();
+        assert!(error.contains("chains/1/steps/0/call"), "{error}");
     }
 
     #[test]

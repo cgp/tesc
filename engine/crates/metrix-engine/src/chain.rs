@@ -30,6 +30,10 @@ use crate::template::{Scope, Unbound};
 /// recording a step costs a map lookup rather than a string clone.
 pub(crate) struct Step {
     pub id: &'static str,
+    /// Which call this step invokes. The id is the step's own name and the call is
+    /// the request's; a report that carried only one of them could not say either
+    /// which step was slow or which request it sent.
+    pub call: &'static str,
     pub request: Arc<RequestTemplate>,
 }
 
@@ -105,6 +109,52 @@ impl Completion {
     /// True when a response in this iteration was cut at the capture ceiling.
     pub fn was_truncated(&self) -> bool {
         self.truncated
+    }
+}
+
+/// Which chain each arrival runs.
+///
+/// Deterministic and exactly proportional, rather than a weighted coin. A percentage
+/// in a mixture is a claim about what the service was asked for, and a run that got
+/// 19.3% instead of 20% because of sampling noise has measured a mixture nobody
+/// wrote. The same plan therefore also produces the same interleaving twice, which
+/// is what makes two runs of it comparable at all.
+///
+/// Smooth weighted round-robin: every arrival adds each chain's share to its credit,
+/// the largest credit wins, and the winner pays the total back. Counts stay within
+/// one of their exact share at every point in the run, not merely at the end.
+pub(crate) struct Mixture {
+    weights: Vec<f64>,
+    credit: Vec<f64>,
+    total: f64,
+}
+
+impl Mixture {
+    pub fn new(weights: Vec<f64>) -> Self {
+        let total = weights.iter().sum();
+        Self {
+            credit: vec![0.0; weights.len()],
+            weights,
+            total,
+        }
+    }
+
+    pub fn next(&mut self) -> usize {
+        for (credit, weight) in self.credit.iter_mut().zip(&self.weights) {
+            *credit += weight;
+        }
+        let best = self
+            .credit
+            .iter()
+            .enumerate()
+            .max_by(|left, right| {
+                left.1
+                    .partial_cmp(right.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map_or(0, |(index, _)| index);
+        self.credit[best] -= self.total;
+        best
     }
 }
 
