@@ -13,6 +13,7 @@ import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any
 
 from metrix_api.observer.facts import HostFacts
 from metrix_api.observer.metrics import Annotation, Gap, Sample
@@ -717,6 +718,92 @@ def window(
     ):
         values.setdefault(row["metric"], []).append(row["value"])
     return values
+
+
+def target_details(conn: sqlite3.Connection, recording_id: str) -> list[dict[str, Any]]:
+    """Each box in the sweep, in the order it was run, with what discovery found.
+
+    The attributes are the point: instance type, availability zone, image digest,
+    task definition revision. When one box in a sweep is the odd one out, the
+    explanation is usually sitting in that row rather than in the measurement -- an
+    older digest, a different instance type, a lone task in another zone.
+    """
+    return [
+        {
+            "target_id": row["target_id"],
+            "position": row["position"],
+            "address": row["address"],
+            "host_header": row["host_header"],
+            "attributes": json.loads(row["attributes"] or "{}"),
+        }
+        for row in conn.execute(
+            "SELECT target_id, position, address, host_header, attributes"
+            " FROM recording_target WHERE recording_id = ? ORDER BY position",
+            (recording_id,),
+        )
+    ]
+
+
+def invalid_targets(conn: sqlite3.Connection, recording_id: str) -> set[str]:
+    """Which boxes carry a note saying their numbers are not to be trusted.
+
+    A note with no target names the whole recording, so it covers every box in it:
+    "this run was invalid" is not a statement about one machine, and treating it as
+    one would leave every box in a failed sweep judging the others.
+    """
+    rows = conn.execute(
+        "SELECT DISTINCT target_id FROM annotation"
+        " WHERE recording_id = ? AND severity = 'invalid'",
+        (recording_id,),
+    ).fetchall()
+    named = {row["target_id"] for row in rows}
+    if None in named:
+        return {t["target_id"] for t in target_details(conn, recording_id)}
+    return named
+
+
+def target_values(
+    conn: sqlite3.Connection,
+    recording_ids: list[str],
+    *,
+    metric: str,
+    phase: str | None = None,
+) -> dict[str, dict[str, list[float]]]:
+    """One metric's readings per recording and per box.
+
+    The per-box counterpart of `pooled_values`, and used for one question only: a box
+    that was the odd one out in this sweep, read back across the sweeps before it --
+    is it reliably the slow one, or was it unlucky once? Narrowed to a single metric
+    because it is only ever asked about the metric something was flagged on.
+    """
+    if not recording_ids:
+        return {}
+
+    placeholders = ",".join("?" * len(recording_ids))
+    if phase is None:
+        sql = (
+            "SELECT recording_id, target_id, value FROM host_sample"
+            f" WHERE metric = ? AND recording_id IN ({placeholders}) ORDER BY t_ms"
+        )
+        params: list[object] = [metric, *recording_ids]
+    else:
+        sql = (
+            "SELECT s.recording_id AS recording_id, s.target_id AS target_id,"
+            " s.value AS value FROM host_sample s"
+            " JOIN phase p ON p.recording_id = s.recording_id"
+            "   AND p.target_id = s.target_id AND p.phase = ?"
+            "   AND s.t_ms >= p.from_ms AND (p.to_ms IS NULL OR s.t_ms <= p.to_ms)"
+            f" WHERE s.metric = ? AND s.recording_id IN ({placeholders})"
+            " ORDER BY s.t_ms"
+        )
+        params = [phase, metric, *recording_ids]
+
+    gathered: dict[str, dict[str, list[float]]] = {}
+    for row in conn.execute(sql, params):
+        gathered.setdefault(row["recording_id"], {}).setdefault(row["target_id"], []).append(
+            row["value"]
+        )
+    return gathered
 
 
 def spans(conn: sqlite3.Connection, recording_id: str) -> dict[str, dict[str, int]]:

@@ -637,6 +637,21 @@ function exportMenu(recording) {
  * notice. So this only happens because a person asked, and the asking says exactly
  * what goes and exactly what stays.
  */
+/**
+ * The way into the sweep view.
+ *
+ * Offered only where there is something to compare. One box is a recording; two or
+ * more measured in the same window is a sweep, and the difference is the whole
+ * question the other page answers.
+ */
+function sweepButton(recording) {
+  if ((recording.targets ?? []).length < 2) return "";
+  return `<a class="btn btn-sm" href="#/sweep/${encodeURIComponent(recording.id)}"
+             title="Rank these boxes against each other">
+    ${icon("target")} Compare the boxes
+  </a>`;
+}
+
 function purgeButton(recording) {
   if (recording.purged_at) {
     return `<span class="badge bg-secondary-lt"
@@ -679,6 +694,7 @@ function detail(recording) {
       <div class="card-header">
         <h3 class="card-title">${escape(recording.id)}</h3>
         <div class="card-actions d-flex align-items-center gap-2">
+        ${sweepButton(recording)}
         ${exportMenu(recording)}
         ${baselineButton(recording)}
         ${purgeButton(recording)}

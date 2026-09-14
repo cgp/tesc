@@ -120,6 +120,10 @@ export const api = {
   summary: (id) => request(`/api/recordings/${encodeURIComponent(id)}/summary`),
   comparison: (id) => request(`/api/recordings/${encodeURIComponent(id)}/comparison`),
   recovery: (id) => request(`/api/recordings/${encodeURIComponent(id)}/recovery`),
+  sweep: (id, phase) => {
+    const query = phase ? `?${new URLSearchParams({ phase })}` : "";
+    return request(`/api/recordings/${encodeURIComponent(id)}/sweep${query}`);
+  },
   markBaseline: (id, override = false) =>
     request(
       `/api/recordings/${encodeURIComponent(id)}/baseline${override ? "?override=true" : ""}`,

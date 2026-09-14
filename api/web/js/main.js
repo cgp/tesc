@@ -16,6 +16,7 @@ import * as recordings from "./recordings.js";
 import * as series from "./series.js";
 import { get, set, subscribe } from "./state.js";
 import * as stream from "./stream.js";
+import * as sweep from "./sweep.js";
 import * as table from "./table.js";
 
 // `section` is the small-caps line above the title: it says which part of the menu
@@ -63,6 +64,15 @@ const ROUTES = {
     subtitle: "Is a setup getting better or worse, run by run?",
     view: series,
   },
+  sweep: {
+    section: "Archive",
+    // Reached from a recording, never from the menu: a sweep is a question about one
+    // recording, and a standing menu entry would be empty on arrival.
+    nav: "recordings",
+    title: "Sweep",
+    subtitle: "One plan, many boxes, one window. Which of them is the odd one out?",
+    view: sweep,
+  },
   compare: {
     section: "Archive",
     // No nav item of its own -- it is always reached from a selection, never from a
@@ -90,6 +100,7 @@ function selectView(state) {
   return [
     route.name,
     route.recordingId,
+    route.phase,
     route.seriesKey,
     ...activeEntry(state).view.selectState(state),
   ];
@@ -127,6 +138,15 @@ function parseHash() {
       phase: parts[2] ? decodeURIComponent(parts[2]) : null,
     };
   }
+  if (parts[0] === "sweep") {
+    // The phase is in the hash beside the recording, so a link to "the boxes during
+    // settle" reopens as that rather than as the measured window.
+    return {
+      name: "sweep",
+      recordingId: parts[1] ? decodeURIComponent(parts[1]) : null,
+      phase: parts[2] ? decodeURIComponent(parts[2]) : null,
+    };
+  }
   if (parts[0] === "series") {
     // The key carries pipes and an `=`; the hash holds it encoded and it is decoded
     // once, here, so nothing downstream has to know it was ever escaped.
@@ -159,6 +179,11 @@ async function load(route) {
 
     if (route.name === "compare") {
       await loadComparison(route.runs, route.phase);
+      return;
+    }
+
+    if (route.name === "sweep") {
+      set({ sweep: route.recordingId ? await api.sweep(route.recordingId, route.phase) : null });
       return;
     }
 

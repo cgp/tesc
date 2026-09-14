@@ -14,6 +14,7 @@ from metrix_api import purge as purging
 from metrix_api.config import Config
 from metrix_api.deps import get_db
 from metrix_api.stats import Delta, Recovery, Summary
+from metrix_api.stats import sweep as sweep_stats
 from metrix_api.store import inventories
 from metrix_api.store import recordings as store
 
@@ -244,6 +245,97 @@ def get_comparison(
         "moved": [{"target": target, **_delta(d)} for target, d in comparison.moved],
         "only_now": comparison.only_now,
         "only_baseline": comparison.only_baseline,
+    }
+
+
+def _standing(standing: Any) -> dict[str, Any]:
+    """One box on one metric. The verdict and the geometry stay separate fields.
+
+    `outside` says a figure sits beyond the band; `flagged` is the verdict, and needs
+    the sample count and the box's own validity as well. A page that collapses the
+    two would read a geometric fact as an accusation.
+    """
+    return {
+        "target_id": standing.target_id,
+        "rank": standing.rank,
+        "value": standing.value,
+        "n": standing.n,
+        "invalid": standing.invalid,
+        "baseline_value": standing.baseline_value,
+        "baseline_n": standing.baseline_n,
+        "centre": standing.centre,
+        "band": standing.band,
+        "peers": standing.peers,
+        "outside": standing.outside,
+        "worse": standing.worse,
+        "flagged": standing.flagged,
+        "judged": standing.judged,
+        "unjudged_because": standing.unjudged_because,
+    }
+
+
+@router.get("/{recording_id}/sweep")
+def get_sweep(
+    recording_id: str,
+    phase: str | None = None,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    """Rank this recording's boxes against each other (design-api 17.6).
+
+    A sweep is one plan against many targets in one window, so the reference is the
+    sweep's own spread rather than its history: §17.4's measured band applied across
+    boxes instead of across time. Each box is judged against the *others* and never
+    against a set containing itself, for the same reason a trend band is measured
+    over the runs before a point and not over a window holding it.
+
+    Every box's attributes come along, because the explanation for an outlier is
+    usually sitting in that row -- an older image digest, a different instance type,
+    a lone task in another zone -- and so does its baseline phase, which is what
+    separates a container that buckled under load from one that was already busy
+    before the run started.
+    """
+    _require(conn, recording_id)
+    result = analysis.sweep(conn, recording_id, phase=phase)
+    return {
+        "recording_id": result.recording_id,
+        "phase": result.phase,
+        "phases": result.phases,
+        "min_peers": sweep_stats.MIN_PEERS_FOR_BAND,
+        # False when the sweep is too small to describe its own spread. It is still
+        # ranked: the ordering, the attributes and the baselines are useful at any
+        # size, and only the accusation needs the arithmetic.
+        "judged": result.judged,
+        "boxes": result.boxes,
+        "metrics": [
+            {
+                "metric": one.metric,
+                "worse": one.worse,
+                "judged": one.judged,
+                "standings": [_standing(s) for s in one.standings],
+            }
+            for one in result.metrics
+        ],
+        "findings": [
+            {
+                "metric": finding.metric,
+                "target_id": finding.target_id,
+                "standing": _standing(finding.standing),
+                "previously_flagged": finding.previously_flagged,
+                "history": [
+                    {
+                        "recording_id": appearance.recording_id,
+                        "at": appearance.at,
+                        "value": appearance.value,
+                        "n": appearance.n,
+                        "rank": appearance.rank,
+                        "targets": appearance.targets,
+                        "flagged": appearance.flagged,
+                    }
+                    for appearance in finding.history
+                ],
+            }
+            for finding in result.findings
+        ],
     }
 
 

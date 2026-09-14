@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass, field, replace
+from typing import Any
 
 from metrix_api.stats import (
     Delta,
@@ -34,6 +35,7 @@ from metrix_api.stats import (
     recovery,
     summarize,
 )
+from metrix_api.stats import sweep as sweep_stats
 from metrix_api.stats.trend import BAND_WINDOW, Run, Trend, Verdict, trend, verdict_from
 from metrix_api.store import recordings as store
 
@@ -42,6 +44,11 @@ from metrix_api.store import recordings as store
 #: an *earlier* one, and either alone answers nothing.
 BASELINE_PHASE = "baseline"
 SETTLE_PHASE = "settle"
+
+#: The window a sweep compares over unless asked for another. An observation-only
+#: recording records its single window under this name too, so the sweep view reads a
+#: watched environment and a load run the same way.
+MEASURE_PHASE = "measure"
 
 #: Pooling reads across boxes describes "a typical box in this environment", which is
 #: the question 10.2 asks. It is the wrong summary when the boxes are not alike --
@@ -465,3 +472,229 @@ def shared_phases(conn: sqlite3.Connection, recording_ids: list[str]) -> list[st
         return []
     shared = set.intersection(*seen)
     return [phase for phase in order if phase in shared] + sorted(shared - set(order))
+
+
+# ------------------------------------------------------------------- sweeps (17.6)
+
+#: How many earlier sweeps a flagged box is read back across. The same window the
+#: trend band uses: long enough to tell "always this one" from "unlucky once",
+#: short enough that a container replaced six weeks ago is not still being quoted.
+SWEEP_HISTORY = BAND_WINDOW
+
+
+@dataclass(frozen=True, slots=True)
+class Appearance:
+    """One box's showing in one earlier sweep of the same series."""
+
+    recording_id: str
+    at: str
+    value: float | None
+    n: int
+    rank: int
+    targets: int
+    flagged: bool
+
+
+@dataclass(frozen=True, slots=True)
+class Finding:
+    """A box that came out beyond the sweep's own spread, and its record."""
+
+    metric: str
+    target_id: str
+    standing: sweep_stats.Standing
+    #: The same box on the same metric in the sweeps before this one, oldest first.
+    #: Empty when the series has no earlier sweep this box appeared in -- which is
+    #: the usual case for ephemeral tasks, and is an answer rather than a gap.
+    history: list[Appearance] = field(default_factory=list)
+
+    @property
+    def previously_flagged(self) -> int:
+        return sum(1 for appearance in self.history if appearance.flagged)
+
+
+@dataclass(frozen=True, slots=True)
+class Sweep:
+    """Every box in one recording, ranked against the others on every metric."""
+
+    recording_id: str
+    phase: str
+    phases: list[str] = field(default_factory=list)
+    boxes: list[dict[str, Any]] = field(default_factory=list)
+    metrics: list[sweep_stats.MetricSweep] = field(default_factory=list)
+    findings: list[Finding] = field(default_factory=list)
+    #: True once the sweep has enough boxes to describe its own spread. A smaller
+    #: sweep is still ranked and still shows its attributes; it just does not accuse.
+    judged: bool = False
+
+
+def _boxes(
+    conn: sqlite3.Connection,
+    recording_id: str,
+    *,
+    phase: str,
+    targets: list[dict[str, Any]],
+) -> tuple[dict[str, dict[str, Summary]], dict[str, dict[str, Summary]]]:
+    """Per box: the metrics over the compared phase, and over its own baseline."""
+    measured: dict[str, dict[str, Summary]] = {}
+    resting: dict[str, dict[str, Summary]] = {}
+    windows = {
+        (window.target_id, window.phase): window for window in phase_windows(conn, recording_id)
+    }
+    for target in targets:
+        box = target["target_id"]
+        found = windows.get((box, phase))
+        measured[box] = dict(found.metrics) if found else {}
+        at_rest = windows.get((box, BASELINE_PHASE))
+        resting[box] = dict(at_rest.metrics) if at_rest else {}
+    return measured, resting
+
+
+def sweep(
+    conn: sqlite3.Connection,
+    recording_id: str,
+    *,
+    phase: str | None = None,
+    history: int = SWEEP_HISTORY,
+) -> Sweep:
+    """Rank the boxes of one recording against each other (design-api 17.6).
+
+    A sweep varies the target and holds everything else still, so the reference is
+    not history but the sweep's own spread -- §17.4's measured band applied across
+    boxes instead of across time. What is being looked for is the odd one out: a task
+    on a noisy neighbour, an instance of a different type, a container still running
+    an older image digest.
+
+    Each box's baseline phase travels with its measurement, because the alternative
+    is a phantom: a container that was already loaded before the run started looks
+    exactly like one that buckled under the load, right up until somebody reads the
+    two numbers side by side.
+    """
+    recording = store.get(conn, recording_id)
+    targets = store.target_details(conn, recording_id)
+    invalid = store.invalid_targets(conn, recording_id)
+    available = sorted({row["phase"] for row in store.phases(conn, recording_id)})
+    chosen = phase or (MEASURE_PHASE if MEASURE_PHASE in available else None)
+    if chosen is None:
+        chosen = available[0] if available else MEASURE_PHASE
+
+    measured, resting = _boxes(conn, recording_id, phase=chosen, targets=targets)
+    names = sorted({metric for by_metric in measured.values() for metric in by_metric})
+
+    ranked = []
+    for metric in names:
+        ranked.append(
+            sweep_stats.rank(
+                metric,
+                [
+                    sweep_stats.Box(
+                        target_id=target["target_id"],
+                        attributes=target["attributes"],
+                        summary=measured[target["target_id"]].get(metric),
+                        baseline=resting[target["target_id"]].get(metric),
+                        invalid=target["target_id"] in invalid,
+                    )
+                    for target in targets
+                ],
+            )
+        )
+
+    findings = [
+        Finding(metric=one.metric, target_id=standing.target_id, standing=standing)
+        for one in ranked
+        for standing in one.odd_ones_out
+    ]
+    findings = _with_history(conn, recording, findings, phase=chosen, limit=history)
+
+    return Sweep(
+        recording_id=recording_id,
+        phase=chosen,
+        phases=available,
+        boxes=targets,
+        metrics=ranked,
+        findings=sorted(
+            findings,
+            key=lambda f: (not f.standing.worse, -f.previously_flagged, f.metric),
+        ),
+        judged=any(one.judged for one in ranked),
+    )
+
+
+def _with_history(
+    conn: sqlite3.Connection,
+    recording: store.RecordingRow,
+    findings: list[Finding],
+    *,
+    phase: str,
+    limit: int,
+) -> list[Finding]:
+    """Read each flagged box back across the sweeps before this one.
+
+    The question §17.6 ends on: is that container reliably the slow one, or was it
+    unlucky once? Asked only of boxes something was actually flagged on -- reading
+    every box's whole history to draw a page nobody is looking at is how a list view
+    becomes slow exactly as the archive becomes worth having.
+    """
+    if not findings:
+        return findings
+
+    earlier = [
+        run
+        for run in store.list_recordings(conn, series=recording.series_key, limit=limit + 1)
+        if (run.started_at, run.id) < (recording.started_at, recording.id)
+    ]
+    earlier = sorted(earlier, key=lambda r: (r.started_at, r.id))[-limit:]
+    if not earlier:
+        return findings
+
+    ids = [run.id for run in earlier]
+    with_history = []
+    for metric in sorted({finding.metric for finding in findings}):
+        readings = store.target_values(conn, ids, metric=metric, phase=phase)
+        # Each earlier sweep is ranked again by the same rule, so "flagged before"
+        # means what it means now rather than being a second, looser idea of odd.
+        ranked = {}
+        for run in earlier:
+            boxes = readings.get(run.id, {})
+            invalid = store.invalid_targets(conn, run.id)
+            ranked[run.id] = sweep_stats.rank(
+                metric,
+                [
+                    sweep_stats.Box(
+                        target_id=target,
+                        summary=summarize(metric, values),
+                        invalid=target in invalid,
+                    )
+                    for target, values in sorted(boxes.items())
+                ],
+            )
+        for finding in findings:
+            if finding.metric != metric:
+                continue
+            appearances = []
+            for run in earlier:
+                standing = next(
+                    (s for s in ranked[run.id].standings if s.target_id == finding.target_id),
+                    None,
+                )
+                if standing is None:
+                    continue
+                appearances.append(
+                    Appearance(
+                        recording_id=run.id,
+                        at=run.started_at,
+                        value=standing.value,
+                        n=standing.n,
+                        rank=standing.rank,
+                        targets=len(ranked[run.id].standings),
+                        flagged=standing.flagged,
+                    )
+                )
+            with_history.append(
+                Finding(
+                    metric=finding.metric,
+                    target_id=finding.target_id,
+                    standing=finding.standing,
+                    history=appearances,
+                )
+            )
+    return with_history

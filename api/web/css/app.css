@@ -321,3 +321,46 @@
    sentences, and a sentence spanning a 1900px window is one nobody finishes. */
 .metrix-todos { max-width: 100ch; margin: 0; padding-left: 1.25rem; }
 .metrix-todos > li + li { margin-top: .375rem; }
+
+/* One box's figure against the spread of the others. The band is drawn per row
+   because it is measured per row -- each box is compared with the rest, never with a
+   set containing itself -- so one shared band would put a bar inside the shading and
+   still call it out. */
+.metrix-track {
+  position: relative;
+  display: block;
+  height: 1.1rem;
+  background: var(--tblr-bg-surface-secondary);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.metrix-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--tblr-green-lt);
+  border-left: 1px solid var(--tblr-green);
+  border-right: 1px solid var(--tblr-green);
+}
+.metrix-centre {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--tblr-secondary);
+  opacity: .6;
+}
+.metrix-bar {
+  position: absolute;
+  top: .3rem;
+  bottom: .3rem;
+  left: 0;
+  background: var(--tblr-primary);
+  border-radius: 2px;
+}
+.metrix-bar.is-outlier { background: var(--tblr-red); }
+.metrix-outlier > td { background: var(--tblr-red-lt); }
+
+/* The answers, before the tables they came out of. */
+.metrix-findings { max-width: 110ch; margin: 0; padding-left: 1.25rem; }
+.metrix-findings > li + li { margin-top: .5rem; }

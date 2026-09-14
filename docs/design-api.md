@@ -44,6 +44,7 @@ Three sections, per the discussion:
 | **Profiles** | The environments a run can be pointed at: create, edit and delete them, endpoint by endpoint, plus **hostname discovery and the resolved inventory (§3)**. The editor submits a whole document and the server runs the same validation a hand-written file goes through, so a form cannot save what the loader would reject. A profile's name is fixed after creation — it is part of a recording's series identity (§17.2), so renaming one through the editor would split its history in two. |
 | **Performance › Stats** | **The numbers, as a table** (§14). Per chain and per step: start, finish, median, standard deviation, counts, errors. Updates once per second during a run. No charts on this page. |
 | **Performance › Charts** | The same run drawn (§15) — load and observation on one shared time axis, current-vs-target RPS, host stats, error feed, generator-health strip, phase indicator, stop/abort. No tables on this page. |
+| **Archive › Sweep** | One recording's boxes ranked against each other (§17.6). Reached from a recording rather than from the menu: it is a question about one recording, and a standing menu entry would be empty on arrival. |
 | **Archive › Recordings** | Everything captured, load runs and observation-only recordings alike: filter by kind/profile/status/severity/baseline, mark a recording as **baseline**, overlay N runs, inspect retained error samples, export (JSON / CSV / static HTML report), **purge** the request-level bulk or **delete** the recording outright (§17.1 — two different actions, kept apart). |
 | **Archive › Series** | The same list grouped by setup identity (§17.2), with the trend view (§17.3) and regression flags (§17.4). Its own page rather than a section of a recording, because it is the only view that is not about one recording: a run's own page answers *what happened*, and this answers *is that better or worse than the last ten*. Each recording links to its series and back. |
 
@@ -463,12 +464,20 @@ The overlay draws seconds since each run started rather than wall clock, which i
 
 ### 17.6 Sweep comparison
 
-A sweep (§3.5) is its own comparison view: one plan, many targets, one time window.
+A sweep (§3.5) is its own comparison view: one plan, many targets, one time window. A recording covering more than one box **is** the sweep — the targets, their phases and their attributes are already stored per box, so nothing has to be tagged or grouped for this view to exist.
 
 - Targets ranked on each headline metric, with the sweep's own spread as the reference — the outlier logic of §17.4 applied across targets rather than across time.
 - Per-target attributes from the inventory shown alongside (instance type, AZ, image digest, task definition revision), because the explanation for an outlier is usually sitting in that row: an older digest, a different instance type, a lone task in another AZ.
 - Baseline-phase stats compared across targets, which catches the case that otherwise sends you chasing a phantom regression — one container was already loaded before the test started.
 - Repeated sweeps form a series of sweeps, giving per-target trends: is that container reliably slow, or was it unlucky once?
+
+**Every box is judged against the others and never against a set containing itself.** The trend view refuses to measure a band over a window holding the point it is judging, because such a window widens to swallow the movement it exists to detect; one slow container inflating the spread it is then compared against is the same mistake with the axes swapped. Each row therefore carries its own band, and the bar behind each row draws that one rather than a shared average.
+
+**Outside the band is not the verdict**, exactly as in §17.4. A box is called the odd one out only when it is outside, its sample count supports the figure, and it is not already carrying an `invalid` note — and a box carrying one is kept out of everybody else's band, since a reading nobody trusts cannot define normal. A note naming no target belongs to the whole recording and so covers every box in it.
+
+**A sweep too small to describe its own spread is ranked and not judged.** An interquartile range over three numbers is not a description of spread, so below the peer floor the ordering, the attributes and the baselines are all still shown and no accusation is made. Each unjudged row says which of the three conditions it missed, because a blank in a ranked table reads as a pass.
+
+**The history is read only for boxes something was flagged on**, and each earlier sweep is re-ranked by the same rule, so "flagged before" means what it means now. A box no earlier sweep carried — the normal case for ephemeral tasks, which the environment replaces between runs — says so rather than showing an empty trend.
 
 ---
 
