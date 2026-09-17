@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from metrix_api import __version__
 from metrix_api.config import Config, load_config
 from metrix_api.live import Registry
-from metrix_api.routes import compare, discovery, live, plans, profiles, recordings, series
+from metrix_api.routes import compare, discovery, live, plans, profiles, recordings, schemas, series
 from metrix_api.store import recordings as store_recordings
 from metrix_api.store.db import connect, migrate
 
@@ -82,6 +82,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         }
 
     app.include_router(profiles.router)
+    app.include_router(schemas.router)
     app.include_router(plans.router)
     app.include_router(discovery.router)
     # Live routes first: /recordings/live must not be read as a recording id.

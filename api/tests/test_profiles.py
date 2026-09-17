@@ -157,6 +157,48 @@ class TestValidation:
             ],
         )
         assert parsed.addressing == "direct"
+        assert parsed.endpoints[0].addressing == "ip"
+
+    @pytest.mark.parametrize("addressing", ["ip", "alb", "elb", "ecs", "fargate"])
+    def test_every_endpoint_addressing_kind_round_trips(self, addressing: str) -> None:
+        endpoint = {
+            "id": "target",
+            "addressing": addressing,
+            "address": "10.0.3.41:8080",
+            **({"host_header": "api.example.com"} if addressing == "ip" else {}),
+        }
+        parsed = profile(endpoints=[endpoint])
+        assert parsed.endpoints[0].addressing == addressing
+        assert parse_profile(to_document(parsed)) == parsed
+
+    def test_legacy_profile_addressing_is_mapped_onto_explicit_endpoints(self) -> None:
+        direct = profile(
+            addressing="direct",
+            endpoints=[
+                {"id": "target", "address": "10.0.3.41:8080", "host_header": "api.example.com"}
+            ],
+        )
+        balanced = profile(
+            addressing="load_balancer",
+            endpoints=[{"id": "target", "address": "lb.example.com:443"}],
+        )
+        assert direct.endpoints[0].addressing == "ip"
+        assert balanced.endpoints[0].addressing == "alb"
+        assert "addressing" not in to_document(direct)
+
+    def test_an_observation_only_endpoint_keeps_its_path_class(self) -> None:
+        parsed = profile(
+            endpoints=[
+                {
+                    "id": "balancer",
+                    "addressing": "alb",
+                    "address": "lb.example.com:443",
+                    "load": False,
+                    "collect": {"transport": "ssh"},
+                }
+            ]
+        )
+        assert parsed.addressing == "load_balancer"
 
     def test_an_unknown_transport_is_refused(self) -> None:
         with pytest.raises(ProfileError, match="transport"):

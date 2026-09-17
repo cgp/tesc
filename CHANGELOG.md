@@ -785,3 +785,38 @@ Add same-snapshot paired flush-plus-packet durations and supported totals. Skip 
 - Moved histogram merge/reset, cumulative diagnostics and snapshot window construction to a dedicated aggregation thread using three preallocated reusable buffer sets. Periodic pool saturation coalesces windows without dropping measurements or waiting on snapshot consumers.
 - Preserved phase boundaries, cancellation accounting and SLO evaluation; breakpoint stop assessments use diagnostics captured with the same cumulative metric cutoff. Added `snapshot_coalesced_ticks` and a `snapshot_backpressure` annotation to identify deferred publication. Snapshot flush timings now measure aggregation-thread work.
 - Added bounded-pool, measurement conservation, stalled-consumer and cutoff-aligned stop tests. Full `bash scripts/check.sh` passed. The remaining B4 packaging step stays deferred.
+
+### 2026-09-14 - Record the manual engine performance baseline
+
+- Added docs/engine-performance-baseline.md with repeated 4k/8k/10k/12k/16k Linux results, counted 10k/12k timing distributions, and the accepted 10k working baseline. Further performance optimization remains deferred.
+- Documented a measurement-led improvement strategy and supervised regression comparisons that capture processor, network, target, build and workload conditions, preserve artifacts and outliers, and distinguish provisional guardrails from portable CI guarantees. Linked the reference from the engine testing notes. Documentation only; no engine behavior or B4 checklist changes.
+
+## 2026-09-16 — Plans editor density prototype
+
+- Made the Plan editor denser: chains now lead the workspace, with load and phase controls alongside; kept all existing validation and controls intact.
+- Updated the plan-editing design note and added front-end coverage for the new layout structure.
+
+## 2026-09-16 — Basic plan editor
+
+- Added Basic and Advanced tabs to the plan editor. Basic presents valid fixed-rate, single-call chains as a compact table and derives the stored total rate and percentages from row RPS values.
+- Simplified Load in both modes: removed editable total RPS and model, paired warmup with settle, moved concurrency last, and labelled stages and breakpoint as not implemented in the editor.
+- Moved the plan verdict and explanations below the working controls, added icon-only row actions, and covered compatibility, low-RPS normalization, and the shared Load layout with front-end tests.
+- Automated checks pass; browser screenshot comparison remains blocked and is recorded in `design-qa.md`.
+
+## 2026-09-16 — Table-based profile editor
+
+- Moved the editable profile name into the editor header and made profile replacement move the backing file when that name changes; existing recordings retain their stored profile name, and rename collisions are refused.
+- Replaced endpoint editor cards with a compact table, per-row edit/remove actions, an add action in the table header, static SSH observation labels, and a narrow observation-defaults card for description, sample interval, and collected metric groups.
+- Added per-endpoint addressing kinds for IP, ALB, ELB, ECS, and Fargate while retaining legacy profile-file compatibility. Discovery now labels resolved load balancers, ECS hosts, and Fargate tasks; the editor explains discovery support for each selected kind.
+- Collapsed SSH user, host, and port controls into one `user@host:port` field. Resolved defaults are shown without making them explicit in the saved document, including when the endpoint address changes, and bracketed IPv6 destinations round-trip correctly.
+- Kept the compact SSH target in its own editable endpoint-table cell rather than a second detail row, and rebalanced the table so Addressing and Address do not consume the target's width.
+- Updated profile documentation and regression coverage. Ruff, 651 Python tests (1 skipped), and 178 front-end tests pass; the profile editor was also checked in the browser at the desktop viewport.
+
+## 2026-09-16 — Stored schema library
+
+- Added a Schemas setup view above Profiles with an upload target and a table of stable filename/type ids, original filenames, source types, parsed call counts, and view/delete actions.
+- Store uploaded UTF-8 sources under `$METRIX_HOME/schemas/<id>/`. Uploads run through the same OpenAPI 3, WSDL 1.1, HAR, access-log, or route-list parser used by plan generation before an entry is persisted; invalid files leave no entry and collisions do not overwrite.
+- Added a schema detail view with the parsed call names, methods and paths alongside the escaped original source, plus list, detail, upload, and delete API routes.
+- Documented the storage and parsing boundary and completed A4.6. The required API check passes: Ruff, 659 Python tests (1 skipped), and 181 front-end tests.
+- Added a large dotted drag-and-drop target beside the schema picker. Dropped files upload and parse immediately using the selected source type; multiple files report failures individually without losing successful uploads. The empty state no longer uses an upload-looking icon, and the picker links to definitions for every accepted format.
+- Added a direct Swagger 2.0 source adapter. It locally reads `definitions`, `basePath`, path/query/header/body/form parameters, response codes, and security into the same generated-call model as OpenAPI 3; no document conversion or outbound request occurs. Swagger 2.0 is available in both Plans and Schemas, and A4.7 is complete. The required API check passes: Ruff, 662 Python tests (1 skipped), and 181 front-end tests.

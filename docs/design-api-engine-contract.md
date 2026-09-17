@@ -143,7 +143,7 @@ Three items from the initial doc are kept deliberately: **hostname-to-instance t
 | Auth | **First-class `auth` block** (§6); auth traffic excluded from load metrics, single-flight refresh. |
 | Target discovery | **ECS only** (§3), in the Python API via boto3, read-only IAM. The engine holds no credentials and makes no control-plane calls. Explicit endpoint lists cover everything else. |
 | Multi-target testing | **Sequential sweep over every resolved target** (§3.5). No concurrency, no subset sampling. |
-| Plan discovery | **`POST /api/plans/generate`** (§8) — deterministic skeleton from OpenAPI/WSDL/HAR/access log. **No chain inference.** |
+| Plan discovery | **`POST /api/plans/generate`** (§8) — deterministic skeleton from OpenAPI 3/Swagger 2/WSDL/HAR/access log. **No chain inference.** |
 | Dynamic generation | **Embedded Lua as the default tier** (§7.2), generating the whole request. Rust plugin for heavy cases, exec sidecar as the escape hatch. |
 | Lua file access | **Read-only within the plan directory**; corpus loaded once into memory at run start under a size ceiling. No I/O on the hot path. |
 | Error retention | **First N errored calls per error class**, default 10, secrets redacted (§9.3). |

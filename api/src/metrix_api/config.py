@@ -9,6 +9,7 @@ Layout (docs/implementation-api.md 2):
     $METRIX_HOME/
         config.toml     this file's source
         profiles/       target profiles
+        schemas/        uploaded plan source documents
         plans/          one bundle directory per plan
         secrets/        optional local store for {{ secret.* }}
         metrix.db       SQLite: everything queryable
@@ -133,6 +134,10 @@ class Config:
         return self.home / "plans"
 
     @property
+    def schemas_dir(self) -> Path:
+        return self.home / "schemas"
+
+    @property
     def secrets_dir(self) -> Path:
         return self.home / "secrets"
 
@@ -149,7 +154,14 @@ class Config:
 
     def ensure_layout(self) -> Config:
         """Create the directories. Safe to call repeatedly."""
-        for path in (self.home, self.profiles_dir, self.plans_dir, self.secrets_dir, self.runs_dir):
+        for path in (
+            self.home,
+            self.profiles_dir,
+            self.schemas_dir,
+            self.plans_dir,
+            self.secrets_dir,
+            self.runs_dir,
+        ):
             path.mkdir(parents=True, exist_ok=True)
         return self
 

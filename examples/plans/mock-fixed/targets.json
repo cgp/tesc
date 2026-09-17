@@ -1,3 +1,3 @@
 {
-  "list": [{ "id": "mock", "address": "127.0.0.1:8080", "http_version": "http1" }]
+  "list": [{ "id": "mock", "address": "192.168.1.73:8080", "http_version": "http2" }]
 }

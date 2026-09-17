@@ -31,9 +31,8 @@ def operations(content: str) -> list[Operation]:
         raise GenerationError(f"{WHERE}: expected an object at the top level")
     if "swagger" in document and "openapi" not in document:
         raise GenerationError(
-            f"{WHERE}: this is Swagger 2.0; convert it to OpenAPI 3 first — the two "
-            "describe bodies differently and a silent half-reading would be worse "
-            "than refusing"
+            f"{WHERE}: this is Swagger 2.0; choose the Swagger 2.0 source type so "
+            "its bodies and parameters are read by the matching adapter"
         )
     paths = document.get("paths")
     if not isinstance(paths, dict):

@@ -40,8 +40,9 @@ Three sections, per the discussion:
 | Section | Purpose |
 |---|---|
 | **Config** | What this process is and where it keeps things: the resolved `$METRIX_HOME`, which rule chose it, the database. |
-| **Plans** | The plan library and the mixture editor (§20): chains and their shares, each one shown as the iterations and requests it actually buys, phase durations (§10), engine threading and SLO thresholds. Validation is displayed, never decided here — the same server-side check gates the bundle. **Plan generation from OpenAPI/WSDL/HAR (§8)** lands here too. |
-| **Profiles** | The environments a run can be pointed at: create, edit and delete them, endpoint by endpoint, plus **hostname discovery and the resolved inventory (§3)**. The editor submits a whole document and the server runs the same validation a hand-written file goes through, so a form cannot save what the loader would reject. A profile's name is fixed after creation — it is part of a recording's series identity (§17.2), so renaming one through the editor would split its history in two. |
+| **Schemas** | Uploaded service descriptions kept under `$METRIX_HOME/schemas/`: OpenAPI 3, Swagger 2.0, WSDL 1.1, HAR captures, access logs and route lists. A substantial drop target beside the picker accepts one or more files and parses them immediately through the same deterministic source reader Plans uses before anything is stored; the table shows the source identity and resulting call count, and each entry can be opened or deleted. Links beside the target name the accepted source formats. |
+| **Plans** | The plan library and the mixture editor (§20): chains and their shares, each one shown as the iterations and requests it actually buys, phase durations (§10), engine threading and SLO thresholds. Validation is displayed, never decided here — the same server-side check gates the bundle. **Plan generation from OpenAPI/Swagger/WSDL/HAR (§8)** lands here too. |
+| **Profiles** | The environments a run can be pointed at: create, edit, rename and delete them, endpoint by endpoint, plus **hostname discovery and the resolved inventory (§3)**. The editor submits a whole document and the server runs the same validation a hand-written file goes through, so a form cannot save what the loader would reject. Renaming moves the profile file; existing recordings keep the name they were made with, so the new name begins a new series identity (§17.2). |
 | **Performance › Stats** | **The numbers, as a table** (§14). Per chain and per step: start, finish, median, standard deviation, counts, errors. Updates once per second during a run. No charts on this page. |
 | **Performance › Charts** | The same run drawn (§15) — load and observation on one shared time axis, current-vs-target RPS, host stats, error feed, generator-health strip, phase indicator, stop/abort. No tables on this page. |
 | **Archive › Sweep** | One recording's boxes ranked against each other (§17.6). Reached from a recording rather than from the menu: it is a question about one recording, and a standing menu entry would be empty on arrival. |
@@ -159,11 +160,13 @@ Task definition revision and image digest earn their place in cross-run comparis
 
 ### 3.4 Addressing, and the two roles an endpoint plays
 
-An endpoint is a machine, and a machine can play either of two parts in a run: **traffic goes there**, or **statistics come from there**. They are separate flags (`load`, and a `collect` block) because they are usually not the same set. Under `load_balancer` addressing the run points at the balancer and watches the tasks behind it; under `direct` it points at each task and watches the same ones. The balancer is a target that cannot be observed — nothing to log into — and a task behind one is observed without being addressed.
+An endpoint is a machine, and a machine can play either of two parts in a run: **traffic goes there**, or **statistics come from there**. They are separate flags (`load`, and a `collect` block) because they are usually not the same set. Each endpoint also says how its address is reached: `ip`, `alb`, `elb`, `ecs`, or `fargate`. The choice is kept per endpoint because a profile can point traffic at a balancer while observing concrete tasks behind it. These labels classify the network path; the engine still receives one concrete `host:port` address and makes no cloud calls.
+
+Automatic discovery currently resolves ALB/NLB through ELBv2, ECS services, and both EC2- and Fargate-launched tasks. The `elb` label covers non-ALB elastic load balancers: NLB is discovered, while a classic ELB is accepted as an explicit endpoint but is not discovered. The editor keeps every choice visible and says when part of a selected kind is explicit-only rather than pretending the discovery implementation covers it.
 
 Every endpoint carries an address regardless, because that is where the box *is*; `load` says whether it is also where the load goes. This is what makes `targets.json` derivable: the default selection is the endpoints that take traffic, and the observer's list is the ones with a collector.
 
-**Addressing mode is part of series identity** (§17.2). Through-the-balancer and direct-to-container measure different network paths — one includes the balancer's own latency, connection reuse and health checks — so the two are never compared against each other, and changing it starts a new history rather than continuing one.
+**The endpoint modes derive the addressing class stored in series identity** (§17.2): `alb` and `elb` are through-the-balancer, while `ip`, `ecs`, and `fargate` are direct. Those two paths are never compared against each other. A legacy profile-wide `load_balancer` or `direct` value is still accepted and mapped onto its endpoints when the file is read.
 
 ### 3.5 Verifying a profile
 
@@ -182,6 +185,24 @@ The run-time counterpart is the `target_unreachable` annotation: a target that p
 
 ## 8. Plan generation from an endpoint
 
+### 8.0 Stored source schemas
+
+Service descriptions may be uploaded once into a small source library instead of
+being pasted directly into the plan generator every time. Each entry lives at
+`$METRIX_HOME/schemas/<id>/`: the original UTF-8 content is kept as `source.txt` and
+`metadata.json` records its uploaded filename, source type and the call summary
+produced at upload. The id combines a slug of the filename stem with the selected source type,
+so `shop.yaml` uploaded as OpenAPI becomes `shop-openapi`; an existing id is a
+conflict rather than an implicit overwrite.
+
+Upload is transactional at the feature boundary: the server first runs the content
+through the same `generate.generate` dispatch used by `POST /api/plans/generate`, and
+only a source that defines at least one call is written. The schema library therefore
+does not grow a second definition of OpenAPI 3, Swagger 2, WSDL, HAR, access-log or route-list
+validity. A failed parse leaves no library entry. The stored call names, methods and
+paths are an upload-time summary for the list and detail views; they do not become a
+fourth plan document and are never handed to the engine.
+
 `POST /api/plans/generate` takes a source and returns a draft plan. Yes to the question — with one deliberate boundary.
 
 ### 8.1 What the tool does and does not do
@@ -194,7 +215,8 @@ The run-time counterpart is the `target_unreachable` annotation: a target that p
 
 | Source | What it yields |
 |---|---|
-| **OpenAPI** (URL or file) | Operations, parameter types, request/response schemas, declared status codes. The richest structural source. |
+| **OpenAPI 3** (JSON or YAML) | Operations, parameter types, request/response schemas, declared status codes. The richest structural source. |
+| **Swagger 2.0** (JSON or YAML) | The same structural input, read locally into the generator's operation model. Its `definitions`, body and form parameters, `basePath`, response codes and security declarations are handled directly; Metrix does not upload a document to a converter or construct an intermediate OpenAPI 3 file. |
 | **WSDL / XSD** | Same for SOAP and XML services; bodies generated from the schema. |
 | **HAR capture** | **Realistic mixtures** — observed call frequencies become weights. Chains are *not* inferred (see below). |
 | **Access log** | Path frequencies and status distribution; weights grounded in production traffic. |
@@ -493,9 +515,15 @@ The front end is the expected authoring surface (§4), but the three documents a
 
 ### 20.1 Editing the mix
 
-The mixture editor is the primary screen. Chains listed with their percentages, edited either as a percentage or as a target rate (converted and both shown, either one moving the other), with a **live total that must reach 100** before the plan can run — the error names the shortfall or excess rather than silently renormalizing, because adjusting five chains to accommodate a typo in the sixth measures a mixture nobody chose.
+The mixture editor has two tabs. **Basic** is the default for plans it can represent: a table where every row is one single-call chain and its RPS. The table derives the total load rate and normalizes the stored percentages, so it never exposes a half-valid percentage total; lowering the run below the 2250-sample floor (75 RPS for 30 seconds) remains a warning, not an invalid plan. A plan with multi-step chains or another advanced-only shape opens in **Advanced**, which is the existing full editor.
 
-Alongside each chain: implied iterations/s, implied req/s given its step count, session policy, and the calls it invokes. Adding a chain means selecting from the calls already defined; reordering steps and setting `repeat_until` are in scope. `load` — rate, duration, warmup, model, concurrency cap — and the phase durations are editable here, with the §12.1 sample-count consequence shown live: a duration and rate that fall below the 2250 floor say so before the run, not after, and so does a 5% chain inside a run that clears the floor comfortably. A `stages` ramp and a `breakpoint` search carry their own shape and are shown rather than edited; they belong with the sweep that runs them (§17.6).
+Basic rows show chain name, call, RPS, expected status and request type. Call and request type are selectors over the existing read-only call definitions: choosing a request type selects among calls of that type rather than mutating a call. Actions are icon-only. A final row cannot be deleted, blank names are repaired to unique names, and an empty or zero-rate table is normalized to a runnable minimum when committed. These constraints are what make Basic a safe editor rather than a second way to construct an invalid mixture.
+
+The editor is deliberately compact: chains occupy the primary column and the less-frequently changed load and phase controls sit alongside them. Load has no editable total RPS; Basic derives it from the table, while Advanced continues to express each chain as both a percentage and an implied iteration rate. The open/closed model is not exposed. Warmup and settle share a row, concurrency is last, and `stages` and `breakpoint` are labelled as not implemented in the editor. The server verdict, sample-count consequence and explanatory notes sit below the working controls rather than above them.
+
+In Advanced, chains are listed with their target rates and derived percentages. The total rate is the sum of the chain rates, and the stored shares are normalized from those values; the resulting total is always exactly 100 rather than silently carrying rounding drift.
+
+Alongside each chain: implied iterations/s, implied req/s given its step count, session policy, and the calls it invokes. Adding a chain means selecting from the calls already defined; reordering steps and setting `repeat_until` are in scope. Duration, warmup, concurrency cap and the phase durations are editable here, with the §12.1 sample-count consequence shown live: a duration and rate that fall below the 2250 floor say so before the run, not after, and so does a 5% chain inside a run that clears the floor comfortably. A `stages` ramp and a `breakpoint` search carry their own shape and are shown rather than edited; they belong with the sweep that runs them (§17.6).
 
 **Every figure on the page is computed server-side.** The percentages, the implied rates, the request counts and the verdict all come from one function, which is also the one the save path and the bundle gate call. The browser converts a typed rate into the share the document stores — the document has to be built before it can be submitted — and renders what it is told about everything else. A second rulebook in JavaScript would be a rulebook to drift from the first.
 

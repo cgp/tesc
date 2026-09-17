@@ -22,6 +22,7 @@ import { empty, icon } from "./ui.js";
 // and three of them describe a shape.
 const SOURCES = [
   ["openapi", "OpenAPI 3 (JSON or YAML)", "Every operation, its parameters and the codes it declares. Weights are flat."],
+  ["swagger", "Swagger 2.0 (JSON or YAML)", "The same structural calls, read locally without a conversion service."],
   ["wsdl", "WSDL 1.1", "SOAP operations, with an envelope built from the schema."],
   ["har", "HAR capture", "Real paths and real frequencies. Bodies and headers are not copied."],
   ["access_log", "Access log", "Common or combined format: weights grounded in production traffic."],
@@ -29,8 +30,8 @@ const SOURCES = [
 ];
 
 const MODES = ["fixed", "stages", "breakpoint"];
-const MODELS = ["open", "closed"];
 const SESSIONS = ["fresh", "reuse", "pool"];
+const REQUEST_TYPES = ["json", "xml", "html", "form", "text", "generated", "none", "other"];
 
 /** A new chain, with one step: a chain with no steps sends nothing. */
 export function blankChain(call) {
@@ -39,6 +40,40 @@ export function blankChain(call) {
 
 export function blankStep(call) {
   return { id: "", call: call ?? "" };
+}
+
+/** A Basic row is always a complete, single-call chain. */
+export function blankBasicChain(call, existing = []) {
+  const base = call || "call";
+  const used = new Set(existing.map((chain) => chain.name));
+  let name = base;
+  let suffix = 2;
+  while (used.has(name)) name = `${base}-${suffix++}`;
+  return {
+    name,
+    percent: 0,
+    session: "reuse",
+    steps: [{ id: name, call: call ?? "" }],
+  };
+}
+
+/** Basic never opens over a shape it would have to flatten or guess at. */
+export function basicCompatible(doc, calls = []) {
+  const known = new Set(calls.map((call) => call.name));
+  const chains = doc.chains ?? [];
+  const names = chains.map((chain) => chain.name);
+  return (
+    (doc.load?.mode ?? "fixed") === "fixed" &&
+    chains.length > 0 &&
+    names.every(Boolean) &&
+    new Set(names).size === names.length &&
+    chains.every(
+      (chain) =>
+        chain.steps?.length === 1 &&
+        known.has(chain.steps[0].call) &&
+        !chain.steps[0].repeat_until
+    )
+  );
 }
 
 export function selectState(state) {
@@ -361,6 +396,9 @@ function editor(state) {
   const draft = state.planDraft;
   const doc = draft.doc;
   const check = state.planCheck;
+  const calls = draft.detail?.call_details ?? [];
+  const canUseBasic = basicCompatible(doc, calls) && check?.ready !== false;
+  const mode = draft.editorMode === "basic" && canUseBasic ? "basic" : "advanced";
 
   const error = draft.error
     ? `<div class="alert alert-danger" role="alert">
@@ -374,14 +412,13 @@ function editor(state) {
        </div>`
     : "";
 
-  return `<form class="metrix-stack" data-plan-form novalidate>
+  return `<form class="metrix-stack metrix-plan-editor" data-plan-form
+               data-editor-mode="${mode}" novalidate>
     ${error}
     <div class="card">
       <div class="card-header">
         <div>
           <h3 class="card-title">${escape(draft.name)}</h3>
-          <div class="card-subtitle">The mixture. Calls are read-only, and targets
-            come from a profile when the bundle is assembled.</div>
         </div>
         <div class="card-actions d-flex align-items-center gap-2">
           <button type="button" class="btn btn-sm" data-action="plan-cancel">Close</button>
@@ -390,17 +427,49 @@ function editor(state) {
           </button>
         </div>
       </div>
-      <div class="card-body" id="plan-verdict">${verdict(check)}</div>
-      ${notes(draft.detail?.notes)}
+      ${editorTabs(mode, canUseBasic)}
     </div>
 
+    <div class="metrix-plan-workspace">
+      ${mode === "basic" ? basicTable(doc, check, draft) : chainsCard(doc, check, draft)}
+      ${loadCard(doc, check)}
+    </div>
+    <div class="card">
+      <div class="card-body" id="plan-verdict">${verdict(check)}</div>
+      ${notes(draft.detail?.notes)}
+      <div class="card-body border-top text-secondary metrix-plan-explanation">
+        ${
+          mode === "basic"
+            ? "Basic keeps every row as one call and derives the stored rate and percentages from the RPS column. Calls themselves remain read-only."
+            : "Advanced exposes the full mixture: multi-step chains, sessions, polling and percentage control. Calls themselves remain read-only."
+        }
+        Targets come from a profile when the bundle is assembled.
+      </div>
+    </div>
     ${draftCard(draft)}
-    ${loadCard(doc, check)}
-    ${chainsCard(doc, check, draft)}
     ${exportCard(state, draft)}
     ${callsCard(draft)}
     ${carriedCard(doc)}
   </form>`;
+}
+
+function editorTabs(mode, canUseBasic) {
+  const tab = (value, label, disabled = false) => `<li class="nav-item" role="presentation">
+    <button type="button" class="nav-link${mode === value ? " active" : ""}"
+            data-action="plan-mode" data-mode="${value}" role="tab"
+            aria-selected="${mode === value}" ${disabled ? "disabled" : ""}
+            ${
+              disabled
+                ? 'title="Basic is available for valid fixed-rate plans whose chains each contain one call"'
+                : ""
+            }>${label}</button>
+  </li>`;
+  return `<div class="card-header py-0">
+    <ul class="nav nav-tabs card-header-tabs" role="tablist">
+      ${tab("basic", "Basic", !canUseBasic)}
+      ${tab("advanced", "Advanced")}
+    </ul>
+  </div>`;
 }
 
 /**
@@ -478,38 +547,141 @@ function implication(figures) {
     ${seconds(figures.measured_s)} of measured traffic — ${verdictText}.</span>`;
 }
 
+function basicTable(doc, check, draft) {
+  const chains = doc.chains ?? [];
+  const calls = draft.detail?.call_details ?? [];
+  const totalRate = check?.figures?.rate;
+  return `<div class="card metrix-basic-card">
+    <div class="card-header">
+      <div>
+        <h3 class="card-title">Calls</h3>
+        <div class="card-subtitle" id="plan-basic-total"><strong>${round(totalRate) || "—"} RPS</strong> total ·
+          ${count(chains.length, "call")}</div>
+      </div>
+      <div class="card-actions">
+        <button type="button" class="btn btn-sm" data-action="basic-row-add"
+                ${calls.length ? "" : "disabled"}>${icon("plus")} Add call</button>
+      </div>
+    </div>
+    <div class="table-responsive">
+      <table class="table card-table table-vcenter metrix-basic-table">
+        <thead><tr>
+          <th style="width:18%">Chain name</th>
+          <th style="width:29%">Call</th>
+          <th class="num" style="width:12%">RPS</th>
+          <th style="width:13%">Expect</th>
+          <th style="width:18%">Request type</th>
+          <th class="text-end" style="width:10%">Actions</th>
+        </tr></thead>
+        <tbody>${chains
+          .map((chain, index) => basicRow(chain, index, check, calls, chains.length))
+          .join("")}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function basicRow(chain, index, check, calls, chainCount) {
+  const selected = chain.steps?.[0]?.call ?? "";
+  const detail = calls.find((call) => call.name === selected);
+  const type = requestType(detail);
+  const availableTypes = new Set(calls.map(requestType));
+  const callOptions = calls
+    .map(
+      (call) => `<option value="${escape(call.name)}" data-request-type="${requestType(call)}"
+        ${call.name === selected ? "selected" : ""}>${escape(call.name)} · ${escape(
+          call.path
+        )}</option>`
+    )
+    .join("");
+  const typeOptions = REQUEST_TYPES.map(
+    (value) => `<option value="${value}"${value === type ? " selected" : ""}
+      ${availableTypes.has(value) ? "" : "disabled"}>${requestTypeLabel(value)}</option>`
+  ).join("");
+  const rps = check?.figures?.chains?.[index]?.iterations_per_s;
+
+  return `<tr>
+    <td><input class="form-control" name="basic.${index}.name" readonly
+               value="${escape(chain.name ?? "")}" aria-label="Chain name"></td>
+    <td><select class="form-select" name="basic.${index}.call"
+                aria-label="Call">${callOptions}</select></td>
+    <td><input class="form-control text-end" type="number" step="any" min="0"
+               name="basic.${index}.rps" value="${escape(round(rps))}"
+               aria-label="Requests per second"></td>
+    <td><span class="metrix-basic-expect">${escape(expectedStatus(detail))}</span></td>
+    <td><select class="form-select" name="basic.${index}.type"
+                data-basic-type data-index="${index}" aria-label="Request type">
+          ${typeOptions}
+        </select></td>
+    <td class="text-end text-nowrap">
+      <button type="button" class="btn btn-sm btn-icon" data-action="plan-mode"
+              data-mode="advanced" title="Edit details in Advanced"
+              aria-label="Edit details in Advanced">${icon("pencil")}</button>
+      <button type="button" class="btn btn-sm btn-icon btn-outline-danger"
+              data-action="basic-row-remove" data-index="${index}"
+              title="Remove call" aria-label="Remove call"
+              ${chainCount === 1 ? "disabled" : ""}>${icon("trash")}</button>
+    </td>
+  </tr>`;
+}
+
+function expectedStatus(detail) {
+  const assertion = detail?.assert?.find((item) => "status" in item || "status_in" in item);
+  if (!assertion) return "—";
+  if ("status" in assertion) return String(assertion.status);
+  return assertion.status_in.join(", ");
+}
+
+function requestType(detail) {
+  if (!detail) return "none";
+  const contentType = Object.entries(detail.headers ?? {}).find(
+    ([name]) => name.toLowerCase() === "content-type"
+  )?.[1];
+  const source = String(contentType ?? detail.body ?? "").toLowerCase();
+  if (source.includes("json")) return "json";
+  if (source.includes("xml")) return "xml";
+  if (source.includes("html")) return "html";
+  if (source.includes("form")) return "form";
+  if (source.includes("text")) return "text";
+  if (source.includes("generator")) return "generated";
+  if (!source || source === "none") return "none";
+  return "other";
+}
+
+function requestTypeLabel(value) {
+  return {
+    json: "JSON",
+    xml: "XML",
+    html: "HTML",
+    form: "Form",
+    text: "Text",
+    generated: "Generated",
+    none: "No body",
+    other: "Other",
+  }[value];
+}
+
 function loadCard(doc, check) {
   const load = doc.load ?? {};
   const phases = doc.phases ?? {};
   const mode = load.mode ?? "fixed";
-
-  // Only the fields the chosen mode uses. `stages` and `breakpoint` carry their own
-  // shape and are preserved untouched rather than half-edited here: a ramp is
-  // authored with the sweep it belongs to, and a form that drew two of its six
-  // fields would be a form that dropped the other four.
-  const rateField =
-    mode === "fixed"
-      ? number("load.rate", "Rate", load.rate, {
-          hint: "Chain iterations a second, split across chains by percentage.",
-        })
-      : `<div class="metrix-field">
-           <label class="form-label">Rate</label>
-           <div class="form-control-plaintext text-secondary">set by the ${escape(
-             mode
-           )} block, which is carried through unchanged</div>
-         </div>`;
+  const modeOptions = MODES.map((value) => {
+    const unavailable = value !== "fixed" && value !== mode;
+    return `<option value="${value}"${value === mode ? " selected" : ""}
+      ${unavailable ? "disabled" : ""}>
+      ${value}${value === "fixed" ? "" : " (not implemented)"}
+    </option>`;
+  }).join("");
 
   return `<div class="card">
     <div class="card-header"><h3 class="card-title">Load</h3></div>
     <div class="card-body">
-      <div class="metrix-fields">
-        ${select("load.mode", "Mode", MODES, mode, {
-          hint: "fixed holds a rate; stages ramps through a list; breakpoint searches.",
-        })}
-        ${select("load.model", "Model", MODELS, load.model ?? "open", {
-          hint: "open issues on schedule; closed waits for the previous response.",
-        })}
-        ${rateField}
+      <div class="metrix-fields metrix-load-fields">
+        <div class="metrix-field metrix-load-mode">
+          <label class="form-label" for="f-load.mode">Mode</label>
+          <select class="form-select" id="f-load.mode" name="load.mode">${modeOptions}</select>
+          <div class="form-hint">Stages and breakpoint are not implemented in the editor yet.</div>
+        </div>
         ${text("load.duration", "Duration", load.duration, {
           required: true,
           hint: 'With units: "30s", "5m", "1h30m".',
@@ -517,16 +689,17 @@ function loadCard(doc, check) {
         ${text("load.warmup", "Warmup", load.warmup, {
           hint: "Measured separately and excluded from the summary. Blank for none.",
         })}
-        ${number("load.max_concurrency", "Concurrency cap", load.max_concurrency, {
-          hint: "In-flight requests. Hitting it annotates the run rather than failing it.",
+        ${text("phases.settle", "Settle", phases.settle, {
+          hint: "Observed with no traffic, after it: recovery.",
         })}
         ${text("phases.baseline", "Baseline", phases.baseline, {
           hint: "Observed with no traffic, before the run: initial conditions.",
         })}
-        ${text("phases.settle", "Settle", phases.settle, {
-          hint: "Observed with no traffic, after it: recovery.",
+        ${number("load.max_concurrency", "Concurrency cap", load.max_concurrency, {
+          hint: "In-flight requests. Hitting it annotates the run rather than failing it.",
         })}
       </div>
+      <div class="mt-2 text-secondary">Total RPS is calculated from the call rates.</div>
       <div class="mt-3" id="plan-implied">${
         check
           ? implication(check.figures)
@@ -589,18 +762,17 @@ function chainCard(chain, index, check, calls) {
         ${icon("trash")} Remove chain
       </button>
     </div>
-    <div class="metrix-fields">
+    <div class="metrix-fields metrix-chain-fields">
       ${text(at("name"), "Name", chain.name, {
         required: true,
         hint: "Keys every chart series, error report and SLO.",
       })}
       ${number(at("percent"), "Share %", chain.percent, {
-        derives: "rate",
-        hint: "Its share of the total rate.",
+        readOnly: true,
+        hint: "Calculated from this chain's RPS.",
       })}
       ${number(at("rps"), "Iterations/s", figures?.iterations_per_s, {
-        derives: "percent",
-        hint: "The same thing said as a rate. Editing either moves the other.",
+        hint: "The load rate is the sum of every chain's value.",
       })}
       ${select(at("session"), "Session", SESSIONS, session, {
         hint: "fresh is a first-time user, reuse a returning one, pool a population.",
@@ -999,6 +1171,7 @@ function signature(state) {
   if (!draft) return null;
   return JSON.stringify([
     draft.name,
+    draft.editorMode ?? null,
     draft.error ?? null,
     draft.profile ?? null,
     draft.preview?.plan_hash ?? null,
@@ -1053,15 +1226,27 @@ export function patchCheck(check) {
   const totals = document.getElementById("plan-total");
   if (totals) totals.innerHTML = total(check);
 
+  const basicTotal = document.getElementById("plan-basic-total");
+  if (basicTotal && check.figures) {
+    basicTotal.innerHTML = `<strong>${escape(round(check.figures.rate) || "—")} RPS</strong> total · ${count(
+      check.figures.chains.length,
+      "call"
+    )}`;
+  }
+
   if (!check.figures) return true;
   for (const node of document.querySelectorAll(".metrix-chain-implied")) {
     node.innerHTML = chainImplied(check.figures.chains[Number(node.dataset.chain)]);
   }
 
   for (const [index, chain] of check.figures.chains.entries()) {
-    const input = document.querySelector(`[name="chains.${index}.rps"]`);
-    if (input && input !== document.activeElement) {
-      input.value = chain.iterations_per_s == null ? "" : round(chain.iterations_per_s);
+    const inputs = document.querySelectorAll(
+      `[name="chains.${index}.rps"], [name="basic.${index}.rps"]`
+    );
+    for (const input of inputs) {
+      if (input !== document.activeElement) {
+        input.value = chain.iterations_per_s == null ? "" : round(chain.iterations_per_s);
+      }
     }
   }
   return true;
@@ -1086,12 +1271,13 @@ function text(name, label, value, { required, hint } = {}) {
  * the document stores a share, so a typed rate has to become one before it can be
  * saved or checked.
  */
-function number(name, label, value, { hint, derives } = {}) {
+function number(name, label, value, { hint, derives, readOnly } = {}) {
   return `<div class="metrix-field">
     <label class="form-label" for="f-${escape(name)}">${escape(label)}</label>
     <input class="form-control" type="number" step="any" min="0"
            id="f-${escape(name)}" name="${escape(name)}"
            ${derives ? `data-derives="${escape(derives)}"` : ""}
+           ${readOnly ? "readonly" : ""}
            value="${value == null ? "" : escape(round(value))}">
     ${hint ? `<div class="form-hint">${escape(hint)}</div>` : ""}
   </div>`;
@@ -1129,6 +1315,7 @@ function select(name, label, options, value, { hint } = {}) {
  */
 export function readForm(form, previous) {
   const data = new FormData(form);
+  const editorMode = form.dataset?.editorMode ?? "advanced";
   const value = (name) => (data.get(name) ?? "").toString().trim();
   const numberAt = (name) => {
     const raw = value(name);
@@ -1137,19 +1324,22 @@ export function readForm(form, previous) {
 
   const load = { ...(previous.load ?? {}) };
   load.mode = value("load.mode") || "fixed";
-  load.model = value("load.model") || "open";
   load.duration = value("load.duration");
   assign(load, "warmup", value("load.warmup") || null);
   assign(load, "max_concurrency", numberAt("load.max_concurrency"));
-  // A rate belongs to a fixed run. In the other modes the shape carries it, and
-  // writing one here would leave a number the engine ignores looking authoritative.
-  if (load.mode === "fixed") assign(load, "rate", numberAt("load.rate"));
 
   const phases = { ...(previous.phases ?? {}) };
   assign(phases, "baseline", value("phases.baseline") || null);
   assign(phases, "settle", value("phases.settle") || null);
 
-  const chains = (previous.chains ?? []).map((chain, index) => {
+  let chains;
+  if (editorMode === "basic") {
+    chains = readBasicChains(previous.chains ?? [], value, numberAt);
+    const rates = chains.map((_, index) => numberAt(`basic.${index}.rps`) ?? 0);
+    const safeRates = rates.some((rate) => rate > 0) ? rates : rates.map(() => 1);
+    load.rate = applyRates(chains, safeRates);
+  } else {
+    chains = (previous.chains ?? []).map((chain, index) => {
     const at = (field) => `chains.${index}.${field}`;
     const next = { ...chain };
     next.name = value(at("name"));
@@ -1161,12 +1351,64 @@ export function readForm(form, previous) {
       readStep(step, `chains.${index}.steps.${stepIndex}`, value, numberAt, data)
     );
     return next;
-  });
+    });
+    const rawRates = chains.map((_, index) => value(`chains.${index}.rps`));
+    if (load.mode === "fixed" && rawRates.some((rate) => rate !== "")) {
+      load.rate = applyRates(
+        chains,
+        rawRates.map((rate) => Math.max(Number(rate) || 0, 0))
+      );
+    }
+  }
+
+  // Non-fixed shapes carry their own rates. Leaving a fixed rate beside them would
+  // make a number the engine ignores look authoritative.
+  if (load.mode !== "fixed") delete load.rate;
 
   const document = { ...previous, load, chains };
   if (Object.keys(phases).length) document.phases = phases;
   else delete document.phases;
   return document;
+}
+
+function readBasicChains(previous, value) {
+  const used = new Set();
+  return previous.map((chain, index) => {
+    const rawName = value(`basic.${index}.name`) || chain.name || `call-${index + 1}`;
+    let name = rawName;
+    let suffix = 2;
+    while (used.has(name)) name = `${rawName}-${suffix++}`;
+    used.add(name);
+    const call = value(`basic.${index}.call`) || chain.steps?.[0]?.call || "";
+    const previousStep = chain.steps?.[0] ?? {};
+    return {
+      ...chain,
+      name,
+      session: chain.session ?? "reuse",
+      steps: [{ ...previousStep, id: previousStep.id || name, call }],
+    };
+  });
+}
+
+/** Turn row RPS into the one total rate and percentages the engine stores. */
+function applyRates(chains, rates) {
+  const total = rates.reduce((sum, rate) => sum + rate, 0);
+  if (total <= 0) {
+    chains.forEach((chain) => {
+      chain.percent = 0;
+    });
+    return 0;
+  }
+  let assigned = 0;
+  chains.forEach((chain, index) => {
+    const percent =
+      index === chains.length - 1
+        ? 100 - assigned
+        : Math.round((rates[index] / total) * 1000000) / 10000;
+    chain.percent = percent;
+    assigned += percent;
+  });
+  return total;
 }
 
 function readStep(step, prefix, value, numberAt, data) {

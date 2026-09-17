@@ -323,6 +323,9 @@ def to_endpoints(
                 Endpoint(
                     id=balancer.id,
                     address=balancer.endpoint,
+                    addressing=(
+                        "alb" if balancer.attributes.get("type") == "application" else "elb"
+                    ),
                     host_header=host_header,
                     tls=Tls(enabled=balancer.attributes.get("protocol") in ("HTTPS", "TLS")),
                     load=True,
@@ -346,6 +349,11 @@ def to_endpoints(
             Endpoint(
                 id=host.id,
                 address=host.endpoint,
+                addressing=(
+                    "fargate"
+                    if host.attributes.get("launch_type", "").upper() == "FARGATE"
+                    else "ecs"
+                ),
                 host_header=host_header,
                 tls=tls or Tls(),
                 load=direct,

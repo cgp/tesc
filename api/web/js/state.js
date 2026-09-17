@@ -4,6 +4,11 @@
 const state = {
   health: null,
   route: null,
+  //: Uploaded plan sources and the one opened for inspection. The original source
+  //: is fetched only for its detail route; the list carries just parsed call counts.
+  schemas: [],
+  schemaDetail: null,
+  schemasReadAt: null,
   profiles: [],
   brokenProfiles: [],
   //: When the profile list was last read off disk. Shown next to the reload

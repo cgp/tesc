@@ -135,6 +135,8 @@ Nothing here requires the engine. Through A3 the product is a host-observation t
 - [x] **A4.3** — Plan editor: calls, chains, percentages with implied RPS, validation display
 - [x] **A4.4** — `POST /api/plans/generate` — calls from OpenAPI/WSDL, starter mix (§8)
 - [x] **A4.5** — Sweep comparison view (§17.6)
+- [x] **A4.6** — Stored schema-source library: upload and parse, list/view/delete, and the Schemas UI (§8.0)
+- [x] **A4.7** — Swagger 2.0 source adapter: direct structural parsing for plan generation and schema upload (§8.2)
 
 **Done when:** a run launched from the browser shows load and host metrics against one clock. **Met.** `POST /api/recordings` with a plan starts the observer, assembles the bundle from the profile as it resolves, and runs the engine against it; the engine's phases and its run identity land on the recording, and the run closes itself when the traffic stops.
 

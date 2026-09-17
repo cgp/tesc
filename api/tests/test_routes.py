@@ -225,14 +225,24 @@ class TestProfiles:
         document = {"name": "ghost", "endpoints": [{"id": "x", "address": "1.2.3.4:80"}]}
         assert client.put("/api/profiles/ghost", json=document).status_code == 404
 
-    def test_a_profile_cannot_be_renamed_by_editing_it(self, client) -> None:
-        """The name is part of a recording's series identity: a rename through the
-        editor would split one environment's history in two with no sign of it."""
+    def test_a_profile_can_be_renamed_by_editing_its_header(self, client) -> None:
+        """Renaming moves the file; historical recordings retain their stored name."""
         document = client.get("/api/profiles/staging/document").json()
         document["name"] = "staging-renamed"
         body = client.put("/api/profiles/staging", json=document)
-        assert body.status_code == 422
-        assert "does not match" in body.json()["detail"]
+        assert body.status_code == 200
+        assert body.json()["name"] == "staging-renamed"
+        assert client.get("/api/profiles/staging").status_code == 404
+        assert client.get("/api/profiles/staging-renamed").status_code == 200
+
+    def test_a_profile_cannot_be_renamed_over_an_existing_one(self, client) -> None:
+        document = client.get("/api/profiles/staging/document").json()
+        created = {**document, "name": "prod"}
+        assert client.post("/api/profiles", json=created).status_code == 201
+        document["name"] = "prod"
+        body = client.put("/api/profiles/staging", json=document)
+        assert body.status_code == 409
+        assert client.get("/api/profiles/staging").status_code == 200
 
     def test_deleting_a_profile(self, client) -> None:
         assert client.delete("/api/profiles/staging").status_code == 204

@@ -140,6 +140,7 @@ class TestToEndpoints:
 
         fargate, _ = to_endpoints(walked(), addressing="direct")
         assert {e.attributes["role"] for e in fargate} == {"task"}
+        assert {e.addressing for e in fargate} == {"fargate"}
 
     def test_a_resource_with_no_port_is_noted_rather_than_invented(self) -> None:
         inventory = walked("alb-ecs-ec2", "orders.example.com")

@@ -99,6 +99,7 @@ class TestLayout:
         for path in (
             config.config_file,
             config.profiles_dir,
+            config.schemas_dir,
             config.plans_dir,
             config.secrets_dir,
             config.runs_dir,
@@ -112,6 +113,7 @@ class TestLayout:
         config.ensure_layout()
         config.ensure_layout()  # must not raise on an existing tree
         assert config.profiles_dir.is_dir()
+        assert config.schemas_dir.is_dir()
         assert config.runs_dir.is_dir()
 
 

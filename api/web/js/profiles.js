@@ -10,8 +10,7 @@
 import { escape, targetLabel } from "./format.js";
 import { empty, icon } from "./ui.js";
 
-const ADDRESSING = ["load_balancer", "direct"];
-const TRANSPORTS = ["none", "ssh", "scrape"];
+const ADDRESSING = ["ip", "alb", "elb", "ecs", "fargate"];
 const GROUPS = ["cpu", "memory", "disk", "net", "process"];
 
 /** A profile with nothing filled in, and one endpoint: a profile needs at least one. */
@@ -19,14 +18,19 @@ export function blankDocument() {
   return {
     name: "",
     description: "",
-    addressing: "load_balancer",
     observe: { interval: "1s", collect: [...GROUPS] },
     endpoints: [blankEndpoint()],
   };
 }
 
 export function blankEndpoint() {
-  return { id: "", address: "", host_header: "", collect: { transport: "none" } };
+  return {
+    id: "",
+    addressing: "ip",
+    address: "",
+    host_header: "",
+    collect: { transport: "ssh" },
+  };
 }
 
 export function selectState(state) {
@@ -307,8 +311,9 @@ function profileCard(profile, state) {
            </span>`;
       return `<tr>
         <td class="name" title="${escape(endpoint.id)}">${escape(targetLabel(endpoint.id))}</td>
-        <td>${target}</td>
-        <td>${endpoint.host_header ? `<code>${escape(endpoint.host_header)}</code>` : "—"}</td>
+      <td>${addressingBadge(endpoint.addressing ?? "ip")}</td>
+      <td>${target}</td>
+      <td>${endpoint.host_header ? `<code>${escape(endpoint.host_header)}</code>` : "—"}</td>
         <td>${collection}</td>
       </tr>`;
     })
@@ -365,9 +370,10 @@ function profileCard(profile, state) {
       <table class="table card-table table-vcenter metrix-table">
         <thead><tr>
           <th style="width:14%">Endpoint</th>
+          <th style="width:12%">Addressing</th>
           <th style="width:17%">Load target</th>
           <th style="width:19%">Host header</th>
-          <th style="width:50%">Observed via</th>
+          <th style="width:38%">Observed via</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -393,16 +399,19 @@ function editor(draft) {
        </div>`
     : "";
 
-  return `<form class="metrix-stack" data-profile-form novalidate>
+  return `<form class="metrix-stack metrix-profile-editor" data-profile-form novalidate>
     ${error}
     <div class="card">
       <div class="card-header">
-        <div>
-          <h3 class="card-title">${creating ? "New profile" : escape(doc.name)}</h3>
-          <div class="card-subtitle">${
+        <div class="metrix-profile-title">
+          <label class="visually-hidden" for="f-name">Profile name</label>
+          <input class="form-control form-control-lg" id="f-name" name="name"
+                 value="${escape(doc.name ?? "")}" placeholder="profile-name"
+                 aria-label="Profile name" required>
+          <div class="card-subtitle mt-1">${
             creating
               ? "One environment: what to send traffic to, and what to watch."
-              : "The name is fixed — it is part of a recording's series identity."
+              : "Renaming starts a new series name; existing recordings keep the old one."
           }</div>
         </div>
         <div class="card-actions d-flex align-items-center gap-2">
@@ -414,112 +423,259 @@ function editor(draft) {
           </button>
         </div>
       </div>
-      <div class="card-body">
-        <div class="metrix-fields">
-          ${text("name", "Name", doc.name, {
-            required: true,
-            readonly: !creating,
-            hint: "Lowercase letters, digits and hyphens. Used as the filename.",
-          })}
-          ${select("addressing", "Addressing", ADDRESSING, doc.addressing, {
-            hint: "Part of series identity; the two measure different network paths.",
-          })}
-          ${text("observe.interval", "Sample interval", doc.observe?.interval ?? "1s", {
-            hint: 'A duration with units, like "1s" or "5s".',
-          })}
-          ${text("description", "Description", doc.description, {
-            wide: true,
-            hint: "Optional. Shown on this page and nowhere else.",
-          })}
+    </div>
+
+    <div class="metrix-profile-workspace">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h3 class="card-title">Endpoints</h3>
+            <div class="card-subtitle">Traffic destination and SSH observation per row.</div>
+          </div>
+          <div class="card-actions">
+            <button type="button" class="btn btn-sm btn-primary" data-action="endpoint-add">
+              ${icon("plus")} Add endpoint
+            </button>
+          </div>
         </div>
-        <div class="mt-3">
-          <div class="form-label">Collect</div>
-          <div class="d-flex flex-wrap gap-3">
-            ${GROUPS.map((group) => checkbox(group, doc.observe?.collect ?? [])).join("")}
+        <div class="table-responsive">
+          <table class="table card-table table-vcenter metrix-table metrix-endpoint-table">
+            <thead><tr>
+              <th style="width:14%">Endpoint</th>
+              <th style="width:12%">Addressing</th>
+              <th style="width:18%">Address</th>
+              <th style="width:18%">Host header</th>
+              <th style="width:27%">SSH target</th>
+              <th style="width:11%" class="text-end">Actions</th>
+            </tr></thead>
+            <tbody>${doc.endpoints
+              .map((endpoint, index, all) =>
+                endpointRow(endpoint, index, all, draft.endpointEdit)
+              )
+              .join("")}</tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card metrix-profile-settings">
+        <div class="card-header"><h3 class="card-title">Observation</h3></div>
+        <div class="card-body">
+          ${text("description", "Description", doc.description, {
+            hint: "Optional context for this environment.",
+          })}
+          <div class="mt-3">
+            ${text("observe.interval", "Sample interval", doc.observe?.interval ?? "1s", {
+              hint: 'A duration with units, like "1s" or "5s".',
+            })}
+          </div>
+          <div class="mt-3">
+            <div class="form-label">What is collected</div>
+            <div class="d-flex flex-column gap-2">
+              ${GROUPS.map((group) => checkbox(group, doc.observe?.collect ?? [])).join("")}
+            </div>
           </div>
         </div>
       </div>
     </div>
-
-    <div class="metrix-toolbar">
-      <p class="metrix-note text-secondary mb-0">
-        One entry per machine. <strong>Load target</strong> is where requests go;
-        <strong>observed via</strong> is a separate connection for host statistics,
-        and the host defaults to the load target's host when left blank.
-      </p>
-      <button type="button" class="btn" data-action="endpoint-add">
-        ${icon("plus")} Add endpoint
-      </button>
-    </div>
-
-    ${doc.endpoints.map(endpointCard).join("")}
   </form>`;
 }
 
-function endpointCard(endpoint, index, all) {
+function endpointRow(endpoint, index, all, editing) {
   const collect = endpoint.collect ?? { transport: "none" };
-  // A profile needs at least one endpoint, so the last one cannot be removed.
-  // Offering a button that only produces a validation error is worse than not
-  // offering it.
   const removable = all.length > 1;
   const p = (field) => `endpoints.${index}.${field}`;
+  const active = editing === index;
+  const mode = endpoint.addressing ?? "ip";
 
-  // Only the fields the chosen transport actually uses. A port box beside
-  // "not collected" invites someone to fill it in and wonder why nothing happens.
-  const transportFields =
-    collect.transport === "none"
-      ? ""
-      : `${text(p("collect.host"), "Collect from host", collect.host, {
-          hint: "Blank means the load target's host.",
-        })}
-         ${text(p("collect.port"), "Port", collect.port, {
-           hint: collect.transport === "ssh" ? "Blank means 22." : "Blank means 9100.",
-         })}
-         ${
-           collect.transport === "ssh"
-             ? text(p("collect.user"), "SSH user", collect.user, {
-                 hint: "Blank means whatever your SSH config resolves.",
-               })
-             : text(p("collect.path"), "Metrics path", collect.path ?? "/metrics", {
-                 hint: "Blank means /metrics.",
-               })
-         }`;
+  if (!active) {
+    return `<tr>
+      <td class="name">${escape(endpoint.id || `Endpoint ${index + 1}`)}</td>
+      <td>${addressingBadge(mode)}</td>
+      <td><code>${escape(endpoint.address || "—")}</code></td>
+      <td>${endpoint.host_header ? `<code>${escape(endpoint.host_header)}</code>` : "—"}</td>
+      <td>${sshTarget(collect, p, endpoint.address, false)}</td>
+      <td class="text-end">
+        ${endpointHiddenFields(endpoint, index)}
+        <button type="button" class="btn btn-sm btn-icon" data-action="endpoint-edit"
+                data-index="${index}" title="Edit endpoint" aria-label="Edit endpoint">
+          ${icon("pencil")}
+        </button>
+        ${removeButton(index, removable)}
+      </td>
+    </tr>`;
+  }
 
-  return `<div class="card">
-    <div class="card-header">
-      <h3 class="card-title">Endpoint ${index + 1}</h3>
-      <div class="card-actions">
-        ${
-          removable
-            ? `<button type="button" class="btn btn-sm btn-outline-danger"
-                       data-action="endpoint-remove" data-index="${index}">
-                 ${icon("trash")} Remove
-               </button>`
-            : `<span class="text-secondary">a profile needs at least one</span>`
-        }
-      </div>
-    </div>
-    <div class="card-body">
-      <div class="metrix-fields">
-        ${text(p("id"), "Endpoint id", endpoint.id, {
-          required: true,
-          hint: "How this machine is named in every chart and table.",
-        })}
-        ${text(p("address"), "Load target", endpoint.address, {
-          required: true,
-          hint: "host:port — where requests are sent.",
-        })}
-        ${text(p("host_header"), "Host header", endpoint.host_header, {
-          hint: "Required when addressing a container directly.",
-        })}
-        ${select(p("collect.transport"), "Observed via", TRANSPORTS, collect.transport, {
-          reload: true,
-          hint: "none means this endpoint takes load but reports no host statistics.",
-        })}
-        ${transportFields}
-      </div>
-    </div>
-  </div>`;
+  return `<tr class="metrix-endpoint-editing">
+    <td>${cellInput(p("id"), endpoint.id, "Endpoint id", true)}</td>
+    <td>${addressingSelect(p("addressing"), mode)}</td>
+    <td>${cellInput(p("address"), endpoint.address, "host:port", true)}</td>
+    <td>${cellInput(p("host_header"), endpoint.host_header, "Host header")}</td>
+    <td>${sshTarget(collect, p, endpoint.address, true)}</td>
+    <td class="text-end">
+      <button type="button" class="btn btn-sm btn-icon" data-action="endpoint-done"
+              title="Finish editing" aria-label="Finish editing">${icon("check")}</button>
+      ${removeButton(index, removable)}
+    </td>
+  </tr>`;
+}
+
+function addressingSelect(name, value) {
+  const labels = {
+    ip: "IP (direct)",
+    alb: "ALB",
+    elb: "ELB (classic manual)",
+    ecs: "ECS",
+    fargate: "FG (Fargate)",
+  };
+  return `<select class="form-select form-select-sm" name="${escape(name)}"
+                  aria-label="Addressing" title="${escape(addressingNote(value))}"
+                  data-change-action="draft-reload">
+    ${ADDRESSING.map((option) => `<option value="${option}"${option === value ? " selected" : ""}>
+      ${labels[option]}
+    </option>`).join("")}
+  </select>`;
+}
+
+function addressingBadge(value) {
+  const labels = { ip: "IP", alb: "ALB", elb: "ELB", ecs: "ECS", fargate: "FG" };
+  return `<span class="badge bg-blue-lt">${escape(labels[value] ?? value)}</span>`;
+}
+
+function addressingNote(value) {
+  const notes = {
+    ip: "Direct address; a Host header is required. ECS and Fargate discovery can resolve direct task addresses.",
+    alb: "ALB discovery is supported from a hostname.",
+    elb: "ELBv2/NLB discovery is supported; classic ELB must be entered explicitly.",
+    ecs: "ECS service discovery is supported.",
+    fargate: "Fargate task discovery is supported through ECS.",
+  };
+  return notes[value] ?? "This addressing kind must be entered explicitly.";
+}
+
+function cellInput(name, value, placeholder, required = false) {
+  return `<input class="form-control form-control-sm" name="${escape(name)}"
+                 value="${escape(value ?? "")}" placeholder="${escape(placeholder)}"
+                 aria-label="${escape(placeholder)}"${required ? " required" : ""}>`;
+}
+
+function removeButton(index, removable) {
+  return removable
+    ? `<button type="button" class="btn btn-sm btn-icon text-danger"
+               data-action="endpoint-remove" data-index="${index}"
+               title="Remove endpoint" aria-label="Remove endpoint">${icon("trash")}</button>`
+    : `<button type="button" class="btn btn-sm btn-icon" disabled
+               title="A profile needs one endpoint" aria-label="A profile needs one endpoint">
+         ${icon("trash")}
+       </button>`;
+}
+
+function sshTarget(collect, p, endpointAddress, editable) {
+  if (collect.transport !== "ssh") {
+    return `<span class="text-secondary">${escape(
+      collect.transport === "none" ? "Not observed" : `${collect.transport} (existing)`
+    )}</span>${hidden(p("collect.transport"), collect.transport)}${hidden(p("collect.host"), collect.host)}
+      ${hidden(p("collect.port"), collect.port)}${hidden(p("collect.user"), collect.user)}
+      ${hidden(p("collect.path"), collect.path)}`;
+  }
+  const destination = sshDestination(collect, endpointAddress);
+  return editable
+    ? `${hidden(p("collect.transport"), collect.transport)}${cellInput(
+        p("collect.ssh"),
+        destination,
+        "user@host:port"
+      )}`
+    : `${hidden(p("collect.transport"), collect.transport)}${hidden(
+        p("collect.ssh"),
+        destination
+      )}<code>${escape(destination || "—")}</code>`;
+}
+
+function endpointHiddenFields(endpoint, index) {
+  const collect = endpoint.collect ?? { transport: "none" };
+  const p = (field) => `endpoints.${index}.${field}`;
+  return [
+    hidden(p("id"), endpoint.id),
+    hidden(p("addressing"), endpoint.addressing ?? "ip"),
+    hidden(p("address"), endpoint.address),
+    hidden(p("host_header"), endpoint.host_header),
+    hidden(p("collect.transport"), collect.transport),
+    collect.transport === "ssh"
+      ? hidden(p("collect.ssh"), sshDestination(collect, endpoint.address))
+      : [
+          hidden(p("collect.host"), collect.host),
+          hidden(p("collect.port"), collect.port),
+          hidden(p("collect.user"), collect.user),
+        ].join(""),
+    hidden(p("collect.path"), collect.path),
+  ].join("");
+}
+
+/** The editor's compact spelling of the three fields the profile document stores. */
+export function sshDestination(collect, endpointAddress = "") {
+  const rawHost = collect.host ?? endpointHost(endpointAddress);
+  const host = rawHost.includes(":") && !rawHost.startsWith("[")
+    ? `[${rawHost}]`
+    : rawHost;
+  const user = collect.user ? `${collect.user}@` : "";
+  const resolvedPort = collect.port ?? (rawHost ? 22 : null);
+  const port = resolvedPort != null ? `:${resolvedPort}` : "";
+  return `${user}${host}${port}`;
+}
+
+function endpointHost(address) {
+  const value = String(address ?? "");
+  if (value.startsWith("[")) {
+    const close = value.indexOf("]");
+    return close >= 0 ? value.slice(1, close) : value;
+  }
+  const colon = value.lastIndexOf(":");
+  return colon >= 0 ? value.slice(0, colon) : value;
+}
+
+/**
+ * Split user@host:port without mistaking a bracketed IPv6 address for a port.
+ * Every component is optional; an omitted value keeps the collector's default.
+ */
+export function parseSshDestination(raw) {
+  let destination = String(raw ?? "").trim();
+  if (!destination) return {};
+
+  let user;
+  const at = destination.lastIndexOf("@");
+  if (at >= 0) {
+    user = destination.slice(0, at) || undefined;
+    destination = destination.slice(at + 1);
+  }
+
+  let host = destination;
+  let port;
+  if (destination.startsWith("[")) {
+    const close = destination.indexOf("]");
+    if (close >= 0) {
+      host = destination.slice(1, close);
+      const suffix = destination.slice(close + 1);
+      if (/^:\d+$/.test(suffix)) port = Number(suffix.slice(1));
+    }
+  } else {
+    const colon = destination.lastIndexOf(":");
+    const suffix = colon >= 0 ? destination.slice(colon + 1) : "";
+    if (/^\d+$/.test(suffix)) {
+      host = destination.slice(0, colon);
+      port = Number(suffix);
+    }
+  }
+
+  return {
+    ...(user ? { user } : {}),
+    ...(host ? { host } : {}),
+    ...(port != null ? { port } : {}),
+  };
+}
+
+function hidden(name, value) {
+  return value == null || value === ""
+    ? ""
+    : `<input type="hidden" name="${escape(name)}" value="${escape(value)}">`;
 }
 
 /* ------------------------------------------------------------------ controls */
@@ -579,9 +735,10 @@ export function readForm(form, previous) {
 
   const doc = {
     name: value("name"),
-    addressing: value("addressing"),
     endpoints: [],
   };
+  if (previous.order) doc.order = previous.order;
+  if (previous.gap) doc.gap = previous.gap;
   if (value("description")) doc.description = value("description");
 
   const observe = {};
@@ -592,17 +749,43 @@ export function readForm(form, previous) {
 
   for (let i = 0; i < previous.endpoints.length; i += 1) {
     const at = (field) => value(`endpoints.${i}.${field}`);
-    const endpoint = { id: at("id"), address: at("address") };
+    const original = previous.endpoints[i] ?? {};
+    const endpoint = {
+      id: at("id"),
+      addressing: at("addressing") || "ip",
+      address: at("address"),
+    };
     if (at("host_header")) endpoint.host_header = at("host_header");
+    if (original.load === false) endpoint.load = false;
+    if (original.tls) endpoint.tls = original.tls;
+    if (original.attributes) endpoint.attributes = original.attributes;
 
     const transport = at("collect.transport") || "none";
     const collection = { transport };
     if (transport !== "none") {
-      if (at("collect.host")) collection.host = at("collect.host");
-      // A port is a number to the server; "" would be a type error, not a default.
-      if (at("collect.port")) collection.port = Number(at("collect.port"));
-      if (transport === "ssh" && at("collect.user")) collection.user = at("collect.user");
-      if (transport === "scrape" && at("collect.path")) collection.path = at("collect.path");
+      if (transport === "ssh") {
+        const typed = at("collect.ssh");
+        const unchanged = typed === sshDestination(original.collect ?? {}, original.address);
+        if (unchanged) {
+          // What the row initially displayed included resolved defaults. If only the
+          // endpoint address changed, keep those defaults implicit so SSH follows it.
+          for (const key of ["user", "host", "port"]) {
+            if (original.collect?.[key] != null) collection[key] = original.collect[key];
+          }
+        } else {
+          const ssh = parseSshDestination(typed);
+          const defaultHost = endpointHost(endpoint.address);
+          if (ssh.user) collection.user = ssh.user;
+          if (ssh.host && ssh.host !== defaultHost) collection.host = ssh.host;
+          if (ssh.port != null && ssh.port !== 22) collection.port = ssh.port;
+        }
+      } else {
+        if (at("collect.host")) collection.host = at("collect.host");
+        // A port is a number to the server; "" would be a type error, not a default.
+        if (at("collect.port")) collection.port = Number(at("collect.port"));
+        if (at("collect.path")) collection.path = at("collect.path");
+      }
+      if (original.collect?.key) collection.key = original.collect.key;
     }
     endpoint.collect = collection;
     doc.endpoints.push(endpoint);

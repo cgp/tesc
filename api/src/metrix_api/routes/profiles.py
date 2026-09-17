@@ -56,6 +56,7 @@ def _summary(profile: profiles.Profile) -> dict[str, Any]:
         "endpoints": [
             {
                 "id": e.id,
+                "addressing": e.addressing,
                 "address": e.address,
                 "host_header": e.host_header,
                 "load": e.load,
@@ -310,16 +311,24 @@ def create_profile(
 def replace_profile(
     name: str, document: Any = Body(...), config: Config = Depends(get_config)
 ) -> dict[str, Any]:
-    """Replace a profile in place. The name is fixed.
+    """Replace a profile, moving its file when the submitted name changed.
 
-    A profile's name is part of a recording's series identity, so renaming one would
-    silently split its history in two. Renaming is a copy and a delete, done
-    deliberately, not a side effect of editing an endpoint.
+    Historical recordings deliberately keep the old name. Future recordings use
+    the new one and therefore begin a new series identity.
     """
-    if not profiles.profile_path(config, name).is_file():
+    old_path = profiles.profile_path(config, name)
+    if not old_path.is_file():
         raise HTTPException(status_code=404, detail=f"no profile named {name!r}")
-    profile = _validated(document, name=name)
+    profile = _validated(document)
+    new_path = profiles.profile_path(config, profile.name)
+    if profile.name != name and new_path.exists():
+        raise HTTPException(
+            status_code=409,
+            detail=f"a profile named {profile.name!r} already exists; choose another name",
+        )
     profiles.save_profile(config, profile)
+    if profile.name != name:
+        old_path.unlink()
     return _summary(profile)
 
 

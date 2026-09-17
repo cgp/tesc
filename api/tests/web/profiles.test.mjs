@@ -24,7 +24,23 @@ Object.defineProperty(globalThis, "document", {
   },
 });
 
-const { render } = await import("../../web/js/profiles.js");
+class FakeFormData {
+  constructor(form) {
+    this.fields = form.fields;
+  }
+  get(name) {
+    const value = this.fields[name];
+    return Array.isArray(value) ? value[0] : (value ?? null);
+  }
+  getAll(name) {
+    const value = this.fields[name];
+    return value == null ? [] : [].concat(value);
+  }
+}
+Object.defineProperty(globalThis, "FormData", { configurable: true, value: FakeFormData });
+
+const { parseSshDestination, readForm, render, sshDestination } =
+  await import("../../web/js/profiles.js");
 
 const PROFILE = {
   name: "staging",
@@ -34,6 +50,7 @@ const PROFILE = {
   endpoints: [
     {
       id: "alb",
+      addressing: "alb",
       address: "10.0.1.9:443",
       host_header: "api.example.com",
       load: true,
@@ -43,6 +60,7 @@ const PROFILE = {
     },
     {
       id: "task/3f1c5a7e9b2d4c6f8a0b1c2d3e4f5a6b",
+      addressing: "fargate",
       address: "10.0.11.21:8080",
       host_header: "api.example.com",
       load: false,
@@ -170,4 +188,143 @@ test("a failing detail from the API is escaped, not interpreted", () => {
   );
   assert.match(markup, /&lt;script&gt;/);
   assert.doesNotMatch(markup, /<script>/);
+});
+
+test("the editor puts the editable name in the header and endpoints in a table", () => {
+  const markup = render(
+    state({
+      profileDraft: {
+        mode: "edit",
+        name: "staging",
+        endpointEdit: 0,
+        error: null,
+        doc: {
+          name: "staging",
+          description: "Customer-facing environment",
+          observe: { interval: "1s", collect: ["cpu", "memory"] },
+          endpoints: [
+            {
+              id: "edge",
+              addressing: "elb",
+              address: "edge.example.com:443",
+              collect: { transport: "ssh", user: "deploy" },
+            },
+          ],
+        },
+      },
+    })
+  );
+
+  assert.match(markup, /class="metrix-profile-title"/);
+  assert.match(markup, /name="name"[^>]*value="staging"/);
+  assert.match(markup, /metrix-endpoint-table/);
+  assert.match(markup, />SSH target</);
+  assert.match(markup, /data-action="endpoint-add"/);
+  assert.match(markup, /data-action="endpoint-done"/);
+  assert.match(markup, /classic ELB must be entered explicitly/);
+  assert.match(markup, /name="endpoints\.0\.collect\.ssh"/);
+  assert.match(markup, /value="deploy@edge\.example\.com:22"/);
+  assert.doesNotMatch(markup, /SSH host \(optional\)|SSH user \(optional\)|Port \(22\)/);
+  assert.doesNotMatch(markup, /metrix-endpoint-detail/);
+  assert.match(markup, /metrix-profile-settings/);
+  assert.match(markup, /What is collected/);
+  assert.doesNotMatch(markup, />Name<span/);
+});
+
+test("an endpoint display row has edit and remove actions", () => {
+  const markup = render(
+    state({
+      profileDraft: {
+        mode: "edit",
+        name: "staging",
+        endpointEdit: null,
+        error: null,
+        doc: {
+          name: "staging",
+          endpoints: [
+            { id: "a", addressing: "alb", address: "a.example.com:443", collect: { transport: "ssh" } },
+            { id: "b", addressing: "ecs", address: "10.0.0.2:8080", collect: { transport: "ssh" } },
+          ],
+        },
+      },
+    })
+  );
+  assert.equal((markup.match(/data-action="endpoint-edit"/g) ?? []).length, 2);
+  assert.equal((markup.match(/data-action="endpoint-remove"/g) ?? []).length, 2);
+});
+
+test("one SSH destination round-trips to the profile's separate fields", () => {
+  const previous = {
+    name: "staging",
+    endpoints: [
+      {
+        id: "edge",
+        addressing: "ip",
+        address: "10.0.0.8:8080",
+        host_header: "api.example.com",
+        collect: { transport: "ssh" },
+      },
+    ],
+  };
+  const next = readForm(
+    {
+      fields: {
+        name: "staging",
+        "endpoints.0.id": "edge",
+        "endpoints.0.addressing": "ip",
+        "endpoints.0.address": "10.0.0.8:8080",
+        "endpoints.0.host_header": "api.example.com",
+        "endpoints.0.collect.transport": "ssh",
+        "endpoints.0.collect.ssh": "deploy@bastion.example.com:2222",
+      },
+    },
+    previous
+  );
+  assert.deepEqual(next.endpoints[0].collect, {
+    transport: "ssh",
+    user: "deploy",
+    host: "bastion.example.com",
+    port: 2222,
+  });
+});
+
+test("the compact SSH spelling handles defaults and bracketed IPv6", () => {
+  assert.equal(
+    sshDestination({ transport: "ssh", user: "ops" }, "[2001:db8::7]:8080"),
+    "ops@[2001:db8::7]:22"
+  );
+  assert.deepEqual(parseSshDestination("ops@[2001:db8::7]:2200"), {
+    user: "ops",
+    host: "2001:db8::7",
+    port: 2200,
+  });
+  assert.deepEqual(parseSshDestination(""), {});
+});
+
+test("changing the endpoint address keeps implicit SSH defaults implicit", () => {
+  const previous = {
+    name: "staging",
+    endpoints: [
+      {
+        id: "edge",
+        addressing: "alb",
+        address: "old.example.com:443",
+        collect: { transport: "ssh", user: "deploy" },
+      },
+    ],
+  };
+  const next = readForm(
+    {
+      fields: {
+        name: "staging",
+        "endpoints.0.id": "edge",
+        "endpoints.0.addressing": "alb",
+        "endpoints.0.address": "new.example.com:443",
+        "endpoints.0.collect.transport": "ssh",
+        "endpoints.0.collect.ssh": "deploy@old.example.com:22",
+      },
+    },
+    previous
+  );
+  assert.deepEqual(next.endpoints[0].collect, { transport: "ssh", user: "deploy" });
 });

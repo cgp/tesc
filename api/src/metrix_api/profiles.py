@@ -32,9 +32,11 @@ from metrix_api.config import Config, format_duration, parse_duration
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _ADDRESS = re.compile(r"^(?P<host>\[[0-9a-fA-F:]+\]|[^:\s]+):(?P<port>\d{1,5})$")
 
-#: Through the load balancer, or straight at one container. Part of series identity:
-#: the two measure different network paths and are never compared.
+#: Legacy profile-wide discovery choices. Explicit endpoints now classify their own
+#: network path; these remain for old files and for choosing which discovery result
+#: receives traffic.
 ADDRESSING = ("load_balancer", "direct")
+ENDPOINT_ADDRESSING = ("ip", "alb", "elb", "ecs", "fargate")
 TRANSPORTS = ("ssh", "scrape", "none")
 
 
@@ -102,6 +104,9 @@ class Discover:
 class Endpoint:
     id: str
     address: str
+    #: How this concrete address is reached. Metadata for the API and series
+    #: identity; the engine still receives only `address`.
+    addressing: str = "ip"
     #: Sent as Host, and used for SNI. Required when addressing a container directly:
     #: most services vhost on it, and a raw IP gets a 404 or a default backend.
     host_header: str | None = None
@@ -146,7 +151,10 @@ class Profile:
     #: `discover` block and no endpoints has simply not been resolved yet.
     endpoints: list[Endpoint]
     description: str = ""
-    addressing: str = "load_balancer"
+    #: Discovery path for discovered profiles; the broad network-path class derived
+    #: from endpoint kinds for explicit profiles. Kept in the two-value recording
+    #: contract so old and new recordings remain comparable.
+    addressing: str = "ip"
     discover: Discover | None = None
     #: Sweep defaults. Shuffling decouples results from position, since the first
     #: target pays cold-cache costs on shared dependencies that the rest do not.
@@ -280,8 +288,10 @@ def to_document(profile: Profile) -> dict[str, Any]:
     doc: dict[str, Any] = {"name": profile.name}
     if profile.description:
         doc["description"] = profile.description
-    doc["addressing"] = profile.addressing
     if profile.discover is not None:
+        # Discovery still needs to choose which resolved tier receives traffic.
+        # Explicit endpoint documents carry this choice on each row instead.
+        doc["addressing"] = profile.addressing
         doc["discover"] = _discover_document(profile.discover)
     if profile.order != "as_resolved":
         doc["order"] = profile.order
@@ -300,7 +310,11 @@ def to_document(profile: Profile) -> dict[str, Any]:
     # them back would freeze one resolution into a document that asks for a fresh one.
     doc["endpoints"] = []
     for endpoint in profile.endpoints if profile.discover is None else ():
-        entry: dict[str, Any] = {"id": endpoint.id, "address": endpoint.address}
+        entry: dict[str, Any] = {
+            "id": endpoint.id,
+            "addressing": endpoint.addressing,
+            "address": endpoint.address,
+        }
         if endpoint.host_header:
             entry["host_header"] = endpoint.host_header
         if not endpoint.load:
@@ -419,7 +433,9 @@ def parse_profile(
         # same profile answer to two names.
         raise ProfileError(f"{where}: name {declared!r} does not match the filename {name!r}")
 
-    addressing = _choice(raw.get("addressing", "load_balancer"), ADDRESSING, f"{where}: addressing")
+    legacy_addressing = _choice(
+        raw.get("addressing", "load_balancer"), ADDRESSING, f"{where}: addressing"
+    )
 
     observe = raw.get("observe", {})
     if not isinstance(observe, dict):
@@ -427,7 +443,9 @@ def parse_profile(
     _reject_unknown(observe, {"interval", "collect"}, f"{where}: observe")
 
     discover = (
-        _discover(raw["discover"], addressing, f"{where}: discover") if "discover" in raw else None
+        _discover(raw["discover"], legacy_addressing, f"{where}: discover")
+        if "discover" in raw
+        else None
     )
 
     endpoints_raw = raw.get("endpoints") or []
@@ -440,7 +458,7 @@ def parse_profile(
         )
 
     endpoints = [
-        _endpoint(entry, addressing, f"{where}: endpoints[{i}]")
+        _endpoint(entry, legacy_addressing, f"{where}: endpoints[{i}]")
         for i, entry in enumerate(endpoints_raw)
     ]
 
@@ -456,7 +474,11 @@ def parse_profile(
     return Profile(
         name=str(declared),
         description=str(raw.get("description", "")),
-        addressing=addressing,
+        addressing=(
+            legacy_addressing
+            if discover is not None
+            else _addressing_identity(endpoints)
+        ),
         discover=discover,
         order=_choice(
             raw.get("order", "as_resolved"), ("as_resolved", "shuffle"), f"{where}: order"
@@ -476,7 +498,18 @@ def _endpoint(raw: Any, addressing: str, where: str) -> Endpoint:
     if not isinstance(raw, dict):
         raise ProfileError(f"{where}: must be an object")
     _reject_unknown(
-        raw, {"id", "address", "host_header", "load", "tls", "attributes", "collect"}, where
+        raw,
+        {
+            "id",
+            "addressing",
+            "address",
+            "host_header",
+            "load",
+            "tls",
+            "attributes",
+            "collect",
+        },
+        where,
     )
 
     for required in ("id", "address"):
@@ -490,23 +523,36 @@ def _endpoint(raw: Any, addressing: str, where: str) -> Endpoint:
     if not 1 <= port <= 65535:
         raise ProfileError(f"{where}: port {port} is out of range")
 
+    endpoint_addressing = _choice(
+        raw.get("addressing", "ip" if addressing == "direct" else "alb"),
+        ENDPOINT_ADDRESSING,
+        f"{where}: addressing",
+    )
     host_header = raw.get("host_header")
-    if addressing == "direct" and not host_header:
+    if endpoint_addressing == "ip" and not host_header:
         # Getting this wrong produces a plausible-looking test of nothing.
         raise ProfileError(
-            f"{where}: addressing is 'direct', so host_header is required -- most services "
+            f"{where}: addressing is 'ip' (direct), so host_header is required -- most services "
             "route on it and a raw address gets a 404 or a default backend"
         )
 
     return Endpoint(
         id=str(raw["id"]),
         address=address,
+        addressing=endpoint_addressing,
         host_header=str(host_header) if host_header else None,
         load=bool(raw.get("load", True)),
         tls=_tls(raw.get("tls", {}), f"{where}: tls"),
         attributes={str(k): str(v) for k, v in raw.get("attributes", {}).items()},
         collect=_collect(raw.get("collect", {}), f"{where}: collect"),
     )
+
+
+def _addressing_identity(endpoints: list[Endpoint]) -> str:
+    """Map detailed endpoint kinds onto the recording's established path classes."""
+    targets = [endpoint for endpoint in endpoints if endpoint.load] or endpoints
+    kinds = {endpoint.addressing for endpoint in targets}
+    return "load_balancer" if kinds & {"alb", "elb"} else "direct"
 
 
 def _discover(raw: Any, addressing: str, where: str) -> Discover:

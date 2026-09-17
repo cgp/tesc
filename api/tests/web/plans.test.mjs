@@ -45,7 +45,7 @@ class FakeFormData {
 }
 Object.defineProperty(globalThis, "FormData", { configurable: true, value: FakeFormData });
 
-const { render, readDescribe, readForm, shareFromRate, verdict } =
+const { basicCompatible, render, readDescribe, readForm, shareFromRate, verdict } =
   await import("../../web/js/plans.js");
 
 const FIGURES = {
@@ -162,8 +162,8 @@ function editorState(patch = {}) {
   };
 }
 
-function form(fields) {
-  return { fields };
+function form(fields, dataset = {}) {
+  return { fields, dataset };
 }
 
 test("a chain's share is shown as the requests it actually buys", () => {
@@ -172,6 +172,87 @@ test("a chain's share is shown as the requests it actually buys", () => {
   // quantity anybody can judge, which is the reason both are on the row.
   assert.match(markup, /200 req\/s/);
   assert.match(markup, /12,000/);
+});
+
+test("the editor keeps the chain mix primary and puts load controls beside it", () => {
+  const markup = render(editorState());
+  assert.match(markup, /class="metrix-plan-workspace"/);
+  assert.match(markup, /metrix-chain-fields/);
+  assert.match(markup, /metrix-load-fields/);
+  assert.ok(markup.indexOf("<h3 class=\"card-title\">Chains") < markup.indexOf("<h3 class=\"card-title\">Load"));
+});
+
+test("a single-call fixed plan opens as a Basic table", () => {
+  const state = editorState();
+  state.planDraft.editorMode = "basic";
+  state.planDraft.doc = {
+    ...DOC,
+    chains: [{ ...DOC.chains[0], steps: [DOC.chains[0].steps[0]] }],
+  };
+  state.planCheck = {
+    ready: true,
+    problems: [],
+    figures: {
+      ...FIGURES,
+      requests: 6000,
+      chains: [{ ...FIGURES.chains[0], steps: 1, requests_per_s: 100, requests: 6000 }],
+    },
+  };
+  const markup = render(state);
+  assert.match(markup, /class="table card-table table-vcenter metrix-basic-table"/);
+  assert.match(markup, /name="basic\.0\.rps"/);
+  assert.match(markup, /Request type/);
+  assert.match(markup, /data-mode="advanced"/);
+});
+
+test("Basic only accepts shapes it can preserve", () => {
+  const calls = editorState().planDraft.detail.call_details;
+  assert.equal(basicCompatible(DOC, calls), false);
+  assert.equal(
+    basicCompatible(
+      { ...DOC, chains: [{ ...DOC.chains[0], steps: [DOC.chains[0].steps[0]] }] },
+      calls
+    ),
+    true
+  );
+});
+
+test("Basic RPS derives a valid rate and exact percentage total below 75 RPS", () => {
+  const previous = {
+    ...DOC,
+    chains: [
+      { name: "search", percent: 50, session: "reuse", steps: [{ id: "search", call: "search" }] },
+      { name: "add", percent: 50, session: "reuse", steps: [{ id: "add", call: "add" }] },
+    ],
+  };
+  const next = readForm(
+    form(
+      {
+        "load.mode": "fixed",
+        "load.duration": "60s",
+        "basic.0.name": "search",
+        "basic.0.call": "search",
+        "basic.0.rps": "10",
+        "basic.1.name": "add",
+        "basic.1.call": "add",
+        "basic.1.rps": "20",
+      },
+      { editorMode: "basic" }
+    ),
+    previous
+  );
+  assert.equal(next.load.rate, 30);
+  assert.equal(next.chains[0].percent + next.chains[1].percent, 100);
+  assert.equal(next.chains[0].steps.length, 1);
+  assert.equal(next.chains[1].steps[0].call, "add");
+});
+
+test("Load hides model and editable total RPS in both editor modes", () => {
+  const markup = render(editorState());
+  assert.doesNotMatch(markup, /name="load\.model"/);
+  assert.doesNotMatch(markup, /name="load\.rate"/);
+  assert.match(markup, /stages \(not implemented\)/);
+  assert.match(markup, /breakpoint \(not implemented\)/);
 });
 
 test("the list says which plans can run without opening each one", () => {
@@ -255,7 +336,6 @@ test("reading the form back keeps every field the form does not draw", () => {
     form({
       "load.mode": "fixed",
       "load.model": "open",
-      "load.rate": "150",
       "load.duration": "90s",
       "phases.baseline": "0s",
       "phases.settle": "0s",
@@ -275,7 +355,7 @@ test("reading the form back keeps every field the form does not draw", () => {
   assert.equal(next.version, 1);
   // And a step keeps what its row does not show, too.
   assert.equal(next.chains[0].steps[1].delay_ms, 250);
-  assert.equal(next.load.rate, 150);
+  assert.equal(next.load.rate, 100);
   assert.equal(next.load.duration, "90s");
 });
 
@@ -433,7 +513,7 @@ test("the bundle says when the form has moved on from the stored plan", () => {
 
 test("the generator offers every source and says what each one knows", () => {
   const markup = render(listState({ planNew: { mode: "create", source: "openapi" } }));
-  for (const source of ["openapi", "wsdl", "har", "access_log", "routes"]) {
+  for (const source of ["openapi", "swagger", "wsdl", "har", "access_log", "routes"]) {
     assert.match(markup, new RegExp(`value="${source}"`));
   }
   // The difference that matters is not the file format: two of these counted real

@@ -11,9 +11,9 @@ resolved `$METRIX_HOME` they are read from.
 The editor and the files are the same thing. It submits a whole document to the
 same validator a hand-written file goes through, and writes the file back in the
 form shown below — so a profile can be started in the editor and finished in an
-editor of your own, or the reverse. The one thing it will not do is rename: a
-profile's name is part of a recording's series identity, so renaming one would
-split its history in two. Copy and delete, deliberately, if that is what you want.
+editor of your own, or the reverse. Renaming moves the file. Existing recordings
+keep the old profile name, while future recordings begin a new series under the new
+name.
 
 A profile that will not parse is listed with its error rather than hidden, but it
 cannot be opened in the editor — there is nothing valid to load. Fix the file.
@@ -98,11 +98,11 @@ starting a recording.
 ```json
 {
   "name": "local",
-  "addressing": "load_balancer",
   "observe": { "interval": "1s", "collect": ["cpu", "memory", "disk", "net"] },
   "endpoints": [
     {
       "id": "localhost",
+      "addressing": "ip",
       "address": "127.0.0.1:8080",
       "collect": { "transport": "scrape", "port": 9100, "path": "/metrics" }
     }
@@ -118,11 +118,11 @@ host. Port 8080 is never inspected for anything but responses.
 ```json
 {
   "name": "staging",
-  "addressing": "direct",
   "observe": { "interval": "1s", "collect": ["cpu", "memory", "net"] },
   "endpoints": [
     {
       "id": "nginx",
+      "addressing": "ip",
       "address": "10.0.1.10:443",
       "host_header": "staging.example.com",
       "tls": { "enabled": true },
@@ -130,6 +130,7 @@ host. Port 8080 is never inspected for anything but responses.
     },
     {
       "id": "app-1",
+      "addressing": "ip",
       "address": "10.0.3.41:8080",
       "host_header": "staging.example.com",
       "collect": { "transport": "ssh", "user": "ec2-user" }
@@ -147,6 +148,7 @@ saturates while the backend idles is exactly the shape this is meant to show.
 ```json
 {
   "id": "alb",
+  "addressing": "alb",
   "address": "10.0.1.9:443",
   "host_header": "staging.example.com",
   "collect": { "transport": "none" }
@@ -204,10 +206,16 @@ Which AWS profile and region to use is `[aws]` in `config.toml`.
 
 ## Addressing
 
-`addressing` is `load_balancer` or `direct`, and it is part of a recording's series
-identity — the two measure different network paths and are never compared against
-each other. Set it to `direct` when the addresses are individual containers or
-instances rather than a balancer in front of them.
+Each endpoint has an `addressing` value: `ip`, `alb`, `elb`, `ecs`, or `fargate`.
+It classifies the network path represented by the concrete `address`; the engine
+still receives only `host:port`. ALB and ELB endpoints produce the
+`load_balancer` series class; IP, ECS, and Fargate produce `direct`, so a run through
+a balancer is not compared with one sent straight to a task.
+
+Discovery supports ALB/NLB through ELBv2, ECS, and Fargate tasks. Classic ELB is
+explicit-only. Legacy files may still put `"addressing": "load_balancer"` or
+`"addressing": "direct"` at profile level; the loader maps that value onto endpoints
+and writes the endpoint form the next time the profile is saved.
 
 Addressing a container directly usually needs `host_header`: most services vhost on
 it, and a raw IP gets a 404 or a default backend.
@@ -234,8 +242,9 @@ Profiles page counts both — *1 sent to · 3 of 4 observed* — and shows a wat
 address muted, so a column headed **Load target** never claims something it should
 not.
 
-Discovery sets this for you from `addressing`: with `load_balancer` the balancer
-takes the traffic, with `direct` the boxes do.
+Discovery sets this for you from its legacy profile-level path choice: with
+`load_balancer` the balancer takes the traffic, with `direct` the boxes do. Resolved
+endpoints are labelled with the concrete kind that discovery found.
 
 ## Checking a profile before trusting it
 

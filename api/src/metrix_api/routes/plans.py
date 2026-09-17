@@ -74,7 +74,7 @@ class Generate(BaseModel):
     """A service description, and what to call the plan made from it."""
 
     name: str
-    source: str = Field(description="openapi, wsdl, har, access_log or routes")
+    source: str = Field(description="openapi, swagger, wsdl, har, access_log or routes")
     content: str = Field(description="The document itself, not a URL to fetch it from")
     save: bool = True
 

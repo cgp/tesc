@@ -13,6 +13,7 @@ import { bytes as formatBytes, count, escape } from "./format.js";
 import * as plans from "./plans.js";
 import * as profiles from "./profiles.js";
 import * as recordings from "./recordings.js";
+import * as schemas from "./schemas.js";
 import * as series from "./series.js";
 import { get, set, subscribe } from "./state.js";
 import * as stream from "./stream.js";
@@ -27,6 +28,12 @@ const ROUTES = {
     title: "Config",
     subtitle: "What this process is, and where it keeps what it records.",
     view: config,
+  },
+  schemas: {
+    section: "Setup",
+    title: "Schemas",
+    subtitle: "Uploaded service descriptions, parsed into the calls they define.",
+    view: schemas,
   },
   profiles: {
     section: "Setup",
@@ -119,6 +126,9 @@ function parseHash() {
   const parts = path.split("/").filter(Boolean);
 
   if (parts[0] === "config") return { name: "config" };
+  if (parts[0] === "schemas") {
+    return { name: "schemas", schema: parts[1] ? decodeURIComponent(parts[1]) : null };
+  }
   if (parts[0] === "profiles") return { name: "profiles" };
   // The plan being edited is in the hash, so an editor can be linked to and reopened
   // where it was. What is typed into it is not -- that is work in progress.
@@ -159,6 +169,11 @@ async function load(route) {
   set({ error: null });
   try {
     if (route.name === "config") return;
+
+    if (route.name === "schemas") {
+      await loadSchemas(route.schema);
+      return;
+    }
 
     if (route.name === "profiles") {
       await loadProfiles();
@@ -306,6 +321,12 @@ async function loadProfiles() {
   set({ profiles: rows, brokenProfiles: broken, profilesReadAt: Date.now() });
 }
 
+async function loadSchemas(entryId = null) {
+  const listed = await api.schemas();
+  const schemaDetail = entryId ? await api.schema(entryId) : null;
+  set({ schemas: listed.schemas, schemaDetail, schemasReadAt: Date.now() });
+}
+
 /**
  * The plan directory, and the profiles a bundle could be assembled against.
  *
@@ -338,6 +359,10 @@ async function openPlan(name) {
       planDraft: {
         name,
         doc,
+        editorMode:
+          detail.ready && plans.basicCompatible(doc, detail.call_details)
+            ? "basic"
+            : "advanced",
         // What is on disk, kept beside what is being typed: a bundle is assembled
         // from the stored plan, and the page has to be able to say when the two have
         // come apart.
@@ -714,6 +739,7 @@ async function onRouteChange() {
   // reappearing later over a profile the person had stopped thinking about.
   set({
     route,
+    ...(route.name === "schemas" ? {} : { schemaDetail: null }),
     ...(route.name === "profiles" ? {} : { profileDraft: null }),
     // Leaving the page abandons the draft, for the same reason: an editor that
     // reappears later over a plan somebody had stopped thinking about is worse than
@@ -783,7 +809,15 @@ function editDraft(change) {
 }
 
 function newProfile() {
-  set({ profileDraft: { mode: "create", name: null, doc: profiles.blankDocument(), error: null } });
+  set({
+    profileDraft: {
+      mode: "create",
+      name: null,
+      doc: profiles.blankDocument(),
+      endpointEdit: 0,
+      error: null,
+    },
+  });
 }
 
 async function editProfile(name) {
@@ -792,7 +826,7 @@ async function editProfile(name) {
     // to be what is saved back, or a round trip would quietly drop fields the
     // summary does not carry.
     const doc = await api.profileDocument(name);
-    set({ profileDraft: { mode: "edit", name, doc, error: null } });
+    set({ profileDraft: { mode: "edit", name, doc, endpointEdit: null, error: null } });
   } catch (error) {
     set({ error: error.message });
   }
@@ -1086,6 +1120,58 @@ async function deleteProfile(name) {
   }
 }
 
+async function uploadSchemaFiles(files, source, form) {
+  if (!files.length) {
+    set({ error: "Choose a schema file to upload." });
+    return;
+  }
+  const button = form.querySelector('button[type="submit"]');
+  const zone = form.querySelector("[data-schema-drop-zone]");
+  button.disabled = true;
+  zone.classList.add("is-uploading");
+  try {
+    const results = await Promise.allSettled(
+      files.map(async (file) =>
+        api.uploadSchema({ filename: file.name, source, content: await file.text() })
+      )
+    );
+    const uploaded = results.filter((result) => result.status === "fulfilled").map((result) => result.value);
+    const failed = results
+      .flatMap((result, index) =>
+        result.status === "rejected" ? [`${files[index].name}: ${result.reason.message}`] : []
+      );
+    form.elements.file.value = "";
+    if (uploaded.length) await loadSchemas();
+    if (failed.length) {
+      set({ error: `Some files were not uploaded: ${failed.join("; ")}` });
+    } else {
+      notify(`Uploaded ${uploaded.map((entry) => entry.filename).join(", ")}.`);
+    }
+  } catch (error) {
+    set({ error: error.message });
+  } finally {
+    button.disabled = false;
+    zone.classList.remove("is-uploading");
+  }
+}
+
+async function deleteSchema(entryId, filename) {
+  if (!window.confirm(`Delete the uploaded schema "${filename}"? This cannot be undone.`)) {
+    return;
+  }
+  try {
+    await api.deleteSchema(entryId);
+    if (activeRoute(get()).schema === entryId) {
+      location.hash = "#/schemas";
+    } else {
+      await loadSchemas();
+    }
+    notify(`Deleted ${filename}.`);
+  } catch (error) {
+    set({ error: error.message });
+  }
+}
+
 /* ------------------------------------------------------------------ listeners */
 
 // One delegated listener rather than per-render bindings, since intentional view
@@ -1097,6 +1183,12 @@ document.getElementById("help-open").addEventListener("click", openHelp);
 // keydown arrived trusted, no `cancel` event fired, and the dialog stayed open with
 // no other way out on the keyboard. Three lines to not depend on it.
 document.addEventListener("keydown", (event) => {
+  const zone = event.target?.closest?.("[data-schema-drop-zone]");
+  if (zone && (event.key === "Enter" || event.key === " ")) {
+    event.preventDefault();
+    zone.closest("form").elements.file.click();
+    return;
+  }
   if (event.key !== "Escape") return;
   const dialog = document.getElementById("help");
   if (!dialog.open) return;
@@ -1119,11 +1211,49 @@ document.getElementById("help").addEventListener("click", (event) => {
   if (!inside) dialog.close();
 });
 
+// The dashed zone is an additional file-picker target for mouse and keyboard use.
+// A real file input remains in the header, so drag and drop is not the only path.
+document.addEventListener("click", (event) => {
+  const zone = event.target.closest("[data-schema-drop-zone]");
+  if (!zone) return;
+  event.preventDefault();
+  zone.closest("form").elements.file.click();
+});
+
+document.addEventListener("dragenter", (event) => {
+  const zone = event.target.closest("[data-schema-drop-zone]");
+  if (!zone || !event.dataTransfer.types.includes("Files")) return;
+  event.preventDefault();
+  zone.classList.add("is-dragging");
+});
+
+document.addEventListener("dragover", (event) => {
+  const zone = event.target.closest("[data-schema-drop-zone]");
+  if (!zone || !event.dataTransfer.types.includes("Files")) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "copy";
+});
+
+document.addEventListener("dragleave", (event) => {
+  const zone = event.target.closest("[data-schema-drop-zone]");
+  if (!zone || zone.contains(event.relatedTarget)) return;
+  zone.classList.remove("is-dragging");
+});
+
+document.addEventListener("drop", (event) => {
+  const zone = event.target.closest("[data-schema-drop-zone]");
+  if (!zone || !event.dataTransfer.files.length) return;
+  event.preventDefault();
+  zone.classList.remove("is-dragging");
+  const form = zone.closest("form");
+  uploadSchemaFiles(Array.from(event.dataTransfer.files), form.elements.source.value, form);
+});
+
 document.addEventListener("click", (event) => {
   const button = event.target.closest("[data-action]");
   if (!button) return;
   event.preventDefault();
-  const { action, profile, plan, recording, index } = button.dataset;
+  const { action, profile, plan, recording, schema, filename, index } = button.dataset;
 
   if (action === "observe") startObserving(profile);
   if (action === "stop") stopObserving(recording);
@@ -1133,6 +1263,9 @@ document.addEventListener("click", (event) => {
   if (action === "profile-reload") reloadProfiles();
   if (action === "profile-resolve") resolveProfile(profile);
   if (action === "profile-verify") verifyProfile(profile);
+  if (action === "schema-view") location.hash = `#/schemas/${encodeURIComponent(schema)}`;
+  if (action === "schema-back") location.hash = "#/schemas";
+  if (action === "schema-delete") deleteSchema(schema, filename);
   if (action === "archive-clear") clearArchiveFilters();
   if (action === "purge") purgeRecording(button.dataset.recording);
   if (action === "delete-selected") deleteSelectedRecordings();
@@ -1161,6 +1294,33 @@ document.addEventListener("click", (event) => {
   if (action === "plan-run") runPlan();
   if (action === "bundle-preview") previewBundle();
   if (action === "bundle-download") downloadBundle();
+  if (action === "plan-mode") {
+    editPlanDraft(() => ({ editorMode: button.dataset.mode }));
+  }
+  if (action === "basic-row-add") {
+    editPlanDraft((draft) => ({
+      doc: {
+        ...draft.doc,
+        chains: [
+          ...(draft.doc.chains ?? []),
+          plans.blankBasicChain(
+            draft.detail?.call_details?.[0]?.name,
+            draft.doc.chains ?? []
+          ),
+        ],
+      },
+    }));
+    checkPlan();
+  }
+  if (action === "basic-row-remove") {
+    const chains = get().planDraft?.doc.chains ?? [];
+    if (chains.length > 1) {
+      editPlanDraft((draft) => ({
+        doc: { ...draft.doc, chains: draft.doc.chains.filter((_, i) => i !== Number(index)) },
+      }));
+      checkPlan();
+    }
+  }
   if (action === "chain-add") {
     editPlanDraft((draft) => ({
       doc: {
@@ -1221,15 +1381,28 @@ document.addEventListener("click", (event) => {
   }
   if (action === "profile-cancel") set({ profileDraft: null });
   if (action === "profile-save") saveProfile();
+  if (action === "endpoint-edit") {
+    editDraft(() => ({ endpointEdit: Number(index) }));
+  }
+  if (action === "endpoint-done") {
+    editDraft(() => ({ endpointEdit: null }));
+  }
   if (action === "endpoint-add") {
     editDraft((draft) => ({
       doc: { ...draft.doc, endpoints: [...draft.doc.endpoints, profiles.blankEndpoint()] },
+      endpointEdit: draft.doc.endpoints.length,
     }));
   }
   if (action === "endpoint-remove") {
     const at = Number(index);
     editDraft((draft) => ({
       doc: { ...draft.doc, endpoints: draft.doc.endpoints.filter((_, i) => i !== at) },
+      endpointEdit:
+        draft.endpointEdit === at
+          ? null
+          : draft.endpointEdit != null && draft.endpointEdit > at
+            ? draft.endpointEdit - 1
+            : draft.endpointEdit,
     }));
   }
 });
@@ -1264,6 +1437,13 @@ document.addEventListener("change", (event) => {
 
   const field = event.target.closest("[data-plan-form] input, [data-plan-form] select");
   if (field) {
+    if (field.dataset.basicType != null) {
+      const call = field.form.elements[`basic.${field.dataset.index}.call`];
+      const matching = Array.from(call?.options ?? []).find(
+        (option) => option.dataset.requestType === field.value
+      );
+      if (matching) call.value = matching.value;
+    }
     if (field.dataset.derives === "percent") shareFromRate(field);
     if (field.name === "bundle.profile") {
       // A different profile is a different targets.json, so whatever preview is on
@@ -1285,6 +1465,14 @@ document.addEventListener("change", (event) => {
 // A form with no submit button still submits on Enter, which would reload the page
 // and lose the draft. Take it as "save".
 document.addEventListener("submit", (event) => {
+  if (event.target.matches("[data-schema-upload-form]")) {
+    event.preventDefault();
+    uploadSchemaFiles(
+      Array.from(event.target.elements.file.files ?? []),
+      event.target.elements.source.value,
+      event.target
+    );
+  }
   if (event.target.matches("[data-profile-form]")) {
     event.preventDefault();
     saveProfile();

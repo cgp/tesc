@@ -138,6 +138,8 @@ Buildable and testable with nothing but a shell, a bundle, and the mock target.
 
 The mock target (B1.1) is the measurement ground truth: seeded latency distributions (fixed, normal, lognormal, bimodal), injectable HTTP/disconnect/timeout errors, connection rejection and request-concurrency limits, slow start, and a capacity ceiling for breakpoint testing. Configuration and precise semantics are in [design-engine.md §2.2](design-engine.md#22-mock-target-b11), with a runnable [example](../examples/mock.json). Tests check the injected population separately from socket timing, so operating-system overhead is not mistaken for distribution truth.
 
+Manual high-rate results, the deferred optimization strategy and supervised regression procedure are recorded in [Engine arrival-timing baseline](engine-performance-baseline.md).
+
 - **Unit:** histogram merge, percentile and CI math, scheduler drift under synthetic load, bundle deserialization.
 - **Integration:** engine against mock, asserting achieved rate, percentiles vs. injected truth, phase boundaries, annotation firing, multi-target sequencing.
 - **Contract:** schema drift check; a corpus of valid and invalid bundles asserting that engine and API agree on both.

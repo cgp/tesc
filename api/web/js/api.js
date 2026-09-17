@@ -52,6 +52,11 @@ async function archive(path) {
 
 export const api = {
   health: () => request("/api/health"),
+  schemas: () => request("/api/schemas"),
+  schema: (id) => request(`/api/schemas/${encodeURIComponent(id)}`),
+  uploadSchema: (body) => request("/api/schemas", json("POST", body)),
+  deleteSchema: (id) =>
+    request(`/api/schemas/${encodeURIComponent(id)}`, { method: "DELETE" }),
   profiles: () => request("/api/profiles"),
   profile: (name) => request(`/api/profiles/${encodeURIComponent(name)}`),
   profileDocument: (name) =>

@@ -57,6 +57,47 @@ components:
         tags: {type: array, items: {type: string}}
 """
 
+SWAGGER = """
+swagger: "2.0"
+info: {title: Shop, version: "1"}
+basePath: /v1
+consumes: [application/json]
+securityDefinitions:
+  bearer: {type: apiKey, name: Authorization, in: header}
+paths:
+  /pets/{petId}:
+    parameters:
+      - {name: petId, in: path, required: true, type: string, default: PET-1}
+    get:
+      operationId: getPet
+      summary: Read one pet
+      parameters:
+        - {name: page, in: query, required: true, type: integer, default: 2}
+        - {name: X-Region, in: header, required: true, type: string, default: us-east-1}
+      responses: {"200": {description: ok}, "404": {description: gone}}
+    post:
+      operationId: createPet
+      parameters:
+        - name: pet
+          in: body
+          schema: {$ref: "#/definitions/Pet"}
+      responses: {"201": {description: made}, "202": {description: queued}}
+  /session:
+    post:
+      operationId: createSession
+      consumes: [application/x-www-form-urlencoded]
+      parameters:
+        - {name: username, in: formData, required: true, type: string, default: ada}
+        - {name: remember, in: formData, required: true, type: boolean, default: false}
+      responses: {"204": {description: done}}
+definitions:
+  Pet:
+    type: object
+    properties:
+      name: {type: string}
+      active: {type: boolean}
+"""
+
 HAR = json.dumps(
     {
         "log": {
@@ -239,8 +280,8 @@ class TestOpenAPI:
         draft = generate.generate("openapi", OPENAPI, name="shop")
         assert call(draft, "getpet")["description"] == "Read one pet"
 
-    def test_swagger_two_is_refused_rather_than_half_read(self) -> None:
-        with pytest.raises(generate.GenerationError, match="Swagger 2.0"):
+    def test_swagger_two_names_its_matching_source_type(self) -> None:
+        with pytest.raises(generate.GenerationError, match="choose the Swagger 2.0 source type"):
             generate.generate("openapi", json.dumps({"swagger": "2.0", "paths": {}}), name="old")
 
     def test_a_remote_ref_is_left_alone_rather_than_fetched(self) -> None:
@@ -278,6 +319,32 @@ class TestOpenAPI:
         draft = generate.generate("openapi", json.dumps(document), name="secured")
         assert "authentication is set once in the mix" in todos(draft)
         assert "Authorization" not in call(draft, "x").get("headers", {})
+
+
+class TestSwagger:
+    def test_swagger_two_becomes_the_same_operation_shape_without_conversion(self) -> None:
+        draft = generate.generate("swagger", SWAGGER, name="shop")
+
+        get_pet = call(draft, "getpet")
+        assert get_pet["path"] == "/v1/pets/PET-1"
+        assert get_pet["query"] == {"page": "2"}
+        assert get_pet["headers"]["X-Region"] == "us-east-1"
+        assert get_pet["assert"] == [{"status": 200}]
+        assert get_pet["description"] == "Read one pet"
+        assert "authentication is set once in the mix" in todos(draft)
+
+        create_pet = call(draft, "createpet")
+        assert json.loads(create_pet["body"]) == {"active": False, "name": "string"}
+        assert create_pet["headers"]["Content-Type"] == "application/json"
+        assert create_pet["assert"] == [{"status_in": [201, 202]}]
+
+        create_session = call(draft, "createsession")
+        assert create_session["body"] == "remember=false&username=ada"
+        assert create_session["headers"]["Content-Type"] == "application/x-www-form-urlencoded"
+
+    def test_swagger_requires_its_exact_version(self) -> None:
+        with pytest.raises(generate.GenerationError, match="expected a Swagger 2.0 document"):
+            generate.generate("swagger", "swagger: '1.2'\npaths: {}", name="old")
 
 
 class TestTraffic:
