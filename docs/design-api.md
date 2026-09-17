@@ -4,6 +4,8 @@ The control plane: target discovery, host observation, storage and analysis, and
 
 Everything through §17 is buildable and useful with no engine installed — observation-only recordings are a first-class mode, not a degraded one.
 
+Profile verification is also available per SSH host from the endpoint row. It reports the exact effective host, port, username, SSH config files, identity files, and loaded-key count used by the probe, so authentication and routing failures can be distinguished from a genuinely unreachable host.
+
 *Section numbers are preserved from the original combined outline, so cross-references between these three documents remain valid. Numbers are therefore not contiguous within any one file.*
 
 ---

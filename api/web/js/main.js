@@ -978,9 +978,15 @@ async function testEndpointHost(index, host) {
     tests: resolution.tests ?? {},
   }));
   try {
+    const sshUser = draft.doc.observe?.ssh_user?.trim();
     const result = await api.verifyCollector({
       ...endpoint,
-      collect: { ...(endpoint.collect ?? {}), transport: "ssh", host },
+      collect: {
+        ...(endpoint.collect ?? {}),
+        transport: "ssh",
+        host,
+        ...(sshUser ? { user: sshUser } : {}),
+      },
     });
     editEndpointResolution(index, (resolution) => ({
       ...resolution,

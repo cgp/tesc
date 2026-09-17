@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import ssl
 import time
 from dataclasses import dataclass, field
@@ -33,6 +34,8 @@ from dataclasses import dataclass, field
 from metrix_api.observer import transport_for
 from metrix_api.observer.facts import IDENTITY_KEYS
 from metrix_api.profiles import Endpoint, Profile
+
+log = logging.getLogger(__name__)
 
 #: What a check was of. Both are per endpoint, and either can fail on its own.
 LOAD = "load"
@@ -189,13 +192,27 @@ async def _collect(endpoint: Endpoint, timeout: float) -> Check:
         )
 
     address = transport.describe()
+    diagnostics = (
+        transport.diagnostics() if hasattr(transport, "diagnostics") else {"address": address}
+    )
+    log.info("collector probe start endpoint=%s diagnostics=%s", endpoint.id, diagnostics)
     started = time.perf_counter()
     try:
         facts = await asyncio.wait_for(transport.probe(), timeout + 1.0)
     except TimeoutError:
-        return _failed(endpoint, COLLECT, f"no answer within {timeout:g}s", started, address)
+        detail = f"no answer within {timeout:g}s; {diagnostic_text(diagnostics)}"
+        log.error("collector probe timeout endpoint=%s diagnostics=%s", endpoint.id, diagnostics)
+        return _failed(endpoint, COLLECT, detail, started, address)
     except Exception as exc:  # noqa: BLE001 - every transport fails differently
-        return _failed(endpoint, COLLECT, _reason(exc), started, address)
+        detail = f"{_reason(exc)}; {diagnostic_text(diagnostics)}"
+        log.error(
+            "collector probe failed endpoint=%s diagnostics=%s error=%s",
+            endpoint.id,
+            diagnostics,
+            exc,
+            exc_info=True,
+        )
+        return _failed(endpoint, COLLECT, detail, started, address)
 
     # A probe that answers but says nothing means the connection works and the thing
     # on the other end is not what we think it is -- an exporter with the wrong
@@ -258,6 +275,25 @@ def _reason(exc: BaseException) -> str:
     """
     text = str(exc).strip()
     return text or type(exc).__name__
+
+
+def diagnostic_text(details: dict[str, object]) -> str:
+    """A safe, compact explanation of the SSH options attempted."""
+    ordered = (
+        "requested_host",
+        "requested_port",
+        "host",
+        "port",
+        "username",
+        "ssh_config",
+        "identity_files",
+        "loaded_client_keys",
+        "explicit_key",
+        "diagnostics_error",
+    )
+    return "; ".join(
+        f"{key}={details[key]}" for key in ordered if key in details and details[key] is not None
+    )
 
 
 def _elapsed(started: float) -> float:

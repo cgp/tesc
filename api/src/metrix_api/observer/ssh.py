@@ -71,6 +71,50 @@ class SshTransport:
         user = f"{self.user}@" if self.user else ""
         return f"{user}{self.host}:{self.port}"
 
+    def diagnostics(self) -> dict[str, object]:
+        """Return the effective connection settings used for a probe.
+
+        AsyncSSH applies OpenSSH config after this transport is built, so the raw
+        dataclass fields are not enough to explain an authentication failure. Build
+        the same options object used by ``connect`` and expose its effective target,
+        login, config, identity files, and loaded-key count. Private key contents are
+        never included.
+        """
+        try:
+            import asyncssh
+
+            raw_options = self._options()
+            options = asyncssh.SSHClientConnectionOptions(
+                host=self.host, port=self.port, **raw_options
+            )
+            config_paths = raw_options.get("config") or []
+            identity_files = options.config.get("IdentityFile", [])
+            return {
+                "requested_host": self.host,
+                "requested_port": self.port,
+                "host": options.host,
+                "port": options.port,
+                "username": options.username,
+                "ssh_config": list(config_paths),
+                "identity_files": list(identity_files)
+                if isinstance(identity_files, (list, tuple))
+                else identity_files,
+                "loaded_client_keys": len(options.client_keys or []),
+                "explicit_key": str(self.key) if self.key else None,
+            }
+        except Exception as exc:  # noqa: BLE001 - diagnostics must not mask the probe
+            return {
+                "requested_host": self.host,
+                "requested_port": self.port,
+                "host": self.host,
+                "port": self.port,
+                "username": self.user or "<config/default>",
+                "ssh_config": str(self.ssh_config) if self.ssh_config else None,
+                "identity_files": "unavailable",
+                "loaded_client_keys": "unavailable",
+                "diagnostics_error": str(exc) or type(exc).__name__,
+            }
+
     def _options(self) -> dict[str, object]:
         options: dict[str, object] = {"connect_timeout": self.connect_timeout}
         if self.user:

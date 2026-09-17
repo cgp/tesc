@@ -253,6 +253,7 @@ test("an endpoint display row has edit and remove actions", () => {
   assert.equal((markup.match(/data-action="endpoint-edit"/g) ?? []).length, 2);
   assert.equal((markup.match(/data-action="endpoint-remove"/g) ?? []).length, 2);
   assert.equal((markup.match(/data-action="endpoint-resolve"/g) ?? []).length, 1);
+  assert.equal((markup.match(/data-action="endpoint-test-host"/g) ?? []).length, 2);
 });
 
 test("an ALB resolution shows read-only candidates with one selected SSH host", () => {
@@ -295,7 +296,7 @@ test("an ALB resolution shows read-only candidates with one selected SSH host", 
   assert.equal((markup.match(/type="radio"/g) ?? []).length, 2);
   assert.equal((markup.match(/name="endpoints\.0\.collect\.selectedHost"/g) ?? []).length, 2);
   assert.match(markup, /value="10\.0\.11\.21"[^>]*checked/);
-  assert.equal((markup.match(/data-action="endpoint-test-host"/g) ?? []).length, 2);
+  assert.equal((markup.match(/data-action="endpoint-test-host"/g) ?? []).length, 3);
   assert.match(markup, /Enable SSH collection/);
   assert.match(markup, /reachable/);
   assert.match(markup, /ip-10-0-11-21/);

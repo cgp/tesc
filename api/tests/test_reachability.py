@@ -76,6 +76,18 @@ class FakeTransport:
     def describe(self) -> str:
         return "ssh probe@10.0.0.1:22"
 
+    def diagnostics(self) -> dict[str, object]:
+        return {
+            "requested_host": "10.0.0.1",
+            "requested_port": 22,
+            "host": "10.0.0.1",
+            "port": 22,
+            "username": "probe",
+            "ssh_config": ["C:/Users/test/.ssh/config"],
+            "identity_files": ["C:/Users/test/.ssh/id_ed25519"],
+            "loaded_client_keys": 1,
+        }
+
     async def probe(self):
         if self.hang:
             await asyncio.sleep(30)
@@ -169,6 +181,10 @@ class TestCollector:
         result = check(report, reachability.COLLECT)
         assert result.result == reachability.FAILED
         assert "publickey" in result.detail
+        assert "host=10.0.0.1" in result.detail
+        assert "port=22" in result.detail
+        assert "username=probe" in result.detail
+        assert "id_ed25519" in result.detail
 
     async def test_a_probe_that_answers_with_nothing_is_a_failure(self, monkeypatch) -> None:
         """Reached, and not what we think it is -- the wrong path on an exporter."""

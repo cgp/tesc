@@ -508,6 +508,7 @@ function endpointRow(endpoint, index, all, editing, resolution) {
       <td class="text-end">
         ${endpointHiddenFields(endpoint, index)}
         ${resolveHostButton(index, mode, resolution)}
+        ${testHostButton(endpoint, index, resolution)}
         <button type="button" class="btn btn-sm btn-icon" data-action="endpoint-edit"
                 data-index="${index}" title="Edit endpoint" aria-label="Edit endpoint">
           ${icon("pencil")}
@@ -525,6 +526,7 @@ function endpointRow(endpoint, index, all, editing, resolution) {
     <td>${mode === "alb" ? albSshTarget(collect, p) : sshTarget(collect, p, endpoint.address, true)}</td>
     <td class="text-end">
       ${resolveHostButton(index, mode, resolution)}
+      ${testHostButton(endpoint, index, resolution)}
       <button type="button" class="btn btn-sm btn-icon" data-action="endpoint-done"
               title="Finish editing" aria-label="Finish editing">${icon("check")}</button>
       ${removeButton(index, removable)}
@@ -543,6 +545,29 @@ function resolveHostButton(index, mode, resolution) {
   return `<button type="button" class="btn btn-sm btn-icon" data-action="endpoint-resolve"
                   data-index="${index}" title="Resolve ALB to SSH hosts"
                   aria-label="Resolve ALB to SSH hosts">${icon("refresh")}</button>`;
+}
+
+function testHostButton(endpoint, index, resolution) {
+  const collect = endpoint.collect ?? {};
+  const canTestSavedAlbHost = endpoint.addressing === "alb" && Boolean(collect.host);
+  if (collect.transport !== "ssh" && !canTestSavedAlbHost) return "";
+  const host = collect.host || endpointHost(endpoint.address);
+  if (!host) return "";
+  const test = resolution?.tests?.[host];
+  const testing = resolution?.testing === host;
+  const result = test
+    ? `<span class="badge ${test.ok ? "bg-green-lt" : "bg-red-lt"} me-1"
+             title="${escape(test.check?.detail ?? "No diagnostic returned")}">
+         ${test.ok ? "ok" : "failed"}
+       </span><span class="text-secondary small me-1">${escape(test.check?.detail ?? "")}</span>`
+    : "";
+  return `${result}<button type="button" class="btn btn-sm btn-icon" data-action="endpoint-test-host"
+                  data-index="${index}" data-host="${escape(host)}"
+                  title="Test SSH connection to ${escape(host)}"
+                  aria-label="Test SSH connection to ${escape(host)}"
+                  ${testing ? "disabled" : ""}>
+    ${testing ? '<span class="spinner-border spinner-border-sm" role="status"></span>' : icon("plug-connected")}
+  </button>`;
 }
 
 function albSshTarget(collect, p) {

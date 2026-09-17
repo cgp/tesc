@@ -842,3 +842,4 @@ Add same-snapshot paired flush-plus-packet durations and supported totals. Skip 
 - Added resolver logging for start, hop progress, notes, cache hits, saved inventories, resolved addresses, and the final inventory dump.
 - The ALB editor keeps the first returned host in the draft for saving, and profile documents retain a resolved host even while SSH collection is disabled so the AWS walk need not be repeated.
 - Added an Observation-level SSH username applied to every SSH endpoint at observation start, with endpoint usernames as fallback.
+- Added an always-available SSH test action for saved endpoint and ALB hosts. Probe failures now include the effective host, port, username, SSH config, identity files, and loaded-key diagnostics in the API response and server log; the profile-level observation username is applied to manual tests too.

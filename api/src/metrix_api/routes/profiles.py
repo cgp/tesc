@@ -203,6 +203,7 @@ async def verify_profile(
     # against a fresh walk would conflate two failures -- discovery is broken, and
     # the boxes are unreachable -- which are fixed in different places.
     resolved, _ = _resolved(conn, profile)
+    resolved = resolved.with_observation_defaults()
     report = await reachability.verify(
         resolved, timeout=config.observe.timeout.total_seconds()
     )
