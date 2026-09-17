@@ -483,5 +483,20 @@
   outline: 0;
 }
 .metrix-schema-drop-zone.is-uploading { cursor: progress; opacity: .7; }
+.metrix-schema-drop-unavailable {
+  display: flex;
+  min-height: 12rem;
+  padding: 2rem;
+  border: 1px solid var(--tblr-border-color);
+  border-radius: var(--tblr-border-radius);
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: .35rem;
+  background: var(--tblr-bg-surface-secondary);
+  text-align: center;
+}
+.metrix-schema-drop-diagnostics { margin-top: .5rem; font-size: .75rem; }
+.metrix-schema-drop-diagnostics code { white-space: normal; }
 .metrix-schema-references { margin-top: .75rem; font-size: .8125rem; }
 .metrix-schema-references a + a { margin-left: .25rem; }

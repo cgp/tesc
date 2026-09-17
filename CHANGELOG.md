@@ -825,3 +825,8 @@ Add same-snapshot paired flush-plus-packet durations and supported totals. Skip 
 
 - Added a local WADL 2009/02 adapter for plan generation and stored schemas. Resource trees, required template/query/header parameters, request media types, documentation, and declared successful response codes become generated calls; external grammars and references are never fetched.
 - Added Plans/Schemas picker support, API descriptions, design documentation, and regression coverage. Ruff, 55 focused Python tests, and 33 focused front-end tests pass.
+
+## 2026-09-17 — Schema upload drop diagnostics
+
+- Made file-drop detection defensive across browser and managed-workspace implementations: `DataTransfer.types` is read as an iterable, every drop is prevented from taking the browser's default action, and a drop with no readable files records event/type/file-count evidence in the browser console.
+- When the browser lacks file-drop primitives, or a drop arrives without files, the large target is replaced by a picker-only explanation and local diagnostic rather than remaining a dead control. The complete 182-test front-end suite passes in 4.2 seconds.

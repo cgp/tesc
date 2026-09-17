@@ -15,6 +15,7 @@ import * as profiles from "./profiles.js";
 import * as recordings from "./recordings.js";
 import * as schemas from "./schemas.js";
 import * as series from "./series.js";
+import { detectSource } from "./sources.js";
 import { get, set, subscribe } from "./state.js";
 import * as stream from "./stream.js";
 import * as sweep from "./sweep.js";
@@ -1128,11 +1129,15 @@ async function uploadSchemaFiles(files, source, form) {
   const button = form.querySelector('button[type="submit"]');
   const zone = form.querySelector("[data-schema-drop-zone]");
   button.disabled = true;
-  zone.classList.add("is-uploading");
+  zone?.classList.add("is-uploading");
   try {
     const results = await Promise.allSettled(
       files.map(async (file) =>
-        api.uploadSchema({ filename: file.name, source, content: await file.text() })
+        (() => file.text().then((content) => api.uploadSchema({
+          filename: file.name,
+          source: detectSource(content, source),
+          content,
+        })))()
       )
     );
     const uploaded = results.filter((result) => result.status === "fulfilled").map((result) => result.value);
@@ -1151,8 +1156,32 @@ async function uploadSchemaFiles(files, source, form) {
     set({ error: error.message });
   } finally {
     button.disabled = false;
-    zone.classList.remove("is-uploading");
+    zone?.classList.remove("is-uploading");
   }
+}
+
+function schemaDropTypes(event) {
+  return Array.from(event.dataTransfer?.types ?? []).map(String);
+}
+
+function isFileDrop(event) {
+  return schemaDropTypes(event).includes("Files");
+}
+
+function schemaDropDebug(event, extra = {}) {
+  const files = event.dataTransfer?.files;
+  const detail = {
+    event: event.type,
+    types: schemaDropTypes(event),
+    file_count: files?.length ?? 0,
+    ...extra,
+  };
+  console.info("Metrix schema upload drag-and-drop", detail);
+  return `${detail.event}: types=${detail.types.join(",") || "none"}; files=${detail.file_count}`;
+}
+
+function disableSchemaDrop(reason, diagnostic) {
+  set({ schemaDrop: { enabled: false, reason, diagnostic } });
 }
 
 async function deleteSchema(entryId, filename) {
@@ -1222,15 +1251,17 @@ document.addEventListener("click", (event) => {
 
 document.addEventListener("dragenter", (event) => {
   const zone = event.target.closest("[data-schema-drop-zone]");
-  if (!zone || !event.dataTransfer.types.includes("Files")) return;
+  if (!zone || !isFileDrop(event)) return;
   event.preventDefault();
+  schemaDropDebug(event);
   zone.classList.add("is-dragging");
 });
 
 document.addEventListener("dragover", (event) => {
   const zone = event.target.closest("[data-schema-drop-zone]");
-  if (!zone || !event.dataTransfer.types.includes("Files")) return;
+  if (!zone) return;
   event.preventDefault();
+  if (!isFileDrop(event)) return;
   event.dataTransfer.dropEffect = "copy";
 });
 
@@ -1242,11 +1273,20 @@ document.addEventListener("dragleave", (event) => {
 
 document.addEventListener("drop", (event) => {
   const zone = event.target.closest("[data-schema-drop-zone]");
-  if (!zone || !event.dataTransfer.files.length) return;
+  if (!zone) return;
   event.preventDefault();
   zone.classList.remove("is-dragging");
+  const diagnostic = schemaDropDebug(event);
+  const files = Array.from(event.dataTransfer?.files ?? []);
+  if (!files.length) {
+    disableSchemaDrop(
+      "The drop arrived without readable files, often because this workspace blocks file drag-and-drop.",
+      diagnostic
+    );
+    return;
+  }
   const form = zone.closest("form");
-  uploadSchemaFiles(Array.from(event.dataTransfer.files), form.elements.source.value, form);
+  uploadSchemaFiles(files, form.elements.source.value, form);
 });
 
 document.addEventListener("click", (event) => {
@@ -1425,6 +1465,14 @@ function moved(steps, index, direction) {
 }
 
 document.addEventListener("change", (event) => {
+  const schemaFile = event.target.closest("[data-schema-upload-form] input[type=file]");
+  if (schemaFile?.files?.length === 1) {
+    schemaFile.files[0].text().then((content) => {
+      const detected = detectSource(content);
+      if (detected) schemaFile.form.elements.source.value = detected;
+    });
+  }
+
   if (event.target.closest('[data-change-action="draft-reload"]')) syncDraft();
 
   // The source select changes the hint under it, and the panel holds a document
@@ -1462,6 +1510,16 @@ document.addEventListener("change", (event) => {
   if (all) toggleVisibleRecordingSelection(all.checked);
 });
 
+document.addEventListener("input", (event) => {
+  const textarea = event.target.closest("[data-describe-form] textarea");
+  if (!textarea) return;
+  const detected = detectSource(textarea.value);
+  if (detected) {
+    textarea.form.elements.source.value = detected;
+    set({ planNew: { ...get().planNew, source: detected } });
+  }
+});
+
 // A form with no submit button still submits on Enter, which would reload the page
 // and lose the draft. Take it as "save".
 document.addEventListener("submit", (event) => {
@@ -1491,6 +1549,7 @@ subscribe((state) => [activeRoute(state).name], renderShell);
 subscribe((state) => [state.health], renderHealth);
 subscribe((state) => [state.error, state.notice], renderError);
 subscribe(selectView, render);
+set({ schemaDrop: schemas.dropCapability(window) });
 renderShell(get());
 renderHealth(get());
 renderError(get());

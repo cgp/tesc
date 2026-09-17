@@ -9,6 +9,9 @@ const state = {
   schemas: [],
   schemaDetail: null,
   schemasReadAt: null,
+  //: The browser's file-drop capability, checked once at startup and revised if a
+  // drop arrives without readable files. A file picker stays available either way.
+  schemaDrop: null,
   profiles: [],
   brokenProfiles: [],
   //: When the profile list was last read off disk. Shown next to the reload

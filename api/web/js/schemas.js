@@ -16,11 +16,44 @@ export const SOURCES = [
 const LABELS = Object.fromEntries(SOURCES.map(([value, label]) => [value, label]));
 
 export function selectState(state) {
-  return [state.schemas, state.schemaDetail, state.schemasReadAt];
+  return [state.schemas, state.schemaDetail, state.schemasReadAt, state.schemaDrop];
+}
+
+/** The picker is universal; the large drop target is only useful when these exist. */
+export function dropCapability(environment = globalThis) {
+  const missing = ["DragEvent", "DataTransfer", "File"].filter(
+    (name) => typeof environment[name] !== "function"
+  );
+  if (!missing.length) return { enabled: true, diagnostic: "DragEvent, DataTransfer and File available." };
+  return {
+    enabled: false,
+    reason: `This browser or workspace does not expose ${missing.join(", ")}.`,
+    diagnostic: `Missing: ${missing.join(", ")}.`,
+  };
 }
 
 export function render(state) {
   if (state.schemaDetail) return detail(state.schemaDetail);
+
+  const dropTarget = state.schemaDrop?.enabled === false
+    ? `<div class="metrix-schema-drop-unavailable" data-schema-drop-unavailable>
+        <strong>File dropping is unavailable here</strong>
+        <span class="text-secondary">${escape(state.schemaDrop.reason)} Choose files with the picker above.</span>
+        <details class="metrix-schema-drop-diagnostics">
+          <summary>Upload diagnostics</summary>
+          <code>${escape(state.schemaDrop.diagnostic)}</code>
+        </details>
+      </div>`
+    : `<div class="metrix-schema-drop-zone" data-schema-drop-zone tabindex="0" role="button"
+             aria-label="Drop schema files here, or choose files">
+          <strong>Drop files here to upload</strong>
+          <span class="text-secondary">They are parsed immediately as the selected source type.</span>
+          <span class="text-secondary">Or click here to choose files.</span>
+          <details class="metrix-schema-drop-diagnostics">
+            <summary>Upload diagnostics</summary>
+            <code>${escape(state.schemaDrop?.diagnostic ?? "Awaiting a file drag.")}</code>
+          </details>
+        </div>`;
 
   const rows = state.schemas
     .map(
@@ -86,12 +119,7 @@ export function render(state) {
         </div>
       </div>
       <div class="card-body pt-0">
-        <div class="metrix-schema-drop-zone" data-schema-drop-zone tabindex="0" role="button"
-             aria-label="Drop schema files here, or choose files">
-          <strong>Drop files here to upload</strong>
-          <span class="text-secondary">They are parsed immediately as the selected source type.</span>
-          <span class="text-secondary">Or click here to choose files.</span>
-        </div>
+        ${dropTarget}
         <div class="metrix-schema-references text-secondary">
           <span>Accepted types:</span>
           ${SOURCES.map(

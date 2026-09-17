@@ -20,11 +20,25 @@ Object.defineProperty(globalThis, "document", {
   },
 });
 
-const { render } = await import("../../web/js/schemas.js");
+const { dropCapability, render } = await import("../../web/js/schemas.js");
+const { detectSource } = await import("../../web/js/sources.js");
 
 function state(patch = {}) {
   return { schemas: [], schemaDetail: null, schemasReadAt: null, ...patch };
 }
+
+test("WADL is detected from its top stylesheet marker or initial application namespace", () => {
+  assert.equal(
+    detectSource('<?xml version="1.0"?><?xml-stylesheet type="text/wadl"?>\n<application/>'),
+    "wadl"
+  );
+  assert.equal(
+    detectSource('<application xmlns="http://wadl.dev.java.net/2009/02">'),
+    "wadl"
+  );
+  assert.equal(detectSource('<application xmlns="urn:other">', "openapi"), "openapi");
+  assert.equal(detectSource("<!-- wadl -->\n<application>", "xml"), "xml");
+});
 
 test("the upload target offers every plan source parser", () => {
   const markup = render(state());
@@ -38,9 +52,21 @@ test("the upload target offers every plan source parser", () => {
   assert.match(markup, /data-schema-drop-zone/);
   assert.match(markup, /Drop files here to upload/);
   assert.match(markup, /Accepted types:/);
+  assert.match(markup, /Upload diagnostics/);
   assert.match(markup, /spec\.openapis\.org/);
   assert.match(markup, /www\.w3\.org\/submissions\/wadl/);
   assert.doesNotMatch(markup, /empty-icon/);
+});
+
+test("a browser without file-drop primitives gets an explanation, not a dead target", () => {
+  const support = dropCapability({ DragEvent: undefined, DataTransfer: undefined, File: undefined });
+  const markup = render(state({ schemaDrop: support }));
+
+  assert.equal(support.enabled, false);
+  assert.match(markup, /File dropping is unavailable here/);
+  assert.match(markup, /Choose files with the picker above/);
+  assert.match(markup, /Missing: DragEvent, DataTransfer, File/);
+  assert.doesNotMatch(markup, /data-schema-drop-zone/);
 });
 
 test("the table shows id, filename, type, call count and row actions", () => {
