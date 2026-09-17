@@ -932,11 +932,11 @@ function stepRow(step, chainIndex, index, steps, calls) {
 /** What the chosen call actually does, beside the step that chose it. */
 function callLine(detail) {
   if (!detail) return "";
-  const uses = detail.uses.length
-    ? ` · reads ${detail.uses.map((u) => `<code>${escape(u)}</code>`).join(", ")}`
+  const uses = (detail.uses ?? []).length
+    ? ` · reads ${(detail.uses ?? []).map((u) => `<code>${escape(u)}</code>`).join(", ")}`
     : "";
-  const extracts = detail.extracts.length
-    ? ` · provides ${detail.extracts.map((e) => `<code>${escape(e)}</code>`).join(", ")}`
+  const extracts = (detail.extracts ?? []).length
+    ? ` · provides ${(detail.extracts ?? []).map((e) => `<code>${escape(e)}</code>`).join(", ")}`
     : "";
   return `<div class="mt-2 text-secondary">
     <span class="badge bg-secondary-lt">${escape(detail.method)}</span>
