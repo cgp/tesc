@@ -29,7 +29,7 @@ function state(patch = {}) {
 test("the upload target offers every plan source parser", () => {
   const markup = render(state());
 
-  for (const source of ["openapi", "swagger", "wsdl", "har", "access_log", "routes"]) {
+  for (const source of ["openapi", "swagger", "wadl", "wsdl", "har", "access_log", "routes"]) {
     assert.match(markup, new RegExp(`value="${source}"`));
   }
   assert.match(markup, /type="file"/);
@@ -39,6 +39,7 @@ test("the upload target offers every plan source parser", () => {
   assert.match(markup, /Drop files here to upload/);
   assert.match(markup, /Accepted types:/);
   assert.match(markup, /spec\.openapis\.org/);
+  assert.match(markup, /www\.w3\.org\/submissions\/wadl/);
   assert.doesNotMatch(markup, /empty-icon/);
 });
 

@@ -23,7 +23,7 @@ from metrix_api.config import Config
 METADATA = "metadata.json"
 SOURCE = "source.txt"
 VERSION = 1
-KINDS = ("openapi", "swagger", "wsdl", "har", "access_log", "routes")
+KINDS = ("openapi", "swagger", "wadl", "wsdl", "har", "access_log", "routes")
 ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 
@@ -61,9 +61,7 @@ def schema_id(filename: str, source: str) -> str:
     """A stable, readable id from the uploaded name and selected parser."""
     clean = _filename(filename)
     if source not in KINDS:
-        raise SchemaLibraryError(
-            f"unknown source {source!r}; expected one of {', '.join(KINDS)}"
-        )
+        raise SchemaLibraryError(f"unknown source {source!r}; expected one of {', '.join(KINDS)}")
     return f"{generate.slug(Path(clean).stem)}-{source}"
 
 

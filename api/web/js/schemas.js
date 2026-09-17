@@ -6,6 +6,7 @@ import { icon } from "./ui.js";
 export const SOURCES = [
   ["openapi", "OpenAPI 3 (JSON or YAML)", "https://spec.openapis.org/oas/"],
   ["swagger", "Swagger 2.0 (JSON or YAML)", "https://swagger.io/specification/v2/"],
+  ["wadl", "WADL", "https://www.w3.org/submissions/wadl/"],
   ["wsdl", "WSDL 1.1", "https://www.w3.org/TR/2001/NOTE-wsdl-20010315"],
   ["har", "HAR capture", "https://github.com/ahmadnassri/har-spec/blob/master/versions/1.2.md"],
   ["access_log", "Access log", "https://httpd.apache.org/docs/2.4/logs.html"],
@@ -156,7 +157,7 @@ function detail(entry) {
 export function help() {
   return {
     title: "Schemas",
-    body: `<p>Upload an OpenAPI 3, Swagger 2.0, WSDL 1.1, HAR, access-log or route-list file. The
+    body: `<p>Upload an OpenAPI 3, Swagger 2.0, WADL, WSDL 1.1, HAR, access-log or route-list file. The
       server immediately passes it through the same parser used to generate calls for
       a plan. Files that cannot produce calls are rejected and are not stored.</p>
       <p class="mb-0">The id is the filename stem plus its selected type. Uploading

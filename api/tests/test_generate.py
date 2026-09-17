@@ -180,6 +180,32 @@ WSDL = """<?xml version="1.0"?>
 </definitions>
 """
 
+WADL = """<?xml version="1.0"?>
+<application xmlns="http://wadl.dev.java.net/2009/02">
+  <resources base="https://shop.example.com/api/v1/">
+    <resource path="pets/{petId}">
+      <param name="petId" style="template"/>
+      <param name="X-Region" style="header" required="true" default="us-east-1"/>
+      <method name="GET" id="readPet">
+        <doc title="Read one pet"/>
+        <request>
+          <param name="page" style="query" required="true" default="2"/>
+        </request>
+        <response status="200 304"/><response status="404"/>
+      </method>
+    </resource>
+    <resource path="orders">
+      <resource path="recent">
+        <method name="POST" id="recentOrders">
+          <request><representation mediaType="application/json"/></request>
+          <response status="201"/>
+        </method>
+      </resource>
+    </resource>
+  </resources>
+</application>
+"""
+
 
 @pytest.fixture
 def home(tmp_path: Path):
@@ -220,6 +246,7 @@ class TestEveryGeneratedPlanRuns:
         ("kind", "content"),
         [
             ("openapi", OPENAPI),
+            ("wadl", WADL),
             ("wsdl", WSDL),
             ("har", HAR),
             ("access_log", ACCESS_LOG),
@@ -248,7 +275,7 @@ class TestEveryGeneratedPlanRuns:
     def test_nothing_generated_is_ever_more_than_one_step(self) -> None:
         # No chain inference, in any source (§8.3). A wrong chain is worse than none:
         # it runs cleanly while testing a flow the service does not have.
-        for kind, content in (("openapi", OPENAPI), ("har", HAR), ("wsdl", WSDL)):
+        for kind, content in (("openapi", OPENAPI), ("har", HAR), ("wadl", WADL), ("wsdl", WSDL)):
             draft = generate.generate(kind, content, name="drafted")
             assert {len(c["steps"]) for c in draft.mix["chains"]} == {1}, kind
             assert "never infers a sequence" in todos(draft)
@@ -420,6 +447,32 @@ class TestWsdl:
     def test_xml_that_is_not_well_formed_says_so(self) -> None:
         with pytest.raises(generate.GenerationError, match="well-formed"):
             generate.generate("wsdl", "<definitions>", name="bad")
+
+
+class TestWadl:
+    def test_nested_resources_and_required_parameters_become_a_http_call(self) -> None:
+        draft = generate.generate("wadl", WADL, name="shop")
+
+        read_pet = call(draft, "readpet")
+        assert read_pet["path"] == "/api/v1/pets/{{ petId }}"
+        assert read_pet["query"] == {"page": "2"}
+        assert read_pet["headers"]["X-Region"] == "us-east-1"
+        assert read_pet["assert"] == [{"status_in": [200, 304]}]
+        assert read_pet["description"] == "Read one pet"
+        assert "has no WADL default or option" in todos(draft)
+
+    def test_request_media_type_is_preserved_but_an_unshaped_body_is_named(self) -> None:
+        draft = generate.generate("wadl", WADL, name="shop")
+        recent = call(draft, "recentorders")
+        assert recent["path"] == "/api/v1/orders/recent"
+        assert recent["headers"]["Content-Type"] == "application/json"
+        assert "no inline body example" in todos(draft)
+
+    def test_entities_and_wrong_xml_roots_are_declined(self) -> None:
+        with pytest.raises(generate.GenerationError, match="DOCTYPE"):
+            generate.generate("wadl", "<!DOCTYPE x><application/>", name="bad")
+        with pytest.raises(generate.GenerationError, match="WADL 2009/02"):
+            generate.generate("wadl", "<application/>", name="bad")
 
 
 class TestTheDraftMarker:

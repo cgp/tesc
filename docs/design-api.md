@@ -40,8 +40,8 @@ Three sections, per the discussion:
 | Section | Purpose |
 |---|---|
 | **Config** | What this process is and where it keeps things: the resolved `$METRIX_HOME`, which rule chose it, the database. |
-| **Schemas** | Uploaded service descriptions kept under `$METRIX_HOME/schemas/`: OpenAPI 3, Swagger 2.0, WSDL 1.1, HAR captures, access logs and route lists. A substantial drop target beside the picker accepts one or more files and parses them immediately through the same deterministic source reader Plans uses before anything is stored; the table shows the source identity and resulting call count, and each entry can be opened or deleted. Links beside the target name the accepted source formats. |
-| **Plans** | The plan library and the mixture editor (§20): chains and their shares, each one shown as the iterations and requests it actually buys, phase durations (§10), engine threading and SLO thresholds. Validation is displayed, never decided here — the same server-side check gates the bundle. **Plan generation from OpenAPI/Swagger/WSDL/HAR (§8)** lands here too. |
+| **Schemas** | Uploaded service descriptions kept under `$METRIX_HOME/schemas/`: OpenAPI 3, Swagger 2.0, WADL, WSDL 1.1, HAR captures, access logs and route lists. A substantial drop target beside the picker accepts one or more files and parses them immediately through the same deterministic source reader Plans uses before anything is stored; the table shows the source identity and resulting call count, and each entry can be opened or deleted. Links beside the target name the accepted source formats. |
+| **Plans** | The plan library and the mixture editor (§20): chains and their shares, each one shown as the iterations and requests it actually buys, phase durations (§10), engine threading and SLO thresholds. Validation is displayed, never decided here — the same server-side check gates the bundle. **Plan generation from OpenAPI/Swagger/WADL/WSDL/HAR (§8)** lands here too. |
 | **Profiles** | The environments a run can be pointed at: create, edit, rename and delete them, endpoint by endpoint, plus **hostname discovery and the resolved inventory (§3)**. The editor submits a whole document and the server runs the same validation a hand-written file goes through, so a form cannot save what the loader would reject. Renaming moves the profile file; existing recordings keep the name they were made with, so the new name begins a new series identity (§17.2). |
 | **Performance › Stats** | **The numbers, as a table** (§14). Per chain and per step: start, finish, median, standard deviation, counts, errors. Updates once per second during a run. No charts on this page. |
 | **Performance › Charts** | The same run drawn (§15) — load and observation on one shared time axis, current-vs-target RPS, host stats, error feed, generator-health strip, phase indicator, stop/abort. No tables on this page. |
@@ -198,7 +198,7 @@ conflict rather than an implicit overwrite.
 Upload is transactional at the feature boundary: the server first runs the content
 through the same `generate.generate` dispatch used by `POST /api/plans/generate`, and
 only a source that defines at least one call is written. The schema library therefore
-does not grow a second definition of OpenAPI 3, Swagger 2, WSDL, HAR, access-log or route-list
+does not grow a second definition of OpenAPI 3, Swagger 2, WADL, WSDL, HAR, access-log or route-list
 validity. A failed parse leaves no library entry. The stored call names, methods and
 paths are an upload-time summary for the list and detail views; they do not become a
 fourth plan document and are never handed to the engine.
@@ -217,6 +217,7 @@ fourth plan document and are never handed to the engine.
 |---|---|
 | **OpenAPI 3** (JSON or YAML) | Operations, parameter types, request/response schemas, declared status codes. The richest structural source. |
 | **Swagger 2.0** (JSON or YAML) | The same structural input, read locally into the generator's operation model. Its `definitions`, body and form parameters, `basePath`, response codes and security declarations are handled directly; Metrix does not upload a document to a converter or construct an intermediate OpenAPI 3 file. |
+| **WADL** | HTTP resources and methods from the WADL 2009/02 XML application tree. Nested resource paths, required template/query/header parameters, request media types and successful response codes become calls; external grammars and references are not fetched. |
 | **WSDL / XSD** | Same for SOAP and XML services; bodies generated from the schema. |
 | **HAR capture** | **Realistic mixtures** — observed call frequencies become weights. Chains are *not* inferred (see below). |
 | **Access log** | Path frequencies and status distribution; weights grounded in production traffic. |

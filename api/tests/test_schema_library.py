@@ -76,8 +76,8 @@ class TestSchemaLibraryRoutes:
 
         assert first.status_code == 201
         assert second.status_code == 409
-        assert client.get("/api/schemas/shop-routes").json()["content"].startswith(
-            "GET /api/health"
+        assert (
+            client.get("/api/schemas/shop-routes").json()["content"].startswith("GET /api/health")
         )
 
     def test_filename_cannot_escape_the_schema_directory(self, client, home) -> None:
@@ -119,9 +119,7 @@ class TestSchemaLibraryRoutes:
 
         assert response.status_code == 201
         assert response.json()["id"] == "shop-openapi"
-        assert response.json()["calls"] == [
-            {"name": "listpets", "method": "GET", "path": "/pets"}
-        ]
+        assert response.json()["calls"] == [{"name": "listpets", "method": "GET", "path": "/pets"}]
 
     def test_swagger_two_uses_its_local_adapter_before_being_stored(self, client) -> None:
         document = {
@@ -147,6 +145,21 @@ class TestSchemaLibraryRoutes:
 
         assert response.status_code == 201
         assert response.json()["id"] == "shop-swagger-swagger"
+        assert response.json()["calls"] == [
+            {"name": "listpets", "method": "GET", "path": "/v1/pets"}
+        ]
+
+    def test_wadl_uses_the_same_local_adapter_before_being_stored(self, client) -> None:
+        document = """<application xmlns="http://wadl.dev.java.net/2009/02">
+          <resources base="https://shop.example.com/v1/"><resource path="pets">
+            <method name="GET" id="listPets"><response status="200"/></method>
+          </resource></resources>
+        </application>"""
+
+        response = upload(client, filename="shop.wadl", source="wadl", content=document)
+
+        assert response.status_code == 201
+        assert response.json()["id"] == "shop-wadl"
         assert response.json()["calls"] == [
             {"name": "listpets", "method": "GET", "path": "/v1/pets"}
         ]

@@ -23,6 +23,7 @@ import { empty, icon } from "./ui.js";
 const SOURCES = [
   ["openapi", "OpenAPI 3 (JSON or YAML)", "Every operation, its parameters and the codes it declares. Weights are flat."],
   ["swagger", "Swagger 2.0 (JSON or YAML)", "The same structural calls, read locally without a conversion service."],
+  ["wadl", "WADL", "HTTP resources and methods from an XML application description."],
   ["wsdl", "WSDL 1.1", "SOAP operations, with an envelope built from the schema."],
   ["har", "HAR capture", "Real paths and real frequencies. Bodies and headers are not copied."],
   ["access_log", "Access log", "Common or combined format: weights grounded in production traffic."],
@@ -130,7 +131,7 @@ export function help() {
       code change gets, and put it back.</p>
 
       <p><strong>A plan can be generated from a description of the service</strong>
-      (§8) — an OpenAPI or WSDL document, a HAR capture, an access log, or a bare
+      (§8) — an OpenAPI, Swagger, WADL or WSDL document, a HAR capture, an access log, or a bare
       list of routes. That is the mechanical half of the job: one call per operation,
       parameters from the schema's own examples, assertions from the codes it
       declares. There is no model in it, so the same document always gives the same

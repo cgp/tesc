@@ -820,3 +820,8 @@ Add same-snapshot paired flush-plus-packet durations and supported totals. Skip 
 - Documented the storage and parsing boundary and completed A4.6. The required API check passes: Ruff, 659 Python tests (1 skipped), and 181 front-end tests.
 - Added a large dotted drag-and-drop target beside the schema picker. Dropped files upload and parse immediately using the selected source type; multiple files report failures individually without losing successful uploads. The empty state no longer uses an upload-looking icon, and the picker links to definitions for every accepted format.
 - Added a direct Swagger 2.0 source adapter. It locally reads `definitions`, `basePath`, path/query/header/body/form parameters, response codes, and security into the same generated-call model as OpenAPI 3; no document conversion or outbound request occurs. Swagger 2.0 is available in both Plans and Schemas, and A4.7 is complete. The required API check passes: Ruff, 662 Python tests (1 skipped), and 181 front-end tests.
+
+## 2026-09-17 — WADL source adapter
+
+- Added a local WADL 2009/02 adapter for plan generation and stored schemas. Resource trees, required template/query/header parameters, request media types, documentation, and declared successful response codes become generated calls; external grammars and references are never fetched.
+- Added Plans/Schemas picker support, API descriptions, design documentation, and regression coverage. Ruff, 55 focused Python tests, and 33 focused front-end tests pass.

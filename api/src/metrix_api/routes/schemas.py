@@ -19,7 +19,7 @@ def _config(request: Request) -> Config:
 
 class Upload(BaseModel):
     filename: str = Field(description="The uploaded file name, without a directory")
-    source: str = Field(description="openapi, swagger, wsdl, har, access_log or routes")
+    source: str = Field(description="openapi, swagger, wadl, wsdl, har, access_log or routes")
     content: str = Field(description="The UTF-8 source document")
 
 
@@ -35,9 +35,7 @@ def list_schemas(request: Request) -> dict[str, Any]:
 @router.post("", status_code=201)
 def upload_schema(request: Request, body: Upload) -> dict[str, Any]:
     try:
-        entry = schema_library.store(
-            _config(request), body.filename, body.source, body.content
-        )
+        entry = schema_library.store(_config(request), body.filename, body.source, body.content)
     except schema_library.SchemaExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except schema_library.SchemaLibraryError as exc:

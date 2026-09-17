@@ -283,11 +283,12 @@ def write(root, draftish: Draft) -> None:
 
 def generate(kind: str, content: str, *, name: str) -> Draft:
     """One source, one draft. The dispatch is here so the sources stay unaware."""
-    from metrix_api.generate import openapi, swagger, traffic, wsdl
+    from metrix_api.generate import openapi, swagger, traffic, wadl, wsdl
 
     sources = {
         "openapi": openapi.operations,
         "swagger": swagger.operations,
+        "wadl": wadl.operations,
         "wsdl": wsdl.operations,
         "har": traffic.from_har,
         "access_log": traffic.from_access_log,

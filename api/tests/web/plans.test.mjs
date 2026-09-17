@@ -513,7 +513,7 @@ test("the bundle says when the form has moved on from the stored plan", () => {
 
 test("the generator offers every source and says what each one knows", () => {
   const markup = render(listState({ planNew: { mode: "create", source: "openapi" } }));
-  for (const source of ["openapi", "swagger", "wsdl", "har", "access_log", "routes"]) {
+  for (const source of ["openapi", "swagger", "wadl", "wsdl", "har", "access_log", "routes"]) {
     assert.match(markup, new RegExp(`value="${source}"`));
   }
   // The difference that matters is not the file format: two of these counted real
