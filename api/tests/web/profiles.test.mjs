@@ -251,6 +251,88 @@ test("an endpoint display row has edit and remove actions", () => {
   );
   assert.equal((markup.match(/data-action="endpoint-edit"/g) ?? []).length, 2);
   assert.equal((markup.match(/data-action="endpoint-remove"/g) ?? []).length, 2);
+  assert.equal((markup.match(/data-action="endpoint-resolve"/g) ?? []).length, 1);
+});
+
+test("an ALB resolution shows read-only candidates with one selected SSH host", () => {
+  const markup = render(
+    state({
+      profileDraft: {
+        mode: "edit",
+        name: "staging",
+        endpointEdit: null,
+        error: null,
+        endpointResolution: {
+          0: {
+            hostname: "a.example.com",
+            hosts: [
+              { id: "task/a", address: "10.0.11.21", role: "task" },
+              { id: "task/b", address: "10.0.12.34", role: "task" },
+            ],
+            tests: {
+              "10.0.11.21": { ok: true, check: { detail: "ip-10-0-11-21" } },
+            },
+          },
+        },
+        doc: {
+          name: "staging",
+          endpoints: [
+            {
+              id: "a",
+              addressing: "alb",
+              address: "a.example.com:443",
+              collect: { transport: "ssh", host: "10.0.11.21", user: "deploy" },
+            },
+          ],
+        },
+      },
+    })
+  );
+
+  assert.match(markup, /Resolved SSH hosts/);
+  assert.match(markup, /Read-only · choose one host/);
+  assert.equal((markup.match(/type="radio"/g) ?? []).length, 2);
+  assert.equal((markup.match(/name="endpoints\.0\.collect\.selectedHost"/g) ?? []).length, 2);
+  assert.match(markup, /value="10\.0\.11\.21"[^>]*checked/);
+  assert.equal((markup.match(/data-action="endpoint-test-host"/g) ?? []).length, 2);
+  assert.match(markup, /Enable SSH collection/);
+  assert.match(markup, /reachable/);
+  assert.match(markup, /ip-10-0-11-21/);
+});
+
+test("the selected ALB candidate is the one collector host saved", () => {
+  const previous = {
+    name: "staging",
+    endpoints: [
+      {
+        id: "edge",
+        addressing: "alb",
+        address: "edge.example.com:443",
+        collect: { transport: "none" },
+      },
+    ],
+  };
+  const next = readForm(
+    {
+      fields: {
+        name: "staging",
+        "endpoints.0.id": "edge",
+        "endpoints.0.addressing": "alb",
+        "endpoints.0.address": "edge.example.com:443",
+        "endpoints.0.collect.alb": "1",
+        "endpoints.0.collect.enabled": "1",
+        "endpoints.0.collect.selectedHost": "10.0.12.34",
+        "endpoints.0.collect.user": "deploy",
+      },
+    },
+    previous
+  );
+
+  assert.deepEqual(next.endpoints[0].collect, {
+    transport: "ssh",
+    host: "10.0.12.34",
+    user: "deploy",
+  });
 });
 
 test("one SSH destination round-trips to the profile's separate fields", () => {

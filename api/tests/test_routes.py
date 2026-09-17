@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from metrix_api import reachability
 from metrix_api.config import load_config
 from metrix_api.main import create_app
 from metrix_api.observer.metrics import Gap, Sample
@@ -169,6 +170,51 @@ class TestProfiles:
         body = client.get("/api/profiles/edge").json()
         assert body["endpoints"][0]["collects_from"] is None
         assert body["observed"] == []
+
+    def test_a_draft_alb_host_can_run_the_real_collector_probe(
+        self, client, monkeypatch
+    ) -> None:
+        seen = []
+
+        async def answered(endpoint, timeout):
+            seen.append((endpoint.collect.host, endpoint.collect.user, timeout))
+            return reachability.Check(
+                endpoint=endpoint.id,
+                kind=reachability.COLLECT,
+                result=reachability.OK,
+                address="deploy@10.0.11.21:22",
+                detail="ip-10-0-11-21",
+                ms=4.2,
+            )
+
+        monkeypatch.setattr(reachability, "_collect", answered)
+        response = client.post(
+            "/api/profiles/verify-collector",
+            json={
+                "id": "edge",
+                "addressing": "alb",
+                "address": "api.example.com:443",
+                "collect": {
+                    "transport": "ssh",
+                    "host": "10.0.11.21",
+                    "user": "deploy",
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "ok": True,
+            "check": {
+                "endpoint": "edge",
+                "kind": "collect",
+                "result": "ok",
+                "address": "deploy@10.0.11.21:22",
+                "detail": "ip-10-0-11-21",
+                "ms": 4.2,
+            },
+        }
+        assert seen[0][:2] == ("10.0.11.21", "deploy")
 
     def test_the_document_round_trips_through_the_editor(self, client) -> None:
         """What the editor loads has to be what it can save back, or a round trip

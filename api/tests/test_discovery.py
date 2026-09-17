@@ -485,6 +485,8 @@ def test_the_route_returns_the_inventory_and_says_it_is_partial(api):
     assert body["inventory"]["reached"] == "task"
     assert [r["id"] for r in body["inventory"]["resources"] if r["role"] == "task"]
     assert body["inventory"]["notes"]
+    assert {host["address"] for host in body["hosts"]} == {"10.0.11.21", "10.0.12.22"}
+    assert {host["role"] for host in body["hosts"]} == {"task"}
 
 
 def test_the_route_needs_something_to_resolve(api):

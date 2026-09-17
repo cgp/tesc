@@ -898,6 +898,74 @@ async function verifyProfile(name) {
   }
 }
 
+function editEndpointResolution(index, change) {
+  const draft = get().profileDraft;
+  if (!draft) return;
+  const current = draft.endpointResolution?.[index] ?? {};
+  const next = typeof change === "function" ? change(current) : change;
+  set({
+    profileDraft: {
+      ...draft,
+      endpointResolution: { ...(draft.endpointResolution ?? {}), [index]: next },
+    },
+  });
+}
+
+async function resolveEndpointHosts(index) {
+  const draft = syncDraft();
+  const endpoint = draft?.doc.endpoints[index];
+  if (!endpoint) return;
+  const hostname = profiles.endpointHost(endpoint.address);
+  if (!hostname) {
+    editEndpointResolution(index, { hostname, error: "Enter the ALB hostname first." });
+    return;
+  }
+  editEndpointResolution(index, { hostname, loading: true, hosts: [], tests: {} });
+  try {
+    const result = await api.resolveDiscovery({ hostname });
+    const seen = new Set();
+    const hosts = (result.hosts ?? []).filter((host) => {
+      if (!host.address || seen.has(host.address)) return false;
+      seen.add(host.address);
+      return true;
+    });
+    editEndpointResolution(index, { hostname, loading: false, hosts, tests: {} });
+  } catch (error) {
+    editEndpointResolution(index, { hostname, loading: false, hosts: [], error: error.message });
+  }
+}
+
+async function testEndpointHost(index, host) {
+  const draft = syncDraft();
+  const endpoint = draft?.doc.endpoints[index];
+  if (!endpoint || !host) return;
+  editEndpointResolution(index, (resolution) => ({
+    ...resolution,
+    testing: host,
+    tests: resolution.tests ?? {},
+  }));
+  try {
+    const result = await api.verifyCollector({
+      ...endpoint,
+      collect: { ...(endpoint.collect ?? {}), transport: "ssh", host },
+    });
+    editEndpointResolution(index, (resolution) => ({
+      ...resolution,
+      testing: null,
+      tests: { ...(resolution.tests ?? {}), [host]: result },
+    }));
+  } catch (error) {
+    editEndpointResolution(index, (resolution) => ({
+      ...resolution,
+      testing: null,
+      tests: {
+        ...(resolution.tests ?? {}),
+        [host]: { ok: false, check: { detail: error.message } },
+      },
+    }));
+  }
+}
+
 /**
  * Drop a recording's request-level bulk, after saying exactly what that costs.
  *
@@ -1427,6 +1495,10 @@ document.addEventListener("click", (event) => {
   if (action === "endpoint-done") {
     editDraft(() => ({ endpointEdit: null }));
   }
+  if (action === "endpoint-resolve") resolveEndpointHosts(Number(index));
+  if (action === "endpoint-test-host") {
+    testEndpointHost(Number(index), button.dataset.host);
+  }
   if (action === "endpoint-add") {
     editDraft((draft) => ({
       doc: { ...draft.doc, endpoints: [...draft.doc.endpoints, profiles.blankEndpoint()] },
@@ -1443,6 +1515,7 @@ document.addEventListener("click", (event) => {
           : draft.endpointEdit != null && draft.endpointEdit > at
             ? draft.endpointEdit - 1
             : draft.endpointEdit,
+      endpointResolution: {},
     }));
   }
 });

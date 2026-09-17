@@ -830,3 +830,9 @@ Add same-snapshot paired flush-plus-packet durations and supported totals. Skip 
 
 - Made file-drop detection defensive across browser and managed-workspace implementations: `DataTransfer.types` is read as an iterable, every drop is prevented from taking the browser's default action, and a drop with no readable files records event/type/file-count evidence in the browser console.
 - When the browser lacks file-drop primitives, or a drop arrives without files, the large target is replaced by a picker-only explanation and local diagnostic rather than remaining a dead control. The complete 182-test front-end suite passes in 4.2 seconds.
+
+## 2026-09-17 — ALB SSH host selection
+
+- Added per-row ALB host resolution to the profile editor. It reuses the AWS discovery walk, presents the concrete instance or Fargate task IPs as read-only candidates, and saves one selected radio candidate as `collect.host`.
+- Added an explicit SSH collection enable checkbox and per-candidate probe action; tests use the same real collector probe as profile verification and remain transient.
+- Enlarged endpoint action icons slightly and documented the explicit-ALB setup flow. Rust, 664 deterministic Python tests, 185 front-end tests, and contract checks pass; live SSH integration checks timed out against the configured external host.

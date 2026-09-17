@@ -445,12 +445,18 @@ function editor(draft) {
               <th style="width:12%">Addressing</th>
               <th style="width:18%">Address</th>
               <th style="width:18%">Host header</th>
-              <th style="width:27%">SSH target</th>
-              <th style="width:11%" class="text-end">Actions</th>
+              <th style="width:25%">SSH target</th>
+              <th style="width:13%" class="text-end">Actions</th>
             </tr></thead>
             <tbody>${doc.endpoints
               .map((endpoint, index, all) =>
-                endpointRow(endpoint, index, all, draft.endpointEdit)
+                endpointRow(
+                  endpoint,
+                  index,
+                  all,
+                  draft.endpointEdit,
+                  draft.endpointResolution?.[index]
+                )
               )
               .join("")}</tbody>
           </table>
@@ -480,7 +486,7 @@ function editor(draft) {
   </form>`;
 }
 
-function endpointRow(endpoint, index, all, editing) {
+function endpointRow(endpoint, index, all, editing, resolution) {
   const collect = endpoint.collect ?? { transport: "none" };
   const removable = all.length > 1;
   const p = (field) => `endpoints.${index}.${field}`;
@@ -493,16 +499,17 @@ function endpointRow(endpoint, index, all, editing) {
       <td>${addressingBadge(mode)}</td>
       <td><code>${escape(endpoint.address || "—")}</code></td>
       <td>${endpoint.host_header ? `<code>${escape(endpoint.host_header)}</code>` : "—"}</td>
-      <td>${sshTarget(collect, p, endpoint.address, false)}</td>
+      <td>${mode === "alb" ? albSshTarget(collect, p) : sshTarget(collect, p, endpoint.address, false)}</td>
       <td class="text-end">
         ${endpointHiddenFields(endpoint, index)}
+        ${resolveHostButton(index, mode, resolution)}
         <button type="button" class="btn btn-sm btn-icon" data-action="endpoint-edit"
                 data-index="${index}" title="Edit endpoint" aria-label="Edit endpoint">
           ${icon("pencil")}
         </button>
         ${removeButton(index, removable)}
       </td>
-    </tr>`;
+    </tr>${resolutionPanel(endpoint, index, resolution)}`;
   }
 
   return `<tr class="metrix-endpoint-editing">
@@ -510,13 +517,101 @@ function endpointRow(endpoint, index, all, editing) {
     <td>${addressingSelect(p("addressing"), mode)}</td>
     <td>${cellInput(p("address"), endpoint.address, "host:port", true)}</td>
     <td>${cellInput(p("host_header"), endpoint.host_header, "Host header")}</td>
-    <td>${sshTarget(collect, p, endpoint.address, true)}</td>
+    <td>${mode === "alb" ? albSshTarget(collect, p) : sshTarget(collect, p, endpoint.address, true)}</td>
     <td class="text-end">
+      ${resolveHostButton(index, mode, resolution)}
       <button type="button" class="btn btn-sm btn-icon" data-action="endpoint-done"
               title="Finish editing" aria-label="Finish editing">${icon("check")}</button>
       ${removeButton(index, removable)}
     </td>
-  </tr>`;
+  </tr>${resolutionPanel(endpoint, index, resolution)}`;
+}
+
+function resolveHostButton(index, mode, resolution) {
+  if (mode !== "alb") return "";
+  if (resolution?.loading) {
+    return `<button type="button" class="btn btn-sm btn-icon" disabled
+                    title="Resolving ALB hosts" aria-label="Resolving ALB hosts">
+      <span class="spinner-border spinner-border-sm" role="status"></span>
+    </button>`;
+  }
+  return `<button type="button" class="btn btn-sm btn-icon" data-action="endpoint-resolve"
+                  data-index="${index}" title="Resolve ALB to SSH hosts"
+                  aria-label="Resolve ALB to SSH hosts">${icon("refresh")}</button>`;
+}
+
+function albSshTarget(collect, p) {
+  if (!["ssh", "none"].includes(collect.transport)) {
+    return sshTarget(collect, p, "", false);
+  }
+  const selected = collect.host ?? "";
+  const enabled = collect.transport === "ssh" && Boolean(selected);
+  const destination = selected
+    ? `${collect.user ? `${collect.user}@` : ""}${selected}:${collect.port ?? 22}`
+    : "Resolve to choose a host";
+  return `${hidden(p("collect.alb"), "1")}${hidden(p("collect.host"), selected)}
+    ${hidden(p("collect.user"), collect.user)}${hidden(p("collect.port"), collect.port)}
+    ${hidden(p("collect.path"), collect.path)}
+    <label class="form-check mb-1">
+      <input class="form-check-input" type="checkbox" name="${escape(p("collect.enabled"))}"
+             value="1"${enabled ? " checked" : ""}${selected ? "" : " disabled"}
+             data-change-action="draft-reload">
+      <span class="form-check-label">Enable SSH collection</span>
+    </label>
+    <code class="${selected ? "" : "text-secondary"}">${escape(destination)}</code>`;
+}
+
+function resolutionPanel(endpoint, index, resolution) {
+  if (
+    endpoint.addressing !== "alb" ||
+    !resolution ||
+    resolution.loading ||
+    resolution.hostname !== endpointHost(endpoint.address)
+  ) return "";
+  const p = (field) => `endpoints.${index}.${field}`;
+  if (resolution.error) {
+    return `<tr class="metrix-endpoint-resolution"><td colspan="6">
+      <div class="alert alert-danger py-2 mb-0">${escape(resolution.error)}</div>
+    </td></tr>`;
+  }
+  const selected = endpoint.collect?.host ?? "";
+  const hosts = resolution.hosts ?? [];
+  const choices = hosts.length
+    ? hosts.map((host) => {
+        const test = resolution.tests?.[host.address];
+        const testing = resolution.testing === host.address;
+        const outcome = test
+          ? `<span class="badge ${test.ok ? "bg-green-lt" : "bg-red-lt"}">
+               ${test.ok ? "reachable" : "unreachable"}
+             </span> <span class="text-secondary">${escape(test.check.detail)}</span>`
+          : "";
+        return `<div class="metrix-resolved-host">
+          <label class="form-check mb-0">
+            <input class="form-check-input" type="radio"
+                   name="${escape(p("collect.selectedHost"))}" value="${escape(host.address)}"
+                   ${host.address === selected ? "checked" : ""}
+                   data-change-action="draft-reload">
+            <span class="form-check-label"><code>${escape(host.address)}</code></span>
+          </label>
+          <span class="text-secondary">${escape(host.role)}</span>
+          <button type="button" class="btn btn-sm btn-icon" data-action="endpoint-test-host"
+                  data-index="${index}" data-host="${escape(host.address)}"
+                  title="Test SSH collection from ${escape(host.address)}"
+                  aria-label="Test SSH collection from ${escape(host.address)}"
+                  ${testing ? "disabled" : ""}>
+            ${testing ? '<span class="spinner-border spinner-border-sm" role="status"></span>' : icon("plug-connected")}
+          </button>
+          <div class="metrix-resolved-host-result">${outcome}</div>
+        </div>`;
+      }).join("")
+    : `<div class="text-secondary">The AWS chain resolved, but it did not yield an instance or task IP.</div>`;
+  return `<tr class="metrix-endpoint-resolution"><td colspan="6">
+    <div class="d-flex align-items-center justify-content-between mb-2">
+      <strong>Resolved SSH hosts</strong>
+      <span class="text-secondary">Read-only · choose one host</span>
+    </div>
+    <div class="metrix-resolved-hosts">${choices}</div>
+  </td></tr>`;
 }
 
 function addressingSelect(name, value) {
@@ -622,7 +717,7 @@ export function sshDestination(collect, endpointAddress = "") {
   return `${user}${host}${port}`;
 }
 
-function endpointHost(address) {
+export function endpointHost(address) {
   const value = String(address ?? "");
   if (value.startsWith("[")) {
     const close = value.indexOf("]");
@@ -760,10 +855,19 @@ export function readForm(form, previous) {
     if (original.tls) endpoint.tls = original.tls;
     if (original.attributes) endpoint.attributes = original.attributes;
 
-    const transport = at("collect.transport") || "none";
+    const albCollection = at("collect.alb") === "1";
+    const transport = albCollection
+      ? (at("collect.enabled") === "1" ? "ssh" : "none")
+      : at("collect.transport") || "none";
     const collection = { transport };
+    if (albCollection) {
+      const host = at("collect.selectedHost") || at("collect.host");
+      if (host) collection.host = host;
+      if (at("collect.user")) collection.user = at("collect.user");
+      if (at("collect.port")) collection.port = Number(at("collect.port"));
+    }
     if (transport !== "none") {
-      if (transport === "ssh") {
+      if (transport === "ssh" && !albCollection) {
         const typed = at("collect.ssh");
         const unchanged = typed === sshDestination(original.collect ?? {}, original.address);
         if (unchanged) {

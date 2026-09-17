@@ -327,7 +327,23 @@
 .metrix-endpoint-table { min-width: 44rem; }
 .metrix-endpoint-table th { font-size: .75rem; }
 .metrix-endpoint-table td { padding: .45rem .5rem; }
+.metrix-endpoint-table .btn-icon > .icon {
+  width: 1.35rem;
+  height: 1.35rem;
+}
 .metrix-endpoint-editing > td { background: var(--tblr-bg-surface-secondary); }
+.metrix-endpoint-resolution > td {
+  padding: .75rem 1rem;
+  background: var(--tblr-bg-surface-secondary);
+}
+.metrix-resolved-hosts { display: grid; gap: .4rem; }
+.metrix-resolved-host {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) 5rem 2.25rem minmax(16rem, 2fr);
+  align-items: center;
+  gap: .75rem;
+}
+.metrix-resolved-host-result { min-width: 0; }
 
 /* ---------------------------------------------------------------- plan editor */
 

@@ -18,7 +18,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from metrix_api.config import Config
 from metrix_api.deps import get_config
-from metrix_api.discovery import Clients, DiscoveryError, discover
+from metrix_api.discovery import Clients, DiscoveryError, discover, hosts
 
 router = APIRouter(prefix="/api/discovery", tags=["discovery"])
 
@@ -56,4 +56,16 @@ def resolve(
         # send someone reading our logs rather than their permissions.
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    return {"inventory": inventory.to_document(), "partial": inventory.partial}
+    # This is the same host selection used when a discovered profile is converted
+    # to endpoints: instances when the chain found them, otherwise tasks (Fargate).
+    # Keeping it here prevents the browser from learning AWS inventory semantics.
+    candidates = [
+        {"id": host.id, "address": host.address, "role": host.role}
+        for host in hosts(inventory)
+        if host.address
+    ]
+    return {
+        "inventory": inventory.to_document(),
+        "partial": inventory.partial,
+        "hosts": candidates,
+    }

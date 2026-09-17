@@ -211,17 +211,7 @@ async def verify_profile(
         "ok": report.ok,
         "summary": report.summary(),
         "checked_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "checks": [
-            {
-                "endpoint": c.endpoint,
-                "kind": c.kind,
-                "result": c.result,
-                "address": c.address,
-                "detail": c.detail,
-                "ms": c.ms,
-            }
-            for c in report.checks
-        ],
+        "checks": [_check_document(c) for c in report.checks],
     }
 
 
@@ -291,6 +281,44 @@ def _validated(document: Any, *, name: str | None = None) -> profiles.Profile:
         raise HTTPException(
             status_code=422, detail=str(exc).removeprefix(f"{SUBMITTED}: ")
         ) from exc
+
+
+def _check_document(check: reachability.Check) -> dict[str, Any]:
+    return {
+        "endpoint": check.endpoint,
+        "kind": check.kind,
+        "result": check.result,
+        "address": check.address,
+        "detail": check.detail,
+        "ms": check.ms,
+    }
+
+
+@router.post("/verify-collector")
+async def verify_collector(
+    endpoint: Any = Body(...), config: Config = Depends(get_config)
+) -> dict[str, Any]:
+    """Probe one draft collector without saving the profile.
+
+    The endpoint goes through the profile loader first, just like the whole editor
+    document. The reachability implementation then runs the same real probe used by
+    profile verification; selecting a resolved candidate never tests it implicitly.
+    """
+    profile = _validated(
+        {"name": "connection-test", "endpoints": [{**endpoint, "load": False}]}
+        if isinstance(endpoint, dict)
+        else endpoint
+    )
+    candidate = profile.endpoints[0]
+    if candidate.collect.transport == "none":
+        raise HTTPException(status_code=422, detail="enable a collector before testing it")
+    report = await reachability.verify(
+        profile,
+        timeout=config.observe.timeout.total_seconds(),
+        endpoints=[candidate],
+    )
+    check = next(item for item in report.checks if item.kind == reachability.COLLECT)
+    return {"ok": check.ok, "check": _check_document(check)}
 
 
 @router.post("", status_code=201)

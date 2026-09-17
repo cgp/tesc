@@ -87,6 +87,14 @@ them on separate machines and give each its own endpoint.
 only set `transport` and a port. Set `collect.host` when statistics come from
 somewhere else — a bastion, or a sidecar on a different IP.
 
+For an explicitly entered ALB, the profile editor can resolve the ALB hostname
+through AWS and list the concrete hosts behind it. Those IP addresses are read-only:
+choose one host for SSH collection, enable it, and save. The selected address is
+stored as the endpoint's single `collect.host`; resolving does not convert the
+profile into a discovered profile or save the other candidates. **Test** runs one
+real SSH probe against a candidate and keeps the result only while the editor is
+open.
+
 Defaults: `ssh` port 22, `scrape` port 9100 and path `/metrics`. The Config page
 shows the resolved destination for every endpoint, so you can check it without
 starting a recording.
