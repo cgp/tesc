@@ -209,7 +209,11 @@ validity. A failed parse leaves no library entry. The stored call names, methods
 paths are an upload-time summary for the list and detail views; they do not become a
 fourth plan document and are never handed to the engine.
 
-`POST /api/plans/generate` takes a source and returns a draft plan. Yes to the question — with one deliberate boundary.
+`POST /api/plans/generate` takes a source and returns a draft plan. The Plans editor
+also opens as a blank mixture: it lists the stored schemas, lets the author choose
+which endpoints become calls, and creates the plan from those selected definitions.
+Generation is no longer a prerequisite for opening the editor; the stored schema is
+the source of the selected call documents.
 
 ### 8.1 What the tool does and does not do
 

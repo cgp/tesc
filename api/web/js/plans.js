@@ -43,6 +43,38 @@ export function blankStep(call) {
   return { id: "", call: call ?? "" };
 }
 
+export function blankDocument(name = "") {
+  return {
+    version: 1,
+    name,
+    calls: ["calls/generated.json"],
+    load: { mode: "fixed", rate: 75, duration: "60s", max_concurrency: 200 },
+    chains: [],
+  };
+}
+
+/** Keep one simple chain per selected schema endpoint, preserving edits if possible. */
+export function chainsForCalls(previous, names) {
+  const used = new Set();
+  const chains = names.map((call) => {
+    const old = previous.find((chain) => chain.steps?.[0]?.call === call);
+    if (old) {
+      used.add(old.name);
+      return { ...old };
+    }
+    const chain = blankBasicChain(call, [...previous, ...Array.from(used, (name) => ({ name }))]);
+    used.add(chain.name);
+    return chain;
+  });
+  const percent = names.length ? Math.round((100 / names.length) * 10000) / 10000 : 0;
+  return chains.map((chain, index) => ({
+    ...chain,
+    percent: index === chains.length - 1
+      ? Math.round((100 - percent * (chains.length - 1)) * 10000) / 10000
+      : percent,
+  }));
+}
+
 /** A Basic row is always a complete, single-call chain. */
 export function blankBasicChain(call, existing = []) {
   const base = call || "call";
@@ -79,7 +111,7 @@ export function basicCompatible(doc, calls = []) {
 
 export function selectState(state) {
   return state.planDraft
-    ? [state.planDraft, state.planCheck, state.profiles, state.planNew]
+    ? [state.planDraft, state.planCheck, state.profiles, state.schemas, state.planNew]
     : [state.plans, state.brokenPlans, state.plansReadAt, state.planNew];
 }
 
@@ -137,6 +169,11 @@ export function help() {
       declares. There is no model in it, so the same document always gives the same
       plan and a diff between two of them means the service changed.</p>
 
+      <p>A new plan opens blank. Choose one of the service descriptions already stored
+      in Schemas, then check the endpoints this plan should call. The selected
+      definitions become the read-only calls behind the mixture; generation is no
+      longer a separate step before the editor.</p>
+
       <p>What generation will never do is <strong>invent a chain</strong>. Guessing
       that one call feeds another is unreliable in exactly the cases that matter, and
       a wrong chain is worse than none: it runs cleanly while testing a flow the
@@ -181,7 +218,7 @@ function list(state) {
           two are the same shape on purpose.`,
         action: `<div class="btn-list justify-content-center">
                    <button class="btn btn-primary" data-action="plan-new">
-                     ${icon("plus")} Generate from a description
+                     ${icon("plus")} New plan
                    </button>
                    ${reloadButton(state.plansReadAt)}
                  </div>`,
@@ -200,7 +237,7 @@ function list(state) {
       <div class="btn-list">
         ${reloadButton(state.plansReadAt)}
         <button class="btn btn-primary" data-action="plan-new">
-          ${icon("plus")} Generate
+          ${icon("plus")} New plan
         </button>
       </div>
     </div>
@@ -397,7 +434,7 @@ function editor(state) {
   const draft = state.planDraft;
   const doc = draft.doc;
   const check = state.planCheck;
-  const calls = draft.detail?.call_details ?? [];
+  const calls = draft.schemaCalls ?? draft.detail?.call_details ?? [];
   const canUseBasic = basicCompatible(doc, calls) && check?.ready !== false;
   const mode = draft.editorMode === "basic" && canUseBasic ? "basic" : "advanced";
 
@@ -415,7 +452,7 @@ function editor(state) {
 
   return `<form class="metrix-stack metrix-plan-editor" data-plan-form
                data-editor-mode="${mode}" novalidate>
-    ${error}
+      ${error}
     <div class="card">
       <div class="card-header">
         <div>
@@ -428,6 +465,13 @@ function editor(state) {
           </button>
         </div>
       </div>
+      ${draft.mode === "create" ? `<div class="card-body border-top">${text(
+        "plan.name", "Plan name", draft.name, {
+          required: true,
+          hint: "Letters, digits, dot, dash, underscore. Used as the directory name.",
+        }
+      )}</div>` : ""}
+      ${draft.mode === "create" ? schemaCard(state, draft, calls) : ""}
       ${editorTabs(mode, canUseBasic)}
     </div>
 
@@ -452,6 +496,37 @@ function editor(state) {
     ${callsCard(draft)}
     ${carriedCard(doc)}
   </form>`;
+}
+
+function schemaCard(state, draft, calls) {
+  const schemas = state.schemas ?? [];
+  const selected = new Set(draft.selectedCalls ?? []);
+  const options = schemas.length
+    ? schemas.map((schema) => `<option value="${escape(schema.id)}"${schema.id === draft.schemaId ? " selected" : ""}>
+        ${escape(schema.filename)} · ${escape(schema.source)} · ${count(schema.call_count, "endpoint")}
+      </option>`).join("")
+    : `<option value="">No stored schemas — upload one in Schemas first</option>`;
+  const endpointRows = calls.length
+    ? calls.map((call) => `<label class="form-check mb-2">
+        <input class="form-check-input" type="checkbox" data-schema-call="${escape(call.name)}"
+               ${selected.has(call.name) ? "checked" : ""}>
+        <span class="form-check-label"><code>${escape(call.name)}</code>
+          <span class="text-secondary ms-2">${escape(call.method)} ${escape(call.path)}</span>
+        </span>
+      </label>`).join("")
+    : `<div class="text-secondary">Choose a stored schema to see its endpoints.</div>`;
+  return `<div class="card border-top-0 rounded-0">
+    <div class="card-body">
+      <div class="metrix-field">
+        <label class="form-label" for="f-plan.schema">Schema</label>
+        <select class="form-select" id="f-plan.schema" name="plan.schema">
+          <option value="">Choose an existing schema</option>${options}
+        </select>
+        <div class="form-hint">Only endpoints checked below become calls in this plan.</div>
+      </div>
+      <div class="mt-3"><div class="form-label">Endpoints</div>${endpointRows}</div>
+    </div>
+  </div>`;
 }
 
 function editorTabs(mode, canUseBasic) {
@@ -712,7 +787,7 @@ function loadCard(doc, check) {
 
 function chainsCard(doc, check, draft) {
   const chains = doc.chains ?? [];
-  const calls = draft.detail?.call_details ?? [];
+  const calls = draft.schemaCalls ?? draft.detail?.call_details ?? [];
 
   return `<div class="card">
     <div class="card-header">
@@ -1051,7 +1126,8 @@ function bundlePreview(preview) {
  * chain like `login-fail` explains itself as expecting a 401.
  */
 function callsCard(draft) {
-  const calls = draft.detail?.call_details ?? [];
+  if (draft.mode === "create") return "";
+  const calls = draft.schemaCalls ?? draft.detail?.call_details ?? [];
   if (!calls.length) return "";
 
   const rows = calls

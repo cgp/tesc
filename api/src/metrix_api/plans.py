@@ -252,6 +252,40 @@ def list_plans(config: Config) -> tuple[list[Plan], list[dict[str, str]]]:
     return found, broken
 
 
+def create(
+    config: Config,
+    name: str,
+    mix: dict[str, Any],
+    calls: dict[str, dict[str, Any]],
+    *,
+    source: str,
+) -> Path:
+    """Write a new plan after validating its mixture and selected call documents."""
+    root = plan_path(config, name)
+    if root.exists():
+        raise PlanError(f"a plan named {name!r} already exists")
+    _check(mix, "mix.schema.json", MIX)
+    _check(calls, "call.schema.json", "calls/generated.json")
+    named = set(calls)
+    for chain_index, chain in enumerate(mix.get("chains", [])):
+        for step_index, step in enumerate(chain.get("steps", [])):
+            if step.get("call") not in named:
+                raise PlanError(
+                    f"mix.json/chains/{chain_index}/steps/{step_index}/call: "
+                    f"{step.get('call')!r} is not defined in the selected schema endpoints"
+                )
+    root.mkdir(parents=True)
+    (root / "calls").mkdir()
+    (root / MIX).write_bytes(document_bytes(mix))
+    (root / "calls" / "generated.json").write_bytes(document_bytes(calls))
+    (root / DRAFT).write_bytes(
+        document_bytes(
+            {"draft": True, "source": source, "observed_weights": False, "todos": []}
+        )
+    )
+    return root
+
+
 @dataclass(frozen=True, slots=True)
 class Bundle:
     """A plan directory, in memory, as the exact bytes that will be written."""

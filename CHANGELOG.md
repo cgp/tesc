@@ -846,3 +846,4 @@ Add same-snapshot paired flush-plus-packet durations and supported totals. Skip 
 - Explicitly accept SSH host keys for ephemeral ALB-resolved hosts; change warnings are reserved for a future policy.
 - Profile verification now checks each endpoint's front end before starting that endpoint's SSH probe, while retaining parallelism across separate endpoints.
 - Front-end verification now makes one root HTTP request and displays any returned status, with an independent per-endpoint front-end test button beside SSH connectivity.
+- New plans now open directly in a blank editor. Authors choose an existing stored schema and check the endpoints to include; only those selected call definitions are stored with the plan.

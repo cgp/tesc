@@ -12,7 +12,7 @@ from typing import Any
 from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
-from metrix_api import generate, plans
+from metrix_api import generate, plans, schema_library
 from metrix_api.config import Config
 from metrix_api.profiles import ProfileError, load_profile
 
@@ -84,6 +84,49 @@ class Regenerate(BaseModel):
 
     source: str
     content: str
+
+
+class Create(BaseModel):
+    """A new mixture and the stored schema calls it is allowed to use."""
+
+    name: str
+    schema_id: str
+    calls: list[str]
+    mix: dict[str, Any]
+
+
+@router.post("", status_code=201)
+def create_plan(request: Request, body: Create) -> dict[str, Any]:
+    """Create a plan from selected calls in an uploaded schema."""
+    config = _config(request)
+    if not plans.NAME.match(body.name):
+        raise HTTPException(
+            status_code=422,
+            detail=f"plan {body.name!r}: names are letters, digits, dot, dash, underscore",
+        )
+    if not body.calls:
+        raise HTTPException(status_code=422, detail="choose at least one schema endpoint")
+    try:
+        schema = schema_library.load(config, body.schema_id)
+        generated = generate.generate(schema.source, schema.content or "", name=body.name)
+    except (FileNotFoundError, schema_library.SchemaLibraryError) as exc:
+        raise HTTPException(status_code=404, detail=f"no schema {body.schema_id!r}") from exc
+    except generate.GenerationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    selected = set(body.calls)
+    unknown = sorted(selected - generated.calls.keys())
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"schema has no endpoint {unknown[0]!r}")
+    mix = {**body.mix, "name": body.name, "calls": [generate.CALLS_FILE]}
+    chosen = {name: generated.calls[name] for name in body.calls}
+    try:
+        root = plans.create(config, body.name, mix, chosen, source=schema.source)
+    except plans.PlanError as exc:
+        status = 409 if str(exc).startswith("a plan named") else 422
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    plan = plans.load_plan(config, body.name)
+    return {**_summary(plan), "call_details": plans.call_details(plan)}
 
 
 @router.post("/generate", status_code=201)

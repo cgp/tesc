@@ -78,6 +78,7 @@ export const api = {
   deleteProfile: (name) =>
     request(`/api/profiles/${encodeURIComponent(name)}`, { method: "DELETE" }),
   plans: () => request("/api/plans"),
+  createPlan: (body) => request("/api/plans", json("POST", body)),
   plan: (name) => request(`/api/plans/${encodeURIComponent(name)}`),
   planDocument: (name) => request(`/api/plans/${encodeURIComponent(name)}/document`),
   // The whole mixture, not a patch, and not saved: the server answers with what it

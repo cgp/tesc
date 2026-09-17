@@ -335,13 +335,16 @@ async function loadSchemas(entryId = null) {
  * a plan says what to send and a profile says where, and neither is a run on its own.
  */
 async function loadPlans() {
-  const [listed, profileList] = await Promise.all([api.plans(), api.profiles()]);
+  const [listed, profileList, schemaList] = await Promise.all([
+    api.plans(), api.profiles(), api.schemas(),
+  ]);
   set({
     plans: listed.plans,
     brokenPlans: listed.broken,
     plansReadAt: Date.now(),
     profiles: profileList.profiles,
     brokenProfiles: profileList.broken,
+    schemas: schemaList.schemas,
   });
 }
 
@@ -384,13 +387,36 @@ async function openPlan(name) {
   }
 }
 
+function newPlanEditor() {
+  const doc = plans.blankDocument();
+  set({
+    planDraft: {
+      mode: "create",
+      name: "",
+      doc,
+      schemaId: null,
+      schemaCalls: [],
+      selectedCalls: [],
+      editorMode: "advanced",
+      saved: null,
+      detail: { call_details: [], calls: [] },
+      profile: get().profiles[0]?.name ?? null,
+      preview: null,
+      error: null,
+    },
+    planCheck: null,
+  });
+}
+
 // Read typing back into the draft. Every committed field goes through here before it
 // is checked, so what the server judges is what is on the screen.
 function syncPlan() {
   const draft = get().planDraft;
   const form = document.querySelector("[data-plan-form]");
   if (!draft || !form) return draft;
-  const synced = { ...draft, doc: plans.readForm(form, draft.doc) };
+  const doc = plans.readForm(form, draft.doc);
+  const name = form.elements["plan.name"]?.value.trim() || draft.name;
+  const synced = { ...draft, name, doc: { ...doc, name } };
   set({ planDraft: synced });
   return synced;
 }
@@ -398,6 +424,58 @@ function syncPlan() {
 function editPlanDraft(change) {
   const draft = syncPlan();
   if (draft) set({ planDraft: { ...draft, ...change(draft) } });
+}
+
+async function choosePlanSchema(schemaId) {
+  const draft = syncPlan();
+  if (!draft) return;
+  if (!schemaId) {
+    set({
+      planDraft: {
+        ...draft,
+        schemaId: null,
+        schemaCalls: [],
+        selectedCalls: [],
+        doc: { ...draft.doc, chains: [] },
+      },
+      planCheck: null,
+    });
+    return;
+  }
+  try {
+    const schema = await api.schema(schemaId);
+    const current = get().planDraft;
+    set({
+      planDraft: {
+        ...current,
+        schemaId,
+        schemaCalls: schema.calls ?? [],
+        selectedCalls: [],
+        doc: { ...current.doc, chains: [] },
+        error: null,
+      },
+      planCheck: null,
+    });
+  } catch (error) {
+    set({ planDraft: { ...get().planDraft, error: error.message } });
+  }
+}
+
+function togglePlanSchemaCall(name, selected) {
+  const draft = syncPlan();
+  if (!draft || draft.mode !== "create") return;
+  const names = new Set(draft.selectedCalls ?? []);
+  if (selected) names.add(name);
+  else names.delete(name);
+  const selectedCalls = [...names];
+  editPlanDraft((current) => ({
+    selectedCalls,
+    doc: {
+      ...current.doc,
+      chains: plans.chainsForCalls(current.doc.chains ?? [], selectedCalls),
+    },
+  }));
+  set({ planCheck: null });
 }
 
 /**
@@ -411,6 +489,10 @@ function editPlanDraft(change) {
 async function checkPlan() {
   const draft = get().planDraft;
   if (!draft) return;
+  if (draft.mode === "create") {
+    set({ planCheck: null });
+    return;
+  }
   try {
     set({ planCheck: await api.validatePlan(draft.name, draft.doc) });
   } catch (error) {
@@ -431,7 +513,17 @@ async function savePlan() {
   const draft = syncPlan();
   if (!draft) return;
   try {
-    const saved = await api.replacePlan(draft.name, draft.doc);
+    if (draft.mode === "create" && (!draft.name || !draft.schemaId)) {
+      throw new Error("enter a plan name and choose a stored schema before saving");
+    }
+    const saved = draft.mode === "create"
+      ? await api.createPlan({
+          name: draft.name,
+          schema_id: draft.schemaId,
+          calls: draft.selectedCalls ?? [],
+          mix: draft.doc,
+        })
+      : await api.replacePlan(draft.name, draft.doc);
     set({
       planDraft: { ...get().planDraft, saved: draft.doc, error: null },
       planCheck: { ready: saved.ready, problems: saved.problems, figures: saved.figures },
@@ -1453,7 +1545,7 @@ document.addEventListener("click", (event) => {
     toggleBaseline(recording, button.dataset.baseline === "1");
   }
   if (action === "plan-reload") reloadPlans();
-  if (action === "plan-new") set({ planNew: { mode: "create", source: "openapi" } });
+  if (action === "plan-new") newPlanEditor();
   if (action === "calls-regenerate") {
     set({ planNew: { mode: "regenerate", plan: get().planDraft?.name, source: "openapi" } });
   }
@@ -1612,6 +1704,17 @@ document.addEventListener("change", (event) => {
   }
 
   if (event.target.closest('[data-change-action="draft-reload"]')) syncDraft();
+
+  const schema = event.target.closest('[data-plan-form] select[name="plan.schema"]');
+  if (schema) {
+    choosePlanSchema(schema.value);
+    return;
+  }
+  const schemaCall = event.target.closest("[data-schema-call]");
+  if (schemaCall) {
+    togglePlanSchemaCall(schemaCall.dataset.schemaCall, schemaCall.checked);
+    return;
+  }
 
   // The source select changes the hint under it, and the panel holds a document
   // somebody pasted: read the whole panel back before redrawing it.
