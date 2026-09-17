@@ -220,8 +220,8 @@ function verification(profile, state) {
   if (state.verifying === profile.name) {
     return `<div class="card-body py-2 border-bottom text-secondary">
       <span class="spinner-border spinner-border-sm me-2" role="status"></span>
-      Checking every endpoint — connecting to each load target and probing each
-      collector, in parallel.
+      Checking every endpoint — testing each front end before its collector; different
+      endpoints are checked in parallel.
     </div>`;
   }
   if (!report) return "";

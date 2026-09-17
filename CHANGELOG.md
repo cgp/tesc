@@ -843,3 +843,5 @@ Add same-snapshot paired flush-plus-packet durations and supported totals. Skip 
 - The ALB editor keeps the first returned host in the draft for saving, and profile documents retain a resolved host even while SSH collection is disabled so the AWS walk need not be repeated.
 - Added an Observation-level SSH username applied to every SSH endpoint at observation start, with endpoint usernames as fallback.
 - Added an always-available SSH test action for saved endpoint and ALB hosts. Probe failures now include the effective host, port, username, SSH config, identity files, and loaded-key diagnostics in the API response and server log; the profile-level observation username is applied to manual tests too.
+- Explicitly accept SSH host keys for ephemeral ALB-resolved hosts; change warnings are reserved for a future policy.
+- Profile verification now checks each endpoint's front end before starting that endpoint's SSH probe, while retaining parallelism across separate endpoints.

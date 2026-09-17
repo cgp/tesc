@@ -18,6 +18,7 @@ from jsonschema import Draft202012Validator
 
 from metrix_api import reachability
 from metrix_api.observer.facts import Filesystem, HostFacts
+from metrix_api.observer.ssh import SshTransport
 from metrix_api.profiles import ProfileError, parse_profile, to_targets
 
 REPO = Path(__file__).resolve().parents[2]
@@ -102,6 +103,11 @@ def using(monkeypatch, transport):
 
 def check(report, kind):
     return next(c for c in report.checks if c.kind == kind)
+
+
+def test_ssh_accepts_ephemeral_host_keys() -> None:
+    """ALB replacements must not fail solely because their host key changed."""
+    assert SshTransport(host="10.0.0.1")._options()["known_hosts"] is None
 
 
 # ------------------------------------------------------------------- load targets
@@ -209,6 +215,42 @@ class TestCollector:
 
 
 class TestReport:
+    async def test_each_endpoint_checks_load_before_collector(self, monkeypatch) -> None:
+        events: list[tuple[str, str]] = []
+        two = parse_profile(
+            {
+                "name": "ordered",
+                "endpoints": [
+                    {"id": "a", "address": "127.0.0.1:1", "load": False},
+                    {"id": "b", "address": "127.0.0.1:2", "load": False},
+                ],
+            }
+        )
+
+        async def fake_load(endpoint, timeout):
+            events.append((endpoint.id, "load"))
+            return reachability.Check(
+                endpoint.id, reachability.LOAD, reachability.SKIPPED, "—", "skip"
+            )
+
+        async def fake_collect(endpoint, timeout):
+            events.append((endpoint.id, "collect"))
+            return reachability.Check(
+                endpoint.id, reachability.COLLECT, reachability.SKIPPED, "—", "skip"
+            )
+
+        monkeypatch.setattr(reachability, "_load", fake_load)
+        monkeypatch.setattr(reachability, "_collect", fake_collect)
+
+        await reachability.verify(two)
+
+        assert events == [
+            ("a", "load"),
+            ("a", "collect"),
+            ("b", "load"),
+            ("b", "collect"),
+        ]
+
     async def test_checks_are_grouped_by_endpoint(self, listening, monkeypatch) -> None:
         """One box at a time, both of its answers together: that is how it is read."""
         using(monkeypatch, FakeTransport(facts=HostFacts(identity={"hostname": "h"})))

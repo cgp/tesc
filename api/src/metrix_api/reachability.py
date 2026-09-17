@@ -92,17 +92,21 @@ class Report:
 async def verify(
     profile: Profile, *, timeout: float = 5.0, endpoints: list[Endpoint] | None = None
 ) -> Report:
-    """Check every endpoint, in parallel.
+    """Check every endpoint, with its load target before its collector.
 
-    In parallel because these are timeouts, not work: a profile with eight boxes and
-    one firewall problem would otherwise take eight times the timeout to tell you
-    about it, in series, while nothing happens.
+    Different endpoints are checked in parallel because these are timeouts, not work,
+    but each endpoint's front-end connection is completed before its SSH probe starts.
+    That avoids doubling the connection burst against one host and makes a profile
+    check answer the front-end question before asking the box for observations.
     """
     chosen = profile.endpoints if endpoints is None else endpoints
-    checks = await asyncio.gather(
-        *[_load(endpoint, timeout) for endpoint in chosen],
-        *[_collect(endpoint, timeout) for endpoint in chosen],
-    )
+    async def check_endpoint(endpoint: Endpoint) -> list[Check]:
+        load = await _load(endpoint, timeout)
+        collect = await _collect(endpoint, timeout)
+        return [load, collect]
+
+    grouped = await asyncio.gather(*(check_endpoint(endpoint) for endpoint in chosen))
+    checks = [check for pair in grouped for check in pair]
     # Grouped by endpoint rather than by kind, because that is how they are read: one
     # box at a time, both of its answers together.
     order = {endpoint.id: i for i, endpoint in enumerate(chosen)}

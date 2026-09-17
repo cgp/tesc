@@ -43,6 +43,8 @@ class SshTransport:
     port: int = 22
     user: str | None = None
     key: Path | None = None
+    #: ALB-resolved hosts are ephemeral: accept the presented host key for now.
+    #: A future policy can warn when it changes without blocking collection.
     known_hosts: Path | None = None
     connect_timeout: float = 10.0
     #: OpenSSH client config to honour. Defaults to the user's own ~/.ssh/config, so
@@ -129,8 +131,9 @@ class SshTransport:
             config = default if default.is_file() else None
         if config is not None:
             options["config"] = [str(config)]
-        # A host key we have never seen should not stop a recording; the profile is
-        # already an explicit statement about which boxes these are.
+        # Passing None explicitly disables AsyncSSH known-host checking. ALB-resolved
+        # hosts are ephemeral, so accept the presented key for now; a later policy can
+        # report changes without blocking collection.
         options["known_hosts"] = str(self.known_hosts) if self.known_hosts else None
         return options
 

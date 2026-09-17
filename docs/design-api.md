@@ -4,7 +4,7 @@ The control plane: target discovery, host observation, storage and analysis, and
 
 Everything through §17 is buildable and useful with no engine installed — observation-only recordings are a first-class mode, not a degraded one.
 
-Profile verification is also available per SSH host from the endpoint row. It reports the exact effective host, port, username, SSH config files, identity files, and loaded-key count used by the probe, so authentication and routing failures can be distinguished from a genuinely unreachable host.
+Profile verification is also available per SSH host from the endpoint row. It reports the exact effective host, port, username, SSH config files, identity files, and loaded-key count used by the probe, so authentication and routing failures can be distinguished from a genuinely unreachable host. SSH host-key checking is intentionally disabled for these ephemeral hosts: the presented key is accepted, with change warnings deferred to a later policy.
 
 *Section numbers are preserved from the original combined outline, so cross-references between these three documents remain valid. Numbers are therefore not contiguous within any one file.*
 
@@ -178,7 +178,7 @@ Observation defaults include an optional profile-level SSH username. It is appli
 
 A profile is a set of claims, and every one of them fails silently: a security group that admits the balancer and not this machine, an exporter that is not running, a key that works for one box and not its replacement. Left unchecked, the first evidence is a recording full of gaps.
 
-Verification asks both questions of every endpoint, on demand, and reports them separately because they are fixed by different people:
+Verification asks both questions of every endpoint, on demand, and reports them separately because they are fixed by different people. Different endpoints may be checked in parallel, but each endpoint's front-end connection is completed before its collector probe begins, avoiding a duplicate connection burst against one host:
 
 - **the load target** — open a connection, complete the TLS handshake when TLS is on. Nothing is sent: this asks whether the socket accepts, not what is listening on it.
 - **the collector** — one real probe over the transport a recording would use. Not a port check, because an SSH login that succeeds and then cannot run the stats script, and an exporter answering 404 on the configured path, are exactly the failures a port check passes and a recording then hits.

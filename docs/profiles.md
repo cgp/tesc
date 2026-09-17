@@ -104,6 +104,10 @@ every SSH endpoint when an observation starts; an endpoint-specific `collect.use
 is used only when the profile-wide value is blank. This keeps the login choice in
 one place for an environment without rewriting every endpoint.
 
+SSH host keys are accepted without known-host verification because ALB-resolved hosts
+are ephemeral and may be replaced without notice. A future policy will warn when a
+key changes rather than blocking collection.
+
 ## Worked examples
 
 ### One box running everything
