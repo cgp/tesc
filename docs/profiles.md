@@ -99,6 +99,11 @@ Defaults: `ssh` port 22, `scrape` port 9100 and path `/metrics`. The Config page
 shows the resolved destination for every endpoint, so you can check it without
 starting a recording.
 
+The profile's Observation section also accepts `ssh_user`. When set, it is used for
+every SSH endpoint when an observation starts; an endpoint-specific `collect.user`
+is used only when the profile-wide value is blank. This keeps the login choice in
+one place for an environment without rewriting every endpoint.
+
 ## Worked examples
 
 ### One box running everything

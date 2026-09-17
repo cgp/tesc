@@ -836,3 +836,9 @@ Add same-snapshot paired flush-plus-packet durations and supported totals. Skip 
 - Added per-row ALB host resolution to the profile editor. It reuses the AWS discovery walk, presents the concrete instance or Fargate task IPs as read-only candidates, and saves one selected radio candidate as `collect.host`.
 - Added an explicit SSH collection enable checkbox and per-candidate probe action; tests use the same real collector probe as profile verification and remain transient.
 - Enlarged endpoint action icons slightly and documented the explicit-ALB setup flow. Rust, 664 deterministic Python tests, 185 front-end tests, and contract checks pass; live SSH integration checks timed out against the configured external host.
+
+## 2026-09-17 — Persist resolved ALB hosts
+
+- Added resolver logging for start, hop progress, notes, cache hits, saved inventories, resolved addresses, and the final inventory dump.
+- The ALB editor keeps the first returned host in the draft for saving, and profile documents retain a resolved host even while SSH collection is disabled so the AWS walk need not be repeated.
+- Added an Observation-level SSH username applied to every SSH endpoint at observation start, with endpoint usernames as fallback.

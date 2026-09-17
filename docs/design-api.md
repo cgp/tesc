@@ -168,6 +168,8 @@ An explicitly entered ALB can use that same walk to choose its observation host 
 
 Every endpoint carries an address regardless, because that is where the box *is*; `load` says whether it is also where the load goes. This is what makes `targets.json` derivable: the default selection is the endpoints that take traffic, and the observer's list is the ones with a collector.
 
+Observation defaults include an optional profile-level SSH username. It is applied to every SSH collector when an observation starts, while an endpoint-level username remains the fallback when the profile field is empty. The default is applied to the in-memory observation profile, not copied into endpoint files.
+
 **The endpoint modes derive the addressing class stored in series identity** (§17.2): `alb` and `elb` are through-the-balancer, while `ip`, `ecs`, and `fargate` are direct. Those two paths are never compared against each other. A legacy profile-wide `load_balancer` or `direct` value is still accepted and mapped onto its endpoints when the file is read.
 
 ### 3.5 Verifying a profile

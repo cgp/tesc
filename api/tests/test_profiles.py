@@ -87,6 +87,31 @@ class TestParsing:
         assert parse_profile(once) == profile()
         assert to_document(parse_profile(once)) == once
 
+    def test_an_observation_username_round_trips(self) -> None:
+        parsed = profile(
+            observe={"interval": "1s", "ssh_user": " ubuntu ", "collect": ["cpu"]}
+        )
+        assert parsed.ssh_user == "ubuntu"
+        assert parse_profile(to_document(parsed)) == parsed
+
+    def test_a_resolved_host_is_kept_even_when_collection_is_disabled(self) -> None:
+        parsed = profile(
+            endpoints=[
+                {
+                    "id": "alb",
+                    "addressing": "alb",
+                    "address": "api.example.com:443",
+                    "collect": {"transport": "none", "host": "10.0.11.21"},
+                }
+            ]
+        )
+        document = to_document(parsed)
+        assert document["endpoints"][0]["collect"] == {
+            "transport": "none",
+            "host": "10.0.11.21",
+        }
+        assert parse_profile(document) == parsed
+
     def test_every_shipped_example_parses(self) -> None:
         """These are what people copy. A broken example is worse than none, and
         nothing else in the suite reads this directory."""
@@ -225,6 +250,14 @@ class TestEndpoints:
         collection = profile().endpoints[0].collection()
         assert collection.host == "10.0.3.41"
         assert collection.user == "ec2-user"
+
+    def test_the_observation_username_applies_to_every_ssh_endpoint(self) -> None:
+        prof = profile(
+            observe={"interval": "1s", "ssh_user": "ubuntu", "collect": ["cpu"]}
+        )
+        observed = prof.with_observation_defaults()
+        assert observed.endpoints[0].collect.user == "ubuntu"
+        assert observed.endpoints[1].collect.transport == "none"
 
     def test_only_collectable_endpoints_are_observed(self) -> None:
         parsed = profile()

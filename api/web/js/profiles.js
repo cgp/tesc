@@ -475,6 +475,11 @@ function editor(draft) {
             })}
           </div>
           <div class="mt-3">
+            ${text("observe.ssh_user", "SSH username", doc.observe?.ssh_user, {
+              hint: "Applied to every SSH endpoint during observation.",
+            })}
+          </div>
+          <div class="mt-3">
             <div class="form-label">What is collected</div>
             <div class="d-flex flex-column gap-2">
               ${GROUPS.map((group) => checkbox(group, doc.observe?.collect ?? [])).join("")}
@@ -838,6 +843,7 @@ export function readForm(form, previous) {
 
   const observe = {};
   if (value("observe.interval")) observe.interval = value("observe.interval");
+  if (value("observe.ssh_user")) observe.ssh_user = value("observe.ssh_user");
   const collect = data.getAll("observe.collect").map(String);
   if (collect.length) observe.collect = collect;
   if (Object.keys(observe).length) doc.observe = observe;

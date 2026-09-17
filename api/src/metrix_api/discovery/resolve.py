@@ -13,6 +13,7 @@ nothing here has to know what a recording is.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -22,6 +23,8 @@ from metrix_api.discovery.ecs import Clients, discover
 from metrix_api.discovery.inventory import Inventory, Note, host_key, hosts, to_endpoints
 from metrix_api.profiles import Endpoint, Profile
 from metrix_api.store import inventories
+
+log = logging.getLogger(__name__)
 
 
 class ResolveError(Exception):
@@ -128,6 +131,12 @@ class Resolver:
         self, profile: Profile, *, force: bool = False, now: datetime | None = None
     ) -> Resolution:
         """The profile's current endpoints, walking AWS only when the cache is stale."""
+        log.info(
+            "profile resolve start profile=%s force=%s source=%s",
+            profile.name,
+            force,
+            profile.discover.source if profile.discover else None,
+        )
         if profile.discover is None:
             raise ResolveError(
                 f"profile {profile.name!r} has no 'discover' block; its endpoints are "
@@ -137,6 +146,9 @@ class Resolver:
         if not force:
             current = inventories.latest(self.conn, profile=profile.name)
             if current is not None and current.fresh(profile.discover.ttl, now=now):
+                log.info(
+                    "profile resolve cache hit profile=%s inventory=%s", profile.name, current.id
+                )
                 return self._resolution(current, profile, cached=True)
 
         walked = discover(
@@ -146,6 +158,13 @@ class Resolver:
             service=profile.discover.service,
         )
         stored = inventories.save(self.conn, walked, profile=profile.name, now=now)
+        log.info(
+            "profile resolve saved profile=%s inventory=%s reached=%s hosts=%s",
+            profile.name,
+            stored.id,
+            walked.reached,
+            [host.address for host in hosts(walked)],
+        )
         return self._resolution(stored, profile, cached=False)
 
     def _resolution(

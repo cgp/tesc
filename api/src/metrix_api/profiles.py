@@ -162,6 +162,8 @@ class Profile:
     gap: timedelta | None = None
     #: Collection defaults, overridable per endpoint.
     interval: timedelta | None = None
+    #: SSH login applied to every endpoint during observation when set.
+    ssh_user: str | None = None
     collect_metrics: list[str] = field(default_factory=list)
 
     @property
@@ -194,6 +196,25 @@ class Profile:
         which is stored with a timestamp and pinned to the runs that used it.
         """
         return replace(self, endpoints=endpoints)
+
+    def with_observation_defaults(self) -> Profile:
+        """Apply profile-wide observation settings without changing the file form."""
+        if not self.ssh_user:
+            return self
+        return replace(
+            self,
+            endpoints=[
+                replace(
+                    endpoint,
+                    collect=(
+                        replace(endpoint.collect, user=self.ssh_user)
+                        if endpoint.collect.transport == "ssh"
+                        else endpoint.collect
+                    ),
+                )
+                for endpoint in self.endpoints
+            ],
+        )
 
 
 def to_targets(profile: Profile, *, only: list[str] | None = None) -> dict[str, Any]:
@@ -301,6 +322,8 @@ def to_document(profile: Profile) -> dict[str, Any]:
     observe: dict[str, Any] = {}
     if profile.interval is not None:
         observe["interval"] = format_duration(profile.interval)
+    if profile.ssh_user:
+        observe["ssh_user"] = profile.ssh_user
     if profile.collect_metrics:
         observe["collect"] = list(profile.collect_metrics)
     if observe:
@@ -329,7 +352,12 @@ def to_document(profile: Profile) -> dict[str, Any]:
             }
         if endpoint.attributes:
             entry["attributes"] = dict(endpoint.attributes)
-        if endpoint.collect.transport != "none":
+        if (
+            endpoint.collect.transport != "none"
+            or endpoint.collect.host is not None
+            or endpoint.collect.user is not None
+            or endpoint.collect.port is not None
+        ):
             collect: dict[str, Any] = {"transport": endpoint.collect.transport}
             for key, value in (
                 ("host", endpoint.collect.host),
@@ -440,7 +468,7 @@ def parse_profile(
     observe = raw.get("observe", {})
     if not isinstance(observe, dict):
         raise ProfileError(f"{where}: 'observe' must be an object")
-    _reject_unknown(observe, {"interval", "collect"}, f"{where}: observe")
+    _reject_unknown(observe, {"interval", "ssh_user", "collect"}, f"{where}: observe")
 
     discover = (
         _discover(raw["discover"], legacy_addressing, f"{where}: discover")
@@ -489,6 +517,7 @@ def parse_profile(
             if "interval" in observe
             else None
         ),
+        ssh_user=str(observe["ssh_user"]).strip() if observe.get("ssh_user") else None,
         collect_metrics=[str(m) for m in observe.get("collect", [])],
         endpoints=endpoints,
     )

@@ -325,6 +325,10 @@ async def start_observation(
         profile = profile.with_endpoints(resolution.endpoints)
         pinned = resolution.stored
 
+    # Apply the profile-level SSH login only for this observation. It remains a
+    # default rather than being copied into every endpoint in the saved document.
+    profile = profile.with_observation_defaults()
+
     observed = profile.observed
     watched = observed
     if not observed:

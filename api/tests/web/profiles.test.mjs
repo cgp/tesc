@@ -228,6 +228,7 @@ test("the editor puts the editable name in the header and endpoints in a table",
   assert.doesNotMatch(markup, /metrix-endpoint-detail/);
   assert.match(markup, /metrix-profile-settings/);
   assert.match(markup, /What is collected/);
+  assert.match(markup, /SSH username/);
   assert.doesNotMatch(markup, />Name<span/);
 });
 
@@ -333,6 +334,30 @@ test("the selected ALB candidate is the one collector host saved", () => {
     host: "10.0.12.34",
     user: "deploy",
   });
+});
+
+test("the observation username is saved as a profile-wide default", () => {
+  const next = readForm(
+    {
+      fields: {
+        name: "staging",
+        "observe.interval": "1s",
+        "observe.ssh_user": "ubuntu",
+        "endpoints.0.id": "edge",
+        "endpoints.0.addressing": "ip",
+        "endpoints.0.address": "10.0.0.8:8080",
+        "endpoints.0.collect.transport": "ssh",
+        "endpoints.0.collect.ssh": "deploy@10.0.0.8:22",
+      },
+    },
+    {
+      name: "staging",
+      endpoints: [
+        { id: "edge", addressing: "ip", address: "10.0.0.8:8080", collect: { transport: "ssh" } },
+      ],
+    }
+  );
+  assert.equal(next.observe.ssh_user, "ubuntu");
 });
 
 test("one SSH destination round-trips to the profile's separate fields", () => {

@@ -916,21 +916,54 @@ async function resolveEndpointHosts(index) {
   const endpoint = draft?.doc.endpoints[index];
   if (!endpoint) return;
   const hostname = profiles.endpointHost(endpoint.address);
+  console.debug("[metrix] ALB resolve start", {
+    index,
+    endpoint: endpoint.id,
+    address: endpoint.address,
+    hostname,
+    document: endpoint,
+  });
   if (!hostname) {
+    console.debug("[metrix] ALB resolve skipped: no hostname", { index, endpoint });
     editEndpointResolution(index, { hostname, error: "Enter the ALB hostname first." });
     return;
   }
   editEndpointResolution(index, { hostname, loading: true, hosts: [], tests: {} });
   try {
     const result = await api.resolveDiscovery({ hostname });
+    console.debug("[metrix] ALB resolve response", {
+      index,
+      hostname,
+      partial: result.partial,
+      reached: result.inventory?.reached,
+      resources: result.inventory?.resources,
+      hosts: result.hosts,
+    });
     const seen = new Set();
     const hosts = (result.hosts ?? []).filter((host) => {
       if (!host.address || seen.has(host.address)) return false;
       seen.add(host.address);
       return true;
     });
+    if (hosts.length && !endpoint.collect?.host) {
+      editDraft((current) => ({
+        doc: {
+          ...current.doc,
+          endpoints: current.doc.endpoints.map((candidate, candidateIndex) =>
+            candidateIndex === index
+              ? { ...candidate, collect: { ...(candidate.collect ?? {}), host: hosts[0].address } }
+              : candidate
+          ),
+        },
+      }));
+      console.debug("[metrix] ALB resolve selected first host for saving", {
+        index,
+        host: hosts[0].address,
+      });
+    }
     editEndpointResolution(index, { hostname, loading: false, hosts, tests: {} });
   } catch (error) {
+    console.debug("[metrix] ALB resolve error", { index, hostname, error });
     editEndpointResolution(index, { hostname, loading: false, hosts: [], error: error.message });
   }
 }

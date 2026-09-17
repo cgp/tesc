@@ -25,6 +25,7 @@ document does not allow.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
@@ -41,6 +42,8 @@ from metrix_api.discovery.inventory import (
     Note,
     Resource,
 )
+
+log = logging.getLogger(__name__)
 
 #: boto3 client name -> the IAM prefix its calls are authorised under. Both halves
 #: are load-bearing: the left is how the walk reaches a client, the right is how the
@@ -131,6 +134,13 @@ def discover(
     if hostname and (cluster or service):
         raise DiscoveryError("give a hostname, or a cluster and a service -- not both")
 
+    log.info(
+        "discovery start hostname=%r cluster=%r service=%r",
+        hostname,
+        cluster,
+        service,
+    )
+
     if hostname:
         walk = _Walk(clients, hostname)
         _from_hostname(walk, _normalise(hostname))
@@ -140,7 +150,19 @@ def discover(
     else:
         raise DiscoveryError("discovery needs a hostname, or both a cluster and a service")
 
-    return walk.inventory()
+    inventory = walk.inventory()
+    log.info(
+        "discovery complete source=%s reached=%s resources=%d hosts=%s notes=%d",
+        inventory.source,
+        inventory.reached,
+        len(inventory.resources),
+        [host.address for host in inventory.resources if host.role in ("instance", "task")],
+        len(inventory.notes),
+    )
+    log.debug(
+        "discovery inventory source=%s document=%s", inventory.source, inventory.to_document()
+    )
+    return inventory
 
 
 @dataclass
@@ -170,6 +192,7 @@ class _Walk:
         return resource
 
     def note(self, hop: str, message: str) -> None:
+        log.info("discovery step=%s note=%s", hop, message)
         self.notes.append(Note(hop=hop, message=message))
 
     def done(self, hop: str) -> None:
@@ -181,6 +204,9 @@ class _Walk:
         """
         if self.reached == NOTHING or HOPS.index(hop) > HOPS.index(self.reached):
             self.reached = hop
+        log.info(
+            "discovery step=%s reached=%s resources=%d", hop, self.reached, len(self.resources)
+        )
 
     def inventory(self) -> Inventory:
         return Inventory(
