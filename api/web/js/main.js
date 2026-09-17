@@ -1005,6 +1005,31 @@ async function testEndpointHost(index, host) {
   }
 }
 
+async function testEndpointFrontend(index) {
+  const draft = syncDraft();
+  const endpoint = draft?.doc.endpoints[index];
+  if (!endpoint) return;
+  editEndpointResolution(index, (resolution) => ({
+    ...resolution,
+    frontendTesting: true,
+    frontendTest: null,
+  }));
+  try {
+    const result = await api.verifyLoad(endpoint);
+    editEndpointResolution(index, (resolution) => ({
+      ...resolution,
+      frontendTesting: false,
+      frontendTest: result,
+    }));
+  } catch (error) {
+    editEndpointResolution(index, (resolution) => ({
+      ...resolution,
+      frontendTesting: false,
+      frontendTest: { ok: false, check: { detail: error.message } },
+    }));
+  }
+}
+
 /**
  * Drop a recording's request-level bulk, after saying exactly what that costs.
  *
@@ -1538,6 +1563,7 @@ document.addEventListener("click", (event) => {
   if (action === "endpoint-test-host") {
     testEndpointHost(Number(index), button.dataset.host);
   }
+  if (action === "endpoint-test-load") testEndpointFrontend(Number(index));
   if (action === "endpoint-add") {
     editDraft((draft) => ({
       doc: { ...draft.doc, endpoints: [...draft.doc.endpoints, profiles.blankEndpoint()] },

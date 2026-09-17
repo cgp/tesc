@@ -71,6 +71,8 @@ export const api = {
   resolveDiscovery: (body) => request("/api/discovery/resolve", json("POST", body)),
   verifyCollector: (endpoint) =>
     request("/api/profiles/verify-collector", json("POST", endpoint)),
+  verifyLoad: (endpoint) =>
+    request("/api/profiles/verify-load", json("POST", endpoint)),
   profileTargets: (name) =>
     request(`/api/profiles/${encodeURIComponent(name)}/targets`),
   deleteProfile: (name) =>

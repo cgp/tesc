@@ -108,6 +108,10 @@ SSH host keys are accepted without known-host verification because ALB-resolved 
 are ephemeral and may be replaced without notice. A future policy will warn when a
 key changes rather than blocking collection.
 
+The profile editor can test each endpoint's front end independently. It requests `/`
+once and displays the returned HTTP status; a 404 still proves that the front end
+answered. The neighboring SSH action tests host observation separately.
+
 ## Worked examples
 
 ### One box running everything

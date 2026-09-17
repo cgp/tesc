@@ -117,7 +117,11 @@ async def verify(
 
 
 async def _load(endpoint: Endpoint, timeout: float) -> Check:
-    """Open a connection to the load target. Nothing is sent."""
+    """Request the root resource from the load target.
+
+    Any well-formed HTTP response answers the front-end question. A 404 is useful
+    evidence that the service answered, even though it is not an application success.
+    """
     if not endpoint.load:
         return Check(
             endpoint=endpoint.id,
@@ -129,19 +133,34 @@ async def _load(endpoint: Endpoint, timeout: float) -> Check:
 
     context = _tls_context(endpoint)
     started = time.perf_counter()
-    try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(
-                endpoint.host,
-                endpoint.port,
-                ssl=context,
-                # The name the certificate is checked against, and what SNI carries.
-                # A container addressed by IP presents the service's certificate, so
-                # verifying against the IP would fail on a correctly configured box.
-                server_hostname=_sni(endpoint) if context else None,
-            ),
-            timeout,
+    async def request_root() -> int:
+        reader, writer = await asyncio.open_connection(
+            endpoint.host,
+            endpoint.port,
+            ssl=context,
+            # The name the certificate is checked against, and what SNI carries.
+            # A container addressed by IP presents the service's certificate, so
+            # verifying against the IP would fail on a correctly configured box.
+            server_hostname=_sni(endpoint) if context else None,
         )
+        try:
+            host = endpoint.host_header or endpoint.host
+            writer.write(
+                f"GET / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode()
+            )
+            await writer.drain()
+            line = await reader.readline()
+            parts = line.decode("latin-1", errors="replace").strip().split(maxsplit=2)
+            if len(parts) < 2 or not parts[0].startswith("HTTP/") or not parts[1].isdigit():
+                raise OSError("front end returned an invalid HTTP response")
+            return int(parts[1])
+        finally:
+            writer.close()
+            with contextlib.suppress(OSError):
+                await writer.wait_closed()
+
+    try:
+        status = await asyncio.wait_for(request_root(), timeout)
     except TimeoutError:
         return _failed(endpoint, LOAD, f"no answer within {timeout:g}s", started)
     except ssl.SSLCertVerificationError as exc:
@@ -156,21 +175,19 @@ async def _load(endpoint: Endpoint, timeout: float) -> Check:
     except (OSError, ssl.SSLError) as exc:
         return _failed(endpoint, LOAD, _reason(exc), started)
 
-    writer.close()
-    # Best-effort: a peer that resets rather than closing politely has still answered.
-    with contextlib.suppress(OSError):
-        await writer.wait_closed()
-    del reader
-
-    how = "TLS handshake completed" if context else "connected"
     return Check(
         endpoint=endpoint.id,
         kind=LOAD,
         result=OK,
         address=endpoint.address,
-        detail=how,
+        detail=f"HTTP {status}",
         ms=_elapsed(started),
     )
+
+
+async def verify_load(endpoint: Endpoint, timeout: float) -> Check:
+    """Run only the lightweight front-end check for a draft endpoint."""
+    return await _load(endpoint, timeout)
 
 
 async def _collect(endpoint: Endpoint, timeout: float) -> Check:

@@ -32,7 +32,15 @@ async def listening():
     Port 0 lets the OS choose, so the suite never collides with something already
     running on this machine.
     """
-    server = await asyncio.start_server(lambda r, w: w.close(), "127.0.0.1", 0)
+    async def respond(reader, writer):
+        writer.write(
+            b"HTTP/1.1 404 Not Found\r\n"
+            b"Content-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(respond, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
     async with server:
         yield port
@@ -118,7 +126,7 @@ class TestLoadTarget:
         report = await reachability.verify(profile(address=f"127.0.0.1:{listening}"))
         result = check(report, reachability.LOAD)
         assert result.ok
-        assert result.detail == "connected"
+        assert result.detail == "HTTP 404"
         assert result.ms is not None
 
     async def test_a_refused_connection_says_so(self, closed_port) -> None:

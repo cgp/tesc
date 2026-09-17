@@ -253,6 +253,7 @@ test("an endpoint display row has edit and remove actions", () => {
   assert.equal((markup.match(/data-action="endpoint-edit"/g) ?? []).length, 2);
   assert.equal((markup.match(/data-action="endpoint-remove"/g) ?? []).length, 2);
   assert.equal((markup.match(/data-action="endpoint-resolve"/g) ?? []).length, 1);
+  assert.equal((markup.match(/data-action="endpoint-test-load"/g) ?? []).length, 2);
   assert.equal((markup.match(/data-action="endpoint-test-host"/g) ?? []).length, 2);
 });
 

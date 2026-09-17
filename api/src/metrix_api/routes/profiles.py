@@ -322,6 +322,23 @@ async def verify_collector(
     return {"ok": check.ok, "check": _check_document(check)}
 
 
+@router.post("/verify-load")
+async def verify_load(
+    endpoint: Any = Body(...), config: Config = Depends(get_config)
+) -> dict[str, Any]:
+    """Request the root resource of one draft front end without saving it."""
+    profile = _validated(
+        {"name": "connection-test", "endpoints": [{**endpoint, "load": True}]}
+        if isinstance(endpoint, dict)
+        else endpoint
+    )
+    candidate = profile.endpoints[0]
+    check = await reachability.verify_load(
+        candidate, timeout=config.observe.timeout.total_seconds()
+    )
+    return {"ok": check.ok, "check": _check_document(check)}
+
+
 @router.post("", status_code=201)
 def create_profile(
     document: Any = Body(...), config: Config = Depends(get_config)

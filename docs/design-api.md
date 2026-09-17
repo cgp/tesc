@@ -178,7 +178,7 @@ Observation defaults include an optional profile-level SSH username. It is appli
 
 A profile is a set of claims, and every one of them fails silently: a security group that admits the balancer and not this machine, an exporter that is not running, a key that works for one box and not its replacement. Left unchecked, the first evidence is a recording full of gaps.
 
-Verification asks both questions of every endpoint, on demand, and reports them separately because they are fixed by different people. Different endpoints may be checked in parallel, but each endpoint's front-end connection is completed before its collector probe begins, avoiding a duplicate connection burst against one host:
+Verification asks both questions of every endpoint, on demand, and reports them separately because they are fixed by different people. The front-end check makes one `GET /` request and treats any valid HTTP status, including 404, as evidence that the service answered. Different endpoints may be checked in parallel, but each endpoint's front-end request is completed before its collector probe begins, avoiding a duplicate connection burst against one host:
 
 - **the load target** — open a connection, complete the TLS handshake when TLS is on. Nothing is sent: this asks whether the socket accepts, not what is listening on it.
 - **the collector** — one real probe over the transport a recording would use. Not a port check, because an SSH login that succeeds and then cannot run the stats script, and an exporter answering 404 on the configured path, are exactly the failures a port check passes and a recording then hits.

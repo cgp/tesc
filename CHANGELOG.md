@@ -845,3 +845,4 @@ Add same-snapshot paired flush-plus-packet durations and supported totals. Skip 
 - Added an always-available SSH test action for saved endpoint and ALB hosts. Probe failures now include the effective host, port, username, SSH config, identity files, and loaded-key diagnostics in the API response and server log; the profile-level observation username is applied to manual tests too.
 - Explicitly accept SSH host keys for ephemeral ALB-resolved hosts; change warnings are reserved for a future policy.
 - Profile verification now checks each endpoint's front end before starting that endpoint's SSH probe, while retaining parallelism across separate endpoints.
+- Front-end verification now makes one root HTTP request and displays any returned status, with an independent per-endpoint front-end test button beside SSH connectivity.

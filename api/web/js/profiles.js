@@ -508,6 +508,7 @@ function endpointRow(endpoint, index, all, editing, resolution) {
       <td class="text-end">
         ${endpointHiddenFields(endpoint, index)}
         ${resolveHostButton(index, mode, resolution)}
+        ${testFrontendButton(endpoint, index, resolution)}
         ${testHostButton(endpoint, index, resolution)}
         <button type="button" class="btn btn-sm btn-icon" data-action="endpoint-edit"
                 data-index="${index}" title="Edit endpoint" aria-label="Edit endpoint">
@@ -526,6 +527,7 @@ function endpointRow(endpoint, index, all, editing, resolution) {
     <td>${mode === "alb" ? albSshTarget(collect, p) : sshTarget(collect, p, endpoint.address, true)}</td>
     <td class="text-end">
       ${resolveHostButton(index, mode, resolution)}
+      ${testFrontendButton(endpoint, index, resolution)}
       ${testHostButton(endpoint, index, resolution)}
       <button type="button" class="btn btn-sm btn-icon" data-action="endpoint-done"
               title="Finish editing" aria-label="Finish editing">${icon("check")}</button>
@@ -567,6 +569,23 @@ function testHostButton(endpoint, index, resolution) {
                   aria-label="Test SSH connection to ${escape(host)}"
                   ${testing ? "disabled" : ""}>
     ${testing ? '<span class="spinner-border spinner-border-sm" role="status"></span>' : icon("plug-connected")}
+  </button>`;
+}
+
+function testFrontendButton(endpoint, index, resolution) {
+  const test = resolution?.frontendTest;
+  const testing = resolution?.frontendTesting;
+  const result = test
+    ? `<span class="badge ${test.ok ? "bg-green-lt" : "bg-red-lt"} me-1"
+             title="${escape(test.check?.detail ?? "No diagnostic returned")}">
+         ${escape(test.check?.detail ?? (test.ok ? "ok" : "failed"))}
+       </span>`
+    : "";
+  return `${result}<button type="button" class="btn btn-sm btn-icon" data-action="endpoint-test-load"
+                  data-index="${index}" title="Test front end at ${escape(endpointHost(endpoint.address))}"
+                  aria-label="Test front end at ${escape(endpointHost(endpoint.address))}"
+                  ${testing ? "disabled" : ""}>
+    ${testing ? '<span class="spinner-border spinner-border-sm" role="status"></span>' : icon("server")}
   </button>`;
 }
 
