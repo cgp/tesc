@@ -75,6 +75,10 @@ async def test_a_probe_reports_every_step_in_order(sshd, caplog) -> None:
     assert " ok in " in report.splitlines()[0]
     steps = [line.split()[0] for line in report.splitlines()[1 : 1 + len(STEPS)]]
     assert steps == list(STEPS)
+    # A slow options step says which loader took the time, and on which file.
+    options = report.splitlines()[1]
+    assert "load_keypairs" in options and "accepted" in options
+    assert "config parse and the rest" in options
     assert "Trying public key auth with ssh-ed25519 key" in report
     assert "Auth for user probe succeeded" in report
 
