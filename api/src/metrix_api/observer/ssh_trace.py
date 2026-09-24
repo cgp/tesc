@@ -53,6 +53,23 @@ class Trace:
         self.events: list[tuple[float, str]] = []
         #: AsyncSSH's log prefix for this connection, e.g. "[conn=3", once known.
         self.tag: str | None = None
+        #: Loader calls made while building the options: name, seconds, count, paths.
+        self.loads: list[tuple[str, float, int | None, str]] = []
+
+    def loading(self, seconds: float) -> str:
+        """Where an options step of `seconds` went: each loader, then the rest.
+
+        The rest is chiefly the SSH config parse, including any `Match exec` command
+        it had to run.
+        """
+        parts = []
+        for name, spent, count, paths in self.loads:
+            found = "" if count is None else f" -> {count}"
+            where = f" [{paths}]" if paths else ""
+            parts.append(f"{name} {_ms(spent)}ms{found}{where}")
+        rest = seconds - sum(spent for _, spent, _, _ in self.loads)
+        parts.append(f"config parse and the rest {_ms(max(rest, 0.0))}ms")
+        return "; ".join(parts)
 
     def mark(self, step: str, note: str = "") -> None:
         self.marks.append((step, time.perf_counter(), note))
@@ -138,6 +155,61 @@ class _Capture(logging.Filter):
 
 
 _capture = _Capture()
+
+
+#: The loaders AsyncSSH's options call while building a connection's settings. Each
+#: is timed when it runs inside a traced probe, so a slow options step says whether
+#: it was the keys (and which call) or the config parse, which is the remainder.
+LOADERS = (
+    "load_keypairs",
+    "load_default_keypairs",
+    "load_identities",
+    "load_default_identities",
+    "load_public_keys",
+    "load_default_host_public_keys",
+    "load_certificates",
+)
+
+
+def instrument(connection_module: object) -> None:
+    """Wrap AsyncSSH's key and certificate loaders with per-trace timing, once.
+
+    The wrappers only record; they pass arguments and results through untouched, and
+    outside a traced probe they do nothing but call through. The options must be
+    built in a thread that carries the probe's context (`asyncio.to_thread` does) for
+    a call to be attributed to it.
+    """
+    if getattr(connection_module, "_metrix_instrumented", False):
+        return
+    for name in LOADERS:
+        original = getattr(connection_module, name, None)
+        if callable(original):
+            setattr(connection_module, name, _timed(name, original))
+    connection_module._metrix_instrumented = True  # type: ignore[attr-defined]
+
+
+def _timed(name: str, original):
+    def loader(*args, **kwargs):
+        trace = _current.get()
+        if trace is None:
+            return original(*args, **kwargs)
+        started = time.perf_counter()
+        result = original(*args, **kwargs)
+        count = len(result) if isinstance(result, (list, tuple)) else None
+        trace.loads.append((name, time.perf_counter() - started, count, _describe(args)))
+        return result
+
+    return loader
+
+
+def _describe(args: tuple) -> str:
+    """Which files a loader was pointed at, if it was given paths. Never key material."""
+    if not args or isinstance(args[0], (bytes, bytearray)):
+        return ""
+    first = args[0]
+    items = first if isinstance(first, (list, tuple)) else [first]
+    paths = [str(item) for item in items if isinstance(item, str) or hasattr(item, "parts")]
+    return ", ".join(p for p in paths if "PRIVATE KEY" not in p)[:200]
 
 
 @contextlib.contextmanager

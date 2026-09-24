@@ -12,9 +12,11 @@ hour ago.
 from __future__ import annotations
 
 import asyncio
+import functools
 import importlib
 import logging
 import socket
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import timedelta
@@ -30,7 +32,8 @@ from metrix_api.observer.linux import (
     split_blocks,
 )
 from metrix_api.observer.raw import RawSample
-from metrix_api.observer.ssh_trace import Trace, tracing
+from metrix_api.observer.ssh_keys import share
+from metrix_api.observer.ssh_trace import Trace, instrument, tracing
 from metrix_api.profiles import Collection
 
 log = logging.getLogger(__name__)
@@ -68,7 +71,9 @@ async def _asyncssh() -> ModuleType:
     milliseconds of synchronous work. Done on the loop, that stalls every check and
     stream in flight, so the first one happens in a thread.
     """
-    return await _import("asyncssh")
+    module = await _import("asyncssh")
+    share(module.connection)
+    return module
 
 
 @dataclass(slots=True)
@@ -192,13 +197,26 @@ class SshTransport:
 
     async def _traced_probe(self, asyncssh: ModuleType, trace: Trace) -> str:
         """The probe, one step at a time, each marked as it completes (see ssh_trace)."""
-        options = await asyncssh.SSHClientConnectionOptions.construct(
-            host=self.host, port=self.port, **self._options()
+        # Built once, here, in a thread that carries the probe's context so the key
+        # loaders' timings are attributed to this trace. `connect` would build them
+        # again from the same arguments -- parsing the config and loading every key a
+        # second time -- so it is handed the keys already loaded (below).
+        instrument(asyncssh.connection)
+        started = time.perf_counter()
+        options = await asyncio.to_thread(
+            functools.partial(
+                asyncssh.SSHClientConnectionOptions,
+                host=self.host,
+                port=self.port,
+                loop=asyncio.get_running_loop(),
+                **self._options(),
+            )
         )
+        keys = options.client_keys
         trace.mark(
             "options",
-            f"{options.username}@{options.host}:{options.port}, "
-            f"{len(options.client_keys or [])} client key(s)",
+            f"{options.username}@{options.host}:{options.port}, {len(keys or [])} client "
+            f"key(s); {trace.loading(time.perf_counter() - started)}",
         )
 
         if getattr(options, "tunnel", None) or getattr(options, "proxy_command", None):
@@ -226,7 +244,13 @@ class SshTransport:
                 trace.mark("auth")
 
         async with asyncssh.connect(
-            self.host, port=self.port, options=options, client_factory=Client
+            self.host,
+            port=self.port,
+            options=options,
+            client_factory=Client,
+            # Already loaded: an empty or absent list would send AsyncSSH back to
+            # the default key files, so only a non-empty one is passed on.
+            **({"client_keys": keys} if keys else {}),
         ) as conn:
             process = await conn.create_process(PROBE_SCRIPT)
             trace.mark("session")
