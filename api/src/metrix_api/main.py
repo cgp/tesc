@@ -10,8 +10,8 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from metrix_api import __version__, server_log
@@ -80,6 +80,23 @@ def create_app(config: Config | None = None) -> FastAPI:
             log.warning("closed %d recording(s) left running by a previous process", len(abandoned))
     finally:
         conn.close()
+
+    @app.exception_handler(Exception)
+    async def unhandled(request: Request, exc: Exception) -> JSONResponse:
+        """A bug, reported where it can be read rather than only on the console.
+
+        Logged through `metrix_api` so the traceback reaches the Logs page (§2.6);
+        uvicorn's own report goes to a console nobody may be watching. The page gets
+        the exception's own words and a pointer, not a bare "Internal Server Error".
+        """
+        log.error("unhandled error on %s %s", request.method, request.url.path, exc_info=exc)
+        reason = str(exc) or type(exc).__name__
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": f"internal error: {reason} (the traceback is under Server › Logs)"
+            },
+        )
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:

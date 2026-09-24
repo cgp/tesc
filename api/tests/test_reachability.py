@@ -142,6 +142,25 @@ class TestLoadTarget:
         assert result.ok
         assert result.ms < 1000
 
+    async def test_a_loop_without_happy_eyeballs_still_connects(
+        self, listening, monkeypatch
+    ) -> None:
+        """uvicorn runs on uvloop wherever it is installed, and uvloop's
+        `create_connection` rejects `happy_eyeballs_delay` -- a 500 on every check."""
+        loop = asyncio.get_running_loop()
+        original = loop.create_connection
+
+        async def like_uvloop(*args, **kwargs):
+            for name in ("happy_eyeballs_delay", "interleave"):
+                if name in kwargs:
+                    raise TypeError(f"create_connection() got an unexpected keyword: {name}")
+            return await original(*args, **kwargs)
+
+        monkeypatch.setattr(loop, "create_connection", like_uvloop)
+        for address in (f"localhost:{listening}", f"127.0.0.1:{listening}"):
+            result = check(await reachability.verify(profile(address=address)), reachability.LOAD)
+            assert result.ok, result.detail
+
     async def test_a_check_logs_its_connect_and_response_times(self, listening, caplog) -> None:
         """A slow application root and a slow network look alike without the split."""
         caplog.set_level("INFO", logger="metrix_api.reachability")

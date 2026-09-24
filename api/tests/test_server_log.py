@@ -69,3 +69,25 @@ def test_the_route_serves_what_the_package_logs(tmp_path: Path) -> None:
     page = client.get("/api/logs", params={"after": before}).json()
     assert [e["message"] for e in page["entries"]] == ["discovery start hostname='x'"]
     assert page["entries"][0]["source"] == "discovery.ecs"
+
+
+def test_an_unhandled_error_is_logged_with_its_trace(tmp_path: Path, monkeypatch) -> None:
+    """A 500 whose traceback went only to uvicorn's console is a 500 nobody can read."""
+    from metrix_api import profiles
+
+    def broken(config):
+        raise RuntimeError("the profile directory exploded")
+
+    monkeypatch.setattr(profiles, "list_profiles", broken)
+    client = TestClient(
+        create_app(load_config(tmp_path).ensure_layout()), raise_server_exceptions=False
+    )
+    before = client.get("/api/logs").json()["latest"]
+    response = client.get("/api/profiles")
+    assert response.status_code == 500
+    assert "the profile directory exploded" in response.json()["detail"]
+
+    [entry] = client.get("/api/logs", params={"after": before}).json()["entries"]
+    assert entry["level"] == "error"
+    assert entry["message"] == "unhandled error on GET /api/profiles"
+    assert "RuntimeError: the profile directory exploded" in entry["trace"]

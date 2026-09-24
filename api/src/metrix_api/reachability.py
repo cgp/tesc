@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import socket
 import ssl
 import time
 from dataclasses import dataclass, field
@@ -149,20 +150,14 @@ async def _load(endpoint: Endpoint, timeout: float) -> Check:
 
     async def request_root() -> int:
         nonlocal connected, answered, writer
-        reader, writer = await asyncio.open_connection(
+        reader, writer = await _dial(
             endpoint.host,
             endpoint.port,
-            ssl=context,
+            context,
             # The name the certificate is checked against, and what SNI carries.
             # A container addressed by IP presents the service's certificate, so
             # verifying against the IP would fail on a correctly configured box.
-            server_hostname=_sni(endpoint) if context else None,
-            # Every resolved address is dialled at once and the first to connect
-            # wins. In turn, a name whose first answer is an unreachable IPv6
-            # address -- `localhost` on Windows, a dual-stack balancer seen from an
-            # IPv4-only network -- costs a refused-connection retry or the whole
-            # timeout before IPv4 is tried.
-            happy_eyeballs_delay=0,
+            _sni(endpoint) if context else None,
         )
         connected = _elapsed(started)
         host = endpoint.host_header or endpoint.host
@@ -213,6 +208,50 @@ async def _load(endpoint: Endpoint, timeout: float) -> Check:
         detail=f"HTTP {status}",
         ms=ms,
     )
+
+
+async def _dial(
+    host: str, port: int, context: ssl.SSLContext | None, server_hostname: str | None
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    """Connect to every address the name resolves to at once; the first wins.
+
+    In turn, a name whose first answer is an unreachable IPv6 address -- `localhost`
+    on Windows, a dual-stack balancer seen from an IPv4-only network -- costs a
+    refused-connection retry or the whole timeout before IPv4 is tried.
+
+    Raced here rather than with `create_connection(happy_eyeballs_delay=...)`, because
+    uvicorn runs on uvloop wherever it is installed and uvloop does not take that
+    argument. When every address fails, the first address's error is the one raised:
+    it is the one an ordinary client would have reported.
+    """
+    loop = asyncio.get_running_loop()
+    infos = await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    addresses = list(dict.fromkeys(info[4][0] for info in infos))
+
+    def attempt(address: str):
+        return asyncio.open_connection(
+            address, port, ssl=context, server_hostname=server_hostname
+        )
+
+    if len(addresses) == 1:
+        return await attempt(addresses[0])
+
+    tasks = [asyncio.ensure_future(attempt(address)) for address in addresses]
+    winner = None
+    try:
+        for finished in asyncio.as_completed(tasks):
+            with contextlib.suppress(OSError, ssl.SSLError):
+                winner = await finished
+                return winner
+        # Every attempt failed; re-raise the first address's reason.
+        return tasks[0].result()
+    finally:
+        for task in tasks:
+            task.cancel()
+        # Reap the losers, closing any that connected in the same instant.
+        for outcome in await asyncio.gather(*tasks, return_exceptions=True):
+            if isinstance(outcome, tuple) and outcome is not winner:
+                outcome[1].close()
 
 
 #: How long a finished check waits for its connection to close. A plain socket

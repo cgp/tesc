@@ -92,6 +92,8 @@ A running test updates **once per second**, on both the stats table and the char
 
 Operations on the server fail in ways the page that started them only summarises: an SSH probe's effective config, a discovery hop's note, an engine that exited. Every `metrix_api` logger at INFO and above is also written into a bounded in-memory buffer (the most recent 2,000 records) and served by `GET /api/logs?after=<seq>`, which returns only records newer than the sequence number the page already holds.
 
+An error no route handled is logged there too, with its traceback, and the 500 carries the exception's message rather than a bare status line.
+
 In memory, not on disk: it answers *what just happened*, and a restart is a fair place for that to end. Nothing enters the log that the rule on secrets forbids — messages are written by this code, which logs addresses, usernames and key paths, never key material or header values. Third-party loggers (botocore, asyncssh, uvicorn's access log) are left out: they are noise at this level, and the page's own polling would fill the access log with itself.
 
 ---
