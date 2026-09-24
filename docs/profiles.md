@@ -286,8 +286,12 @@ reachable nor unreachable — it was never going to be checked, and that is not 
 fault.
 
 Each check is also written to **Server › Logs** with its timing — connect and
-response separately for the load target, and the effective SSH settings when a probe
-fails.
+response separately for the load target. An SSH probe is logged step by step:
+reading config and keys, DNS, TCP, key exchange, authentication, opening the
+session, the script and the close, each with its own time, followed by AsyncSSH's
+account of the connection (every key tried, every channel request). A failure names
+the step it was in. Time spent in authentication or opening the session is usually
+the server: reverse DNS, PAM, or a generated login message.
 
 The result is a snapshot of a moment and is not stored. It disappears when you leave
 the page, which is correct: reachability yesterday says nothing about reachability

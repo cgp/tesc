@@ -198,6 +198,8 @@ A successful check costs round trips, not seconds: a front end on the same netwo
 - **Nothing blocks the event loop.** Checks run concurrently on one loop, so synchronous work in one — importing the SSH stack, loading private keys to explain a failure — is charged to every other check in flight. SSH diagnostics are built only after a probe fails, and off the loop.
 - **The clock stops at the status line.** A check's time is to the first response line; closing the connection (a TLS shutdown waits for the peer) is bounded and not charged to it.
 
+An SSH probe is traced step by step (`observer/ssh_trace.py`): config and keys, DNS, TCP, key exchange, authentication, session, script and close are each timestamped as they complete, and AsyncSSH's own debug account of that one connection is kept beside them. The report goes to the server log, and a failure names the step it interrupted. AsyncSSH's debug level is raised only while a probe runs, and what it adds is captured by a logger filter and dropped, so a recording's streams are not narrated and no console fills with it.
+
 What remains slow is slow for a reason worth seeing: a filtered address costs the full observation timeout, and Windows retries a refused connection for about two seconds before reporting it. Each check writes its timing to the server log (§2.6), split into connect and response for the front end, so a slow application root is distinguishable from a slow network.
 
 Never automatic. A failure is a timeout against someone else's network, so it happens when someone asks, and the result is held for that sitting rather than stored — reachability is true of a moment, and a green tick from yesterday presented as current is worse than no tick.

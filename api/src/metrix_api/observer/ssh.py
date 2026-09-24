@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
+import socket
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import timedelta
@@ -29,6 +30,7 @@ from metrix_api.observer.linux import (
     split_blocks,
 )
 from metrix_api.observer.raw import RawSample
+from metrix_api.observer.ssh_trace import Trace, tracing
 from metrix_api.profiles import Collection
 
 log = logging.getLogger(__name__)
@@ -178,10 +180,60 @@ class SshTransport:
         not worth threading this through the streaming connection's lifetime.
         """
         asyncssh = await _asyncssh()
+        trace = Trace(self.describe())
+        with tracing(trace):
+            try:
+                output = await self._traced_probe(asyncssh, trace)
+            except BaseException as exc:  # a timeout arrives here as a cancellation
+                log.warning("%s", trace.report(exc))
+                raise
+        log.info("%s", trace.report())
+        return parse_probe(output)
 
-        async with asyncssh.connect(self.host, port=self.port, **self._options()) as conn:
-            result = await conn.run(PROBE_SCRIPT, check=False)
-        return parse_probe(str(result.stdout or ""))
+    async def _traced_probe(self, asyncssh: ModuleType, trace: Trace) -> str:
+        """The probe, one step at a time, each marked as it completes (see ssh_trace)."""
+        options = await asyncssh.SSHClientConnectionOptions.construct(
+            host=self.host, port=self.port, **self._options()
+        )
+        trace.mark(
+            "options",
+            f"{options.username}@{options.host}:{options.port}, "
+            f"{len(options.client_keys or [])} client key(s)",
+        )
+
+        if getattr(options, "tunnel", None) or getattr(options, "proxy_command", None):
+            trace.mark("dns", "skipped: the connection goes through a proxy")
+        else:
+            infos = await asyncio.get_running_loop().getaddrinfo(
+                options.host, options.port, type=socket.SOCK_STREAM
+            )
+            trace.mark("dns", ", ".join(dict.fromkeys(str(info[4][0]) for info in infos)))
+
+        class Client(asyncssh.SSHClient):
+            """Marks the steps only AsyncSSH can see from inside `connect`."""
+
+            def connection_made(self, conn) -> None:
+                self._conn = conn
+                trace.tag = "[" + str(getattr(conn.logger, "_context", "") or "")
+                peer = conn.get_extra_info("peername") or ("?", "?")
+                trace.mark("connect", f"to {peer[0]}:{peer[1]}")
+
+            def begin_auth(self, username: str) -> None:
+                version = self._conn.get_extra_info("server_version")
+                trace.mark("handshake", f"server {version}, user {username}")
+
+            def auth_completed(self) -> None:
+                trace.mark("auth")
+
+        async with asyncssh.connect(
+            self.host, port=self.port, options=options, client_factory=Client
+        ) as conn:
+            process = await conn.create_process(PROBE_SCRIPT)
+            trace.mark("session")
+            result = await process.wait(check=False)
+            trace.mark("script", f"exit status {result.exit_status}")
+        trace.mark("close")
+        return str(result.stdout or "")
 
     async def stream(self, interval: timedelta) -> AsyncIterator[RawSample]:
         asyncssh = await _asyncssh()
