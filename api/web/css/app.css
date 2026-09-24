@@ -516,3 +516,18 @@
 .metrix-schema-drop-diagnostics code { white-space: normal; }
 .metrix-schema-references { margin-top: .75rem; font-size: .8125rem; }
 .metrix-schema-references a + a { margin-left: .25rem; }
+
+/* Server log (§2.6). Messages are key=value lines written for grep, so they keep
+   their spacing and break anywhere rather than widening the table. */
+.metrix-log-message {
+  font-family: var(--tblr-font-monospace);
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.metrix-log-trace {
+  max-height: 20rem;
+  margin: 0.25rem 0 0;
+  overflow: auto;
+  font-size: 0.75rem;
+}

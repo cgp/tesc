@@ -272,8 +272,10 @@ endpoints are labelled with the concrete kind that discovery found.
 **Verify** on a profile card asks two questions of every endpoint at once, and they
 are answered separately because they fail for different reasons:
 
-- **Load target** — can a connection be opened, and does the TLS handshake complete?
-  Nothing is sent. This asks whether the socket accepts, not what is listening on it.
+- **Load target** — one `GET /`, reading only the status line. Any status, 404
+  included, means the front end answered. A reachable front end answers in
+  milliseconds; an address that drops the connection costs the full observation
+  timeout, and on Windows a refused port takes about two seconds to report.
 - **Collector** — one real probe over the transport a recording would use. Not a port
   check: an SSH login that works and then cannot run the stats script, or an exporter
   answering 404 on the configured path, are exactly the failures a port check passes
@@ -282,6 +284,10 @@ are answered separately because they fail for different reasons:
 An endpoint with no collector, or one that takes no traffic, is drawn as neither
 reachable nor unreachable — it was never going to be checked, and that is not a
 fault.
+
+Each check is also written to **Server › Logs** with its timing — connect and
+response separately for the load target, and the effective SSH settings when a probe
+fails.
 
 The result is a snapshot of a moment and is not stored. It disappears when you leave
 the page, which is correct: reachability yesterday says nothing about reachability

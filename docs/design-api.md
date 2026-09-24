@@ -50,6 +50,7 @@ Three sections, per the discussion:
 | **Archive › Sweep** | One recording's boxes ranked against each other (§17.6). Reached from a recording rather than from the menu: it is a question about one recording, and a standing menu entry would be empty on arrival. |
 | **Archive › Recordings** | Everything captured, load runs and observation-only recordings alike: filter by kind/profile/status/severity/baseline, mark a recording as **baseline**, overlay N runs, inspect retained error samples, export (JSON / CSV / static HTML report), **purge** the request-level bulk or **delete** the recording outright (§17.1 — two different actions, kept apart). |
 | **Archive › Series** | The same list grouped by setup identity (§17.2), with the trend view (§17.3) and regression flags (§17.4). Its own page rather than a section of a recording, because it is the only view that is not about one recording: a run's own page answers *what happened*, and this answers *is that better or worse than the last ten*. Each recording links to its series and back. |
+| **Server › Logs** | What this process has been doing (§2.6): discovery walks, verification checks with their timings, recordings starting and failing. Newest first, filterable to warnings and errors, and polled only while the page is open. |
 
 "Recordings" covers both modes deliberately — an observation-only recording and a load run are the same object with different sections populated, so they compare against each other with the same machinery.
 
@@ -86,6 +87,12 @@ A running test updates **once per second**, on both the stats table and the char
 - **Payloads are deltas**, with a full snapshot as the first event after connect or reconnect, so a late-joining viewer is immediately correct. Each event carries counters since the last, current percentiles, phase and elapsed time, generator health, and any annotations raised in the interval.
 - **Slow clients coalesce rather than queue** — a view thirty seconds behind is worse than one that skipped thirty seconds. Events fan out from a single engine stream, so viewer count adds no per-viewer load.
 - **The stream is never on the measurement path.** The engine writes to a pipe and never blocks on a consumer; if the API stalls, `events_dropped` is annotated (§13.1) and the run continues unaffected. Nothing a browser does can perturb a test in progress.
+
+### 2.6 The server log
+
+Operations on the server fail in ways the page that started them only summarises: an SSH probe's effective config, a discovery hop's note, an engine that exited. Every `metrix_api` logger at INFO and above is also written into a bounded in-memory buffer (the most recent 2,000 records) and served by `GET /api/logs?after=<seq>`, which returns only records newer than the sequence number the page already holds.
+
+In memory, not on disk: it answers *what just happened*, and a restart is a fair place for that to end. Nothing enters the log that the rule on secrets forbids — messages are written by this code, which logs addresses, usernames and key paths, never key material or header values. Third-party loggers (botocore, asyncssh, uvicorn's access log) are left out: they are noise at this level, and the page's own polling would fill the access log with itself.
 
 ---
 
@@ -180,10 +187,18 @@ A profile is a set of claims, and every one of them fails silently: a security g
 
 Verification asks both questions of every endpoint, on demand, and reports them separately because they are fixed by different people. The front-end check makes one `GET /` request and treats any valid HTTP status, including 404, as evidence that the service answered. Different endpoints may be checked in parallel, but each endpoint's front-end request is completed before its collector probe begins, avoiding a duplicate connection burst against one host:
 
-- **the load target** — open a connection, complete the TLS handshake when TLS is on. Nothing is sent: this asks whether the socket accepts, not what is listening on it.
+- **the load target** — open a connection, complete the TLS handshake when TLS is on, send `GET /` and read only the status line.
 - **the collector** — one real probe over the transport a recording would use. Not a port check, because an SSH login that succeeds and then cannot run the stats script, and an exporter answering 404 on the configured path, are exactly the failures a port check passes and a recording then hits.
 
-Never automatic. It is several seconds of timeouts against someone else's network, so it happens when someone asks, and the result is held for that sitting rather than stored — reachability is true of a moment, and a green tick from yesterday presented as current is worse than no tick.
+A successful check costs round trips, not seconds: a front end on the same network answers in milliseconds, and an SSH probe in a few round trips plus the remote script. Three things used to add seconds and no longer may:
+
+- **Dual-stack names are raced, not tried in turn.** Every resolved address is dialled at once and the first to connect is used. Tried in order, a name whose first answer is an unreachable IPv6 address (`localhost` on Windows, a dual-stack balancer from an IPv4-only network) pays a refused-connection retry, or the whole timeout, before IPv4 is tried.
+- **Nothing blocks the event loop.** Checks run concurrently on one loop, so synchronous work in one — importing the SSH stack, loading private keys to explain a failure — is charged to every other check in flight. SSH diagnostics are built only after a probe fails, and off the loop.
+- **The clock stops at the status line.** A check's time is to the first response line; closing the connection (a TLS shutdown waits for the peer) is bounded and not charged to it.
+
+What remains slow is slow for a reason worth seeing: a filtered address costs the full observation timeout, and Windows retries a refused connection for about two seconds before reporting it. Each check writes its timing to the server log (§2.6), split into connect and response for the front end, so a slow application root is distinguishable from a slow network.
+
+Never automatic. A failure is a timeout against someone else's network, so it happens when someone asks, and the result is held for that sitting rather than stored — reachability is true of a moment, and a green tick from yesterday presented as current is worse than no tick.
 
 The run-time counterpart is the `target_unreachable` annotation: a target that produced *no* samples at all for a whole recording. It is `invalid` rather than `warn` because the box was named in the profile, so a reader counts it among what was measured, and an average over "the environment" that quietly omits one of its machines is worse than no average.
 

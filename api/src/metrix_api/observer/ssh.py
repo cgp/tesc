@@ -11,7 +11,10 @@ hour ago.
 
 from __future__ import annotations
 
+import asyncio
+import importlib
 import logging
+import sys
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import timedelta
@@ -33,6 +36,20 @@ log = logging.getLogger(__name__)
 #: Read at most this much before giving up on finding a complete block, so a host
 #: emitting garbage cannot grow the buffer without bound.
 MAX_BUFFER = 1 << 20
+
+
+async def _asyncssh():
+    """AsyncSSH, imported off the event loop the first time it is needed.
+
+    Imported lazily so the API starts without paying for an SSH stack it may never
+    use -- but the import pulls in the cryptography backend, which is hundreds of
+    milliseconds of synchronous work. Done on the loop, that stalls every check and
+    stream in flight, so the first one happens in a thread.
+    """
+    module = sys.modules.get("asyncssh")
+    if module is None:
+        module = await asyncio.to_thread(importlib.import_module, "asyncssh")
+    return module
 
 
 @dataclass(slots=True)
@@ -143,14 +160,14 @@ class SshTransport:
         Twice a recording, not once a second, so the cost of a second handshake is
         not worth threading this through the streaming connection's lifetime.
         """
-        import asyncssh
+        asyncssh = await _asyncssh()
 
         async with asyncssh.connect(self.host, port=self.port, **self._options()) as conn:
             result = await conn.run(PROBE_SCRIPT, check=False)
         return parse_probe(str(result.stdout or ""))
 
     async def stream(self, interval: timedelta) -> AsyncIterator[RawSample]:
-        import asyncssh  # imported here so the module loads without a live SSH stack
+        asyncssh = await _asyncssh()
 
         seconds = max(1, int(interval.total_seconds()))
         script = REMOTE_SCRIPT.replace("{interval}", str(seconds))

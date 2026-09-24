@@ -129,6 +129,28 @@ class TestLoadTarget:
         assert result.detail == "HTTP 404"
         assert result.ms is not None
 
+    async def test_a_dual_stack_name_does_not_wait_for_its_ipv6_address(
+        self, listening
+    ) -> None:
+        """`localhost` resolves to ::1 first, and this listener is IPv4 only.
+
+        Dialled in turn, Windows retries the refused IPv6 attempt for two seconds
+        before IPv4 is tried. Raced, the IPv4 connection answers in milliseconds.
+        """
+        report = await reachability.verify(profile(address=f"localhost:{listening}"))
+        result = check(report, reachability.LOAD)
+        assert result.ok
+        assert result.ms < 1000
+
+    async def test_a_check_logs_its_connect_and_response_times(self, listening, caplog) -> None:
+        """A slow application root and a slow network look alike without the split."""
+        caplog.set_level("INFO", logger="metrix_api.reachability")
+        await reachability.verify(profile(address=f"127.0.0.1:{listening}"))
+        messages = [r.getMessage() for r in caplog.records]
+        line = next(m for m in messages if "front end check ok" in m)
+        assert "status=404" in line
+        assert "connect=" in line and "response=" in line
+
     async def test_a_refused_connection_says_so(self, closed_port) -> None:
         report = await reachability.verify(
             profile(address=f"127.0.0.1:{closed_port}"), timeout=2.0
@@ -187,6 +209,18 @@ class TestCollector:
         assert result.ok
         assert "ip-10-0-3-41" in result.detail
         assert result.address == "ssh probe@10.0.0.1:22"
+
+    async def test_a_probe_that_answers_does_not_build_diagnostics(self, monkeypatch) -> None:
+        """Diagnostics load private keys synchronously; on success nobody reads them."""
+
+        def unwanted() -> dict[str, object]:
+            raise AssertionError("diagnostics built for a probe that answered")
+
+        transport = FakeTransport(facts=HostFacts(identity={"hostname": "h"}))
+        transport.diagnostics = unwanted
+        using(monkeypatch, transport)
+        report = await reachability.verify(collector(transport="ssh"))
+        assert check(report, reachability.COLLECT).ok
 
     async def test_a_refused_probe_reports_what_the_transport_said(self, monkeypatch) -> None:
         """The reason is the useful part: a key problem and a firewall differ here."""

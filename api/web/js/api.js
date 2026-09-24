@@ -73,6 +73,8 @@ export const api = {
     request("/api/profiles/verify-collector", json("POST", endpoint)),
   verifyLoad: (endpoint) =>
     request("/api/profiles/verify-load", json("POST", endpoint)),
+  // Only records newer than `after`: the Logs page polls with the last one it holds.
+  logs: (after = 0) => request(`/api/logs?${new URLSearchParams({ after })}`),
   profileTargets: (name) =>
     request(`/api/profiles/${encodeURIComponent(name)}/targets`),
   deleteProfile: (name) =>

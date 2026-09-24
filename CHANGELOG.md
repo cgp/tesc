@@ -847,3 +847,11 @@ Add same-snapshot paired flush-plus-packet durations and supported totals. Skip 
 - Profile verification now checks each endpoint's front end before starting that endpoint's SSH probe, while retaining parallelism across separate endpoints.
 - Front-end verification now makes one root HTTP request and displays any returned status, with an independent per-endpoint front-end test button beside SSH connectivity.
 - New plans now open directly in a blank editor. Authors choose an existing stored schema and check the endpoints to include; only those selected call definitions are stored with the plan.
+
+## 2026-09-24 — Fast verification and a server log
+
+- Front-end checks dial every resolved address at once (Happy Eyeballs with no stagger). `localhost` on Windows went from ~2,030 ms to 2–16 ms, because the refused `::1` attempt no longer runs before IPv4; a dual-stack name seen from an IPv4-only network no longer pays the whole timeout.
+- A check is timed to the HTTP status line; the connection close (a TLS shutdown waits for the peer) is bounded to 0.5 s and not charged to it.
+- Nothing in verification blocks the event loop any more: SSH diagnostics (key loading and config parsing, 100–200 ms) are built only after a probe fails and in a thread, and the first `asyncssh` import happens in a thread. A 50 ms front-end check with an SSH probe starting beside it measured 217 ms before and 52 ms after.
+- Added **Server › Logs**: every `metrix_api` record at INFO and above is kept in a 2,000-record in-memory buffer, served incrementally by `GET /api/logs?after=<seq>` and polled every two seconds while the page is open. Verification now logs each check's start and result, with connect/response times for front ends and elapsed time for probes.
+- Design (§2.4, §2.6, §3.5) and `profiles.md` updated. Ruff (except a pre-existing F841 in `routes/plans.py`), 678 Python tests and 191 front-end tests pass; the four live SSH integration tests time out because their configured hosts are not reachable from this network.

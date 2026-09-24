@@ -29,6 +29,10 @@ const state = {
   //: yesterday shown as if it were current would be worse than no result.
   verifying: null,
   verified: {},
+  //: The server log as last read, and which records the Logs page shows. Held only
+  //: while that page is open; it is fetched incrementally by sequence number.
+  logs: null,
+  logFilter: "all",
   plans: [],
   brokenPlans: [],
   //: When the plan directory was last read, shown beside its reload button for the

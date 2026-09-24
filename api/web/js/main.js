@@ -10,6 +10,7 @@ import * as charts from "./charts.js";
 import * as compare from "./compare.js";
 import * as config from "./config.js";
 import { bytes as formatBytes, count, escape } from "./format.js";
+import * as logs from "./logs.js";
 import * as plans from "./plans.js";
 import * as profiles from "./profiles.js";
 import * as recordings from "./recordings.js";
@@ -81,6 +82,12 @@ const ROUTES = {
     subtitle: "One plan, many boxes, one window. Which of them is the odd one out?",
     view: sweep,
   },
+  logs: {
+    section: "Server",
+    title: "Logs",
+    subtitle: "What this process has been doing, newest first.",
+    view: logs,
+  },
   compare: {
     section: "Archive",
     // No nav item of its own -- it is always reached from a selection, never from a
@@ -131,6 +138,7 @@ function parseHash() {
     return { name: "schemas", schema: parts[1] ? decodeURIComponent(parts[1]) : null };
   }
   if (parts[0] === "profiles") return { name: "profiles" };
+  if (parts[0] === "logs") return { name: "logs" };
   // The plan being edited is in the hash, so an editor can be linked to and reopened
   // where it was. What is typed into it is not -- that is work in progress.
   if (parts[0] === "plans") return { name: "plans", plan: parts[1] ?? null };
@@ -178,6 +186,11 @@ async function load(route) {
 
     if (route.name === "profiles") {
       await loadProfiles();
+      return;
+    }
+
+    if (route.name === "logs") {
+      await pollLogs();
       return;
     }
 
@@ -710,6 +723,38 @@ async function startObserving(profileName) {
     location.hash = "#/performance/stats";
   } catch (error) {
     set({ error: error.message });
+  }
+}
+
+/**
+ * Read server log records newer than the ones held, while the Logs page is open.
+ *
+ * Incremental by sequence number, so a quiet server costs an empty list. A sequence
+ * that went backwards means the process restarted, and what is held describes a
+ * process that no longer exists: start again from nothing. A failed background poll
+ * is left to the health badge rather than flashing an error every two seconds.
+ */
+let readingLogs = false;
+async function pollLogs() {
+  if (activeRoute(get()).name !== "logs" || readingLogs) return;
+  readingLogs = true;
+  try {
+    let held = get().logs;
+    let page = await api.logs(held?.latest ?? 0);
+    if (held && page.latest < held.latest) {
+      held = null;
+      page = await api.logs(0);
+    }
+    if (held && !page.truncated && !page.entries.length) return;
+    const entries =
+      held && !page.truncated
+        ? [...held.entries, ...page.entries].slice(-page.capacity)
+        : page.entries;
+    set({ logs: { entries, latest: page.latest, capacity: page.capacity } });
+  } catch (error) {
+    if (!get().logs) set({ error: error.message });
+  } finally {
+    readingLogs = false;
   }
 }
 
@@ -1705,6 +1750,12 @@ document.addEventListener("change", (event) => {
 
   if (event.target.closest('[data-change-action="draft-reload"]')) syncDraft();
 
+  const logFilter = event.target.closest("[data-log-filter]");
+  if (logFilter) {
+    set({ logFilter: logFilter.value });
+    return;
+  }
+
   const schema = event.target.closest('[data-plan-form] select[name="plan.schema"]');
   if (schema) {
     choosePlanSchema(schema.value);
@@ -1809,3 +1860,5 @@ await pollHealth();
 await rejoinLive();
 await onRouteChange();
 setInterval(pollHealth, 10000);
+// A no-op unless the Logs page is open.
+setInterval(pollLogs, 2000);

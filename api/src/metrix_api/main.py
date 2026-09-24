@@ -14,10 +14,20 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from metrix_api import __version__
+from metrix_api import __version__, server_log
 from metrix_api.config import Config, load_config
 from metrix_api.live import Registry
-from metrix_api.routes import compare, discovery, live, plans, profiles, recordings, schemas, series
+from metrix_api.routes import (
+    compare,
+    discovery,
+    live,
+    logs,
+    plans,
+    profiles,
+    recordings,
+    schemas,
+    series,
+)
 from metrix_api.store import recordings as store_recordings
 from metrix_api.store.db import connect, migrate
 
@@ -44,6 +54,8 @@ class RevalidatedStatic(StaticFiles):
 
 def create_app(config: Config | None = None) -> FastAPI:
     settings = (config or load_config()).ensure_layout()
+    # Before anything below logs, so startup itself is on the Logs page.
+    server_log.install()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -90,6 +102,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     app.include_router(recordings.router)
     app.include_router(series.router)
     app.include_router(compare.router)
+    app.include_router(logs.router)
 
     if WEB.is_dir():
         # Mounted last so /api/* wins. The page is a single document; deep links are

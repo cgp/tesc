@@ -68,8 +68,9 @@ test("background API updates preserve profile fields, focus and selection", asyn
     throw new Error(`unexpected fetch: ${path}`);
   });
   t.mock.method(globalThis, "setInterval", (callback, interval) => {
-    assert.equal(interval, 10000);
-    poll = callback;
+    // Health every ten seconds; the server log every two, a no-op off its page.
+    assert.ok([10000, 2000].includes(interval), `unexpected timer: ${interval}ms`);
+    if (interval === 10000) poll = callback;
   });
   // Restore all browser globals when finished, including ones Node doesn't define.
   for (const [name, value] of Object.entries({
