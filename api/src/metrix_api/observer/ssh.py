@@ -14,11 +14,11 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
-import sys
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
+from types import ModuleType
 
 from metrix_api.observer.facts import HostFacts
 from metrix_api.observer.linux import (
@@ -38,7 +38,27 @@ log = logging.getLogger(__name__)
 MAX_BUFFER = 1 << 20
 
 
-async def _asyncssh():
+#: Modules whose import has *finished*. Not `sys.modules`: a module is entered there
+#: when its import starts, so a second probe reading it while the first is still
+#: importing gets a half-initialised module with no `connect` on it yet.
+_imported: dict[str, ModuleType] = {}
+
+
+async def _import(name: str) -> ModuleType:
+    """Import a module off the event loop, and hand it out only once complete.
+
+    `importlib.import_module` takes the per-module import lock, so concurrent first
+    callers each wait in their own thread for the one import in progress, rather
+    than any of them seeing it half done.
+    """
+    module = _imported.get(name)
+    if module is None:
+        module = await asyncio.to_thread(importlib.import_module, name)
+        _imported[name] = module
+    return module
+
+
+async def _asyncssh() -> ModuleType:
     """AsyncSSH, imported off the event loop the first time it is needed.
 
     Imported lazily so the API starts without paying for an SSH stack it may never
@@ -46,10 +66,7 @@ async def _asyncssh():
     milliseconds of synchronous work. Done on the loop, that stalls every check and
     stream in flight, so the first one happens in a thread.
     """
-    module = sys.modules.get("asyncssh")
-    if module is None:
-        module = await asyncio.to_thread(importlib.import_module, "asyncssh")
-    return module
+    return await _import("asyncssh")
 
 
 @dataclass(slots=True)

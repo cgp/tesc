@@ -118,6 +118,36 @@ def test_ssh_accepts_ephemeral_host_keys() -> None:
     assert SshTransport(host="10.0.0.1")._options()["known_hosts"] is None
 
 
+async def test_concurrent_first_imports_never_see_a_half_initialised_module(
+    tmp_path, monkeypatch
+) -> None:
+    """Two SSH probes starting together both import the SSH stack off the loop.
+
+    A module is in `sys.modules` from the moment its import starts, so the second
+    probe must wait for the first import to finish rather than read it from there:
+    "partially initialized module 'asyncssh' has no attribute 'connect'".
+    """
+    import sys
+
+    from metrix_api.observer import ssh
+
+    (tmp_path / "slow_stack.py").write_text(
+        "import time\ntime.sleep(0.3)\n\ndef connect():\n    return 'connected'\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, "slow_stack", raising=False)
+    monkeypatch.setattr(ssh, "_imported", {})
+
+    async def probe(delay: float) -> str:
+        await asyncio.sleep(delay)
+        # Used the moment it is handed over, as `probe()` does with `connect`: read
+        # after both imports finish, a half-initialised module would look complete.
+        return (await ssh._import("slow_stack")).connect()
+
+    # The second starts while the first import is asleep inside the module body.
+    assert await asyncio.gather(probe(0), probe(0.1)) == ["connected", "connected"]
+
+
 # ------------------------------------------------------------------- load targets
 
 
