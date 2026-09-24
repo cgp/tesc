@@ -393,6 +393,7 @@
 .metrix-basic-table td { padding: .35rem .5rem; }
 .metrix-basic-table .form-control,
 .metrix-basic-table .form-select { min-height: 2rem; }
+.metrix-basic-table input.metrix-path { min-width: 0; font-family: var(--metrix-mono); }
 .metrix-basic-table td.num,
 .metrix-basic-table th.num { text-align: right; font-family: var(--metrix-mono); }
 .metrix-basic-expect { font-family: var(--metrix-mono); }

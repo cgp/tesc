@@ -847,3 +847,9 @@ Add same-snapshot paired flush-plus-packet durations and supported totals. Skip 
 - Profile verification now checks each endpoint's front end before starting that endpoint's SSH probe, while retaining parallelism across separate endpoints.
 - Front-end verification now makes one root HTTP request and displays any returned status, with an independent per-endpoint front-end test button beside SSH connectivity.
 - New plans now open directly in a blank editor. Authors choose an existing stored schema and check the endpoints to include; only those selected call definitions are stored with the plan.
+
+## 2026-09-24 — Basic endpoint entry
+
+- Replaced the schema endpoint checklist and Basic call-name dropdown with an HTTP method and autocomplete path field. New plans can start from a typed endpoint without a schema.
+- Preserved URL templates such as /display/{{id}} in the editor and call document. Basic saves minimal method/path calls through server validation while retaining generated call details when selected.
+- Added API and front-end coverage for custom endpoints, schema suggestions, and the default Basic rate. Updated the API design and editor rule.

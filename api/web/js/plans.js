@@ -1,10 +1,9 @@
 // Plans: the mixture that decides what a run sends, and the editor for it.
 //
 // Three documents make a plan (§4), and they are not equally editable. The mixture
-// is the knob that gets turned, so it is a form. The calls are authored from the
-// codebase or generated from a schema and are read-only here (§20.3) -- editing a
-// request definition in a browser is how a plan drifts from the service it
-// describes. Targets are not stored with a plan at all: they come from a profile
+// is the knob that gets turned, so it is a form. Detailed calls are authored from
+// the codebase or generated from a schema; Basic can add a method/path call (§20.3).
+// Targets are not stored with a plan at all: they come from a profile
 // when the bundle is assembled.
 //
 // **Nothing on this page decides whether a plan is valid.** The percentages, the
@@ -53,28 +52,6 @@ export function blankDocument(name = "") {
   };
 }
 
-/** Keep one simple chain per selected schema endpoint, preserving edits if possible. */
-export function chainsForCalls(previous, names) {
-  const used = new Set();
-  const chains = names.map((call) => {
-    const old = previous.find((chain) => chain.steps?.[0]?.call === call);
-    if (old) {
-      used.add(old.name);
-      return { ...old };
-    }
-    const chain = blankBasicChain(call, [...previous, ...Array.from(used, (name) => ({ name }))]);
-    used.add(chain.name);
-    return chain;
-  });
-  const percent = names.length ? Math.round((100 / names.length) * 10000) / 10000 : 0;
-  return chains.map((chain, index) => ({
-    ...chain,
-    percent: index === chains.length - 1
-      ? Math.round((100 - percent * (chains.length - 1)) * 10000) / 10000
-      : percent,
-  }));
-}
-
 /** A Basic row is always a complete, single-call chain. */
 export function blankBasicChain(call, existing = []) {
   const base = call || "call";
@@ -103,10 +80,54 @@ export function basicCompatible(doc, calls = []) {
     chains.every(
       (chain) =>
         chain.steps?.length === 1 &&
-        known.has(chain.steps[0].call) &&
+        (known.has(chain.steps[0].call) || chain.steps[0].call === "") &&
         !chain.steps[0].repeat_until
     )
   );
+}
+
+export function availableCalls(draft) {
+  const calls = draft.schemaCalls ?? draft.detail?.call_details ?? [];
+  const added = Object.entries(draft.basicCalls ?? {}).map(([name, call]) => ({
+    name, method: call.method, path: call.path, headers: {}, body: "none", assert: [],
+  }));
+  return [...calls.filter((call) => !(call.name in (draft.basicCalls ?? {}))), ...added];
+}
+
+/** Resolve a typed method/path to an existing call or a new minimal call. */
+export function readBasicEndpoints(form, doc, calls, pending = {}, creating = false) {
+  const data = new FormData(form);
+  const value = (name) => (data.get(name) ?? "").toString().trim();
+  const all = [...calls, ...Object.entries(pending).map(([name, call]) => ({ name, ...call }))];
+  const additions = { ...pending };
+  const used = new Set(all.map((call) => call.name));
+  const chains = (doc.chains ?? []).map((chain, index) => {
+    const path = value(`basic.${index}.endpoint`);
+    const method = value(`basic.${index}.method`) || "GET";
+    const prior = chain.steps?.[0]?.call;
+    const current = all.find((call) => call.name === prior);
+    let match = current?.method === method && current?.path === path ? current
+      : all.find((call) => call.method === method && call.path === path);
+    if (!match && path) {
+      const base = `${method}-${path}`.toLowerCase().replace(/[^a-z0-9._-]+/g, "-")
+        .replace(/^-+|-+$/g, "").slice(0, 56) || "call";
+      let name = base;
+      for (let suffix = 2; used.has(name); suffix += 1) name = `${base}-${suffix}`;
+      used.add(name);
+      additions[name] = { method, path };
+      match = { name, method, path };
+      all.push(match);
+    }
+    return { ...chain, steps: [{ ...chain.steps[0], call: match?.name ?? "" }] };
+  });
+  const referenced = new Set(chains.map((chain) => chain.steps[0].call));
+  for (const name of Object.keys(additions)) if (!referenced.has(name)) delete additions[name];
+  const storedBasic = calls.some((call) => call.file === "calls/basic.json");
+  const references = creating ? doc.calls
+    : Object.keys(additions).length || storedBasic
+      ? [...new Set([...(doc.calls ?? []), "calls/basic.json"])]
+      : (doc.calls ?? []).filter((reference) => reference !== "calls/basic.json");
+  return { doc: { ...doc, calls: references, chains }, basicCalls: additions };
 }
 
 export function selectState(state) {
@@ -131,7 +152,7 @@ export function help() {
       <p>A plan is three documents. The <strong>mixture</strong> says what share of
       the traffic each chain of calls takes and how much traffic there is; the
       <strong>calls</strong> are the individual requests; the <strong>targets</strong>
-      are the machines. Only the first is edited here.</p>
+      are the machines. Basic can add a minimal endpoint call.</p>
 
       <p><strong>A percentage buys chain iterations, not requests.</strong> A
       two-step chain at 20% of 150/s is 30 iterations a second and 60 requests a
@@ -158,9 +179,10 @@ export function help() {
       same document a moment later and a zip that cannot run still looks like an
       artifact.</p>
 
-      <p><strong>Calls are read-only</strong> (§20.3). What is offered instead is the
-      bundle: export it, change the call in the file with the tooling and review a
-      code change gets, and put it back.</p>
+      <p><strong>Basic can add an endpoint</strong> by typing a method and path,
+      including a template such as <code>/display/{{id}}</code>. Its value must be
+      supplied by a dataset, an earlier step, or a built-in generator. For detailed
+      call changes, export the bundle, edit the file, and re-import it (§20.3).</p>
 
       <p><strong>A plan can be generated from a description of the service</strong>
       (§8) — an OpenAPI, Swagger, WADL or WSDL document, a HAR capture, an access log, or a bare
@@ -169,10 +191,9 @@ export function help() {
       declares. There is no model in it, so the same document always gives the same
       plan and a diff between two of them means the service changed.</p>
 
-      <p>A new plan opens blank. Choose one of the service descriptions already stored
-      in Schemas, then check the endpoints this plan should call. The selected
-      definitions become the read-only calls behind the mixture; generation is no
-      longer a separate step before the editor.</p>
+      <p>A new plan opens with one blank Basic row. Choose a stored schema for
+      endpoint suggestions, or type a path directly. Suggested definitions retain
+      their request details; typed endpoints start as method/path calls.</p>
 
       <p>What generation will never do is <strong>invent a chain</strong>. Guessing
       that one call feeds another is unreliable in exactly the cases that matter, and
@@ -434,8 +455,8 @@ function editor(state) {
   const draft = state.planDraft;
   const doc = draft.doc;
   const check = state.planCheck;
-  const calls = draft.schemaCalls ?? draft.detail?.call_details ?? [];
-  const canUseBasic = basicCompatible(doc, calls) && check?.ready !== false;
+  const calls = availableCalls(draft);
+  const canUseBasic = draft.mode === "create" || basicCompatible(doc, calls);
   const mode = draft.editorMode === "basic" && canUseBasic ? "basic" : "advanced";
 
   const error = draft.error
@@ -471,7 +492,7 @@ function editor(state) {
           hint: "Letters, digits, dot, dash, underscore. Used as the directory name.",
         }
       )}</div>` : ""}
-      ${draft.mode === "create" ? schemaCard(state, draft, calls) : ""}
+      ${draft.mode === "create" ? schemaCard(state, draft) : ""}
       ${editorTabs(mode, canUseBasic)}
     </div>
 
@@ -485,7 +506,7 @@ function editor(state) {
       <div class="card-body border-top text-secondary metrix-plan-explanation">
         ${
           mode === "basic"
-            ? "Basic keeps every row as one call and derives the stored rate and percentages from the RPS column. Calls themselves remain read-only."
+            ? "Basic keeps every row as one call and derives the stored rate and percentages from the RPS column. Type a path to add a method/path call."
             : "Advanced exposes the full mixture: multi-step chains, sessions, polling and percentage control. Calls themselves remain read-only."
         }
         Targets come from a profile when the bundle is assembled.
@@ -498,23 +519,13 @@ function editor(state) {
   </form>`;
 }
 
-function schemaCard(state, draft, calls) {
+function schemaCard(state, draft) {
   const schemas = state.schemas ?? [];
-  const selected = new Set(draft.selectedCalls ?? []);
   const options = schemas.length
     ? schemas.map((schema) => `<option value="${escape(schema.id)}"${schema.id === draft.schemaId ? " selected" : ""}>
         ${escape(schema.filename)} · ${escape(schema.source)} · ${count(schema.call_count, "endpoint")}
       </option>`).join("")
-    : `<option value="">No stored schemas — upload one in Schemas first</option>`;
-  const endpointRows = calls.length
-    ? calls.map((call) => `<label class="form-check mb-2">
-        <input class="form-check-input" type="checkbox" data-schema-call="${escape(call.name)}"
-               ${selected.has(call.name) ? "checked" : ""}>
-        <span class="form-check-label"><code>${escape(call.name)}</code>
-          <span class="text-secondary ms-2">${escape(call.method)} ${escape(call.path)}</span>
-        </span>
-      </label>`).join("")
-    : `<div class="text-secondary">Choose a stored schema to see its endpoints.</div>`;
+    : "";
   return `<div class="card border-top-0 rounded-0">
     <div class="card-body">
       <div class="metrix-field">
@@ -522,9 +533,8 @@ function schemaCard(state, draft, calls) {
         <select class="form-select" id="f-plan.schema" name="plan.schema">
           <option value="">Choose an existing schema</option>${options}
         </select>
-        <div class="form-hint">Only endpoints checked below become calls in this plan.</div>
+        <div class="form-hint">Optional. Its endpoints appear as suggestions in Basic; you can also type any path.</div>
       </div>
-      <div class="mt-3"><div class="form-label">Endpoints</div>${endpointRows}</div>
     </div>
   </div>`;
 }
@@ -536,7 +546,7 @@ function editorTabs(mode, canUseBasic) {
             aria-selected="${mode === value}" ${disabled ? "disabled" : ""}
             ${
               disabled
-                ? 'title="Basic is available for valid fixed-rate plans whose chains each contain one call"'
+                ? 'title="Basic is available for fixed-rate plans whose chains each contain one call"'
                 : ""
             }>${label}</button>
   </li>`;
@@ -625,8 +635,10 @@ function implication(figures) {
 
 function basicTable(doc, check, draft) {
   const chains = doc.chains ?? [];
-  const calls = draft.detail?.call_details ?? [];
-  const totalRate = check?.figures?.rate;
+  const calls = availableCalls(draft);
+  const totalRate = check == null ? doc.load?.rate : check.figures?.rate;
+  const suggestions = [...new Set(calls.map((call) => call.path).filter(Boolean))]
+    .map((path) => `<option value="${escape(path)}"></option>`).join("");
   return `<div class="card metrix-basic-card">
     <div class="card-header">
       <div>
@@ -636,51 +648,53 @@ function basicTable(doc, check, draft) {
       </div>
       <div class="card-actions">
         <button type="button" class="btn btn-sm" data-action="basic-row-add"
-                ${calls.length ? "" : "disabled"}>${icon("plus")} Add call</button>
+                >${icon("plus")} Add call</button>
       </div>
     </div>
     <div class="table-responsive">
       <table class="table card-table table-vcenter metrix-basic-table">
         <thead><tr>
           <th style="width:18%">Chain name</th>
-          <th style="width:29%">Call</th>
+          <th style="width:29%">Endpoint</th>
           <th class="num" style="width:12%">RPS</th>
           <th style="width:13%">Expect</th>
           <th style="width:18%">Request type</th>
           <th class="text-end" style="width:10%">Actions</th>
         </tr></thead>
         <tbody>${chains
-          .map((chain, index) => basicRow(chain, index, check, calls, chains.length))
+          .map((chain, index) => basicRow(chain, index, check, calls, chains.length, doc.load?.rate))
           .join("")}</tbody>
       </table>
     </div>
+    <datalist id="basic-endpoint-suggestions">${suggestions}</datalist>
   </div>`;
 }
 
-function basicRow(chain, index, check, calls, chainCount) {
+function basicRow(chain, index, check, calls, chainCount, totalRate) {
   const selected = chain.steps?.[0]?.call ?? "";
   const detail = calls.find((call) => call.name === selected);
   const type = requestType(detail);
   const availableTypes = new Set(calls.map(requestType));
-  const callOptions = calls
-    .map(
-      (call) => `<option value="${escape(call.name)}" data-request-type="${requestType(call)}"
-        ${call.name === selected ? "selected" : ""}>${escape(call.name)} · ${escape(
-          call.path
-        )}</option>`
-    )
-    .join("");
+  const methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
   const typeOptions = REQUEST_TYPES.map(
     (value) => `<option value="${value}"${value === type ? " selected" : ""}
       ${availableTypes.has(value) ? "" : "disabled"}>${requestTypeLabel(value)}</option>`
   ).join("");
-  const rps = check?.figures?.chains?.[index]?.iterations_per_s;
+  const rps = check?.figures?.chains?.[index]?.iterations_per_s
+    ?? (Number(totalRate) * Number(chain.percent ?? 0) / 100);
 
   return `<tr>
     <td><input class="form-control" name="basic.${index}.name" readonly
                value="${escape(chain.name ?? "")}" aria-label="Chain name"></td>
-    <td><select class="form-select" name="basic.${index}.call"
-                aria-label="Call">${callOptions}</select></td>
+    <td><div class="d-flex gap-1">
+      <select class="form-select" name="basic.${index}.method" aria-label="HTTP method"
+              style="max-width:7rem">${methods.map((method) => `<option value="${method}"
+                ${method === (detail?.method ?? "GET") ? "selected" : ""}>${method}</option>`).join("")}</select>
+      <input class="form-control metrix-path" name="basic.${index}.endpoint"
+             list="basic-endpoint-suggestions" value="${escape(detail?.path ?? "")}"
+             placeholder="/display/{{id}}" aria-label="Endpoint path">
+      <input type="hidden" name="basic.${index}.call" value="${escape(selected)}">
+    </div></td>
     <td><input class="form-control text-end" type="number" step="any" min="0"
                name="basic.${index}.rps" value="${escape(round(rps))}"
                aria-label="Requests per second"></td>
@@ -708,7 +722,7 @@ function expectedStatus(detail) {
   return assertion.status_in.join(", ");
 }
 
-function requestType(detail) {
+export function requestType(detail) {
   if (!detail) return "none";
   const contentType = Object.entries(detail.headers ?? {}).find(
     ([name]) => name.toLowerCase() === "content-type"
@@ -1159,10 +1173,9 @@ function callsCard(draft) {
     <div class="card-header">
       <div>
         <h3 class="card-title">Calls</h3>
-        <div class="card-subtitle">Read-only. Request definitions are authored from
-          the codebase or generated from a schema; hand-editing one in a browser is
-          how a plan drifts from the service it describes. Change them in the bundle,
-          or read the service again.</div>
+        <div class="card-subtitle">Read-only request details. Basic can add
+          a method/path call; for detailed changes, edit the bundle or regenerate
+          from a service description.</div>
       </div>
       <div class="card-actions">
         <button type="button" class="btn btn-sm" data-action="calls-regenerate"
@@ -1256,7 +1269,8 @@ function signature(state) {
     Boolean(draft.detail?.draft),
     (state.profiles ?? []).map((profile) => profile.name),
     draft.doc.load?.mode ?? "fixed",
-    (draft.detail?.call_details ?? []).map((call) => call.name),
+    draft.schemaId ?? null,
+    availableCalls(draft).map((call) => [call.name, call.method, call.path]),
     (draft.doc.chains ?? []).map((chain) => [
       chain.session ?? "reuse",
       (chain.steps ?? []).map((step) => [

@@ -873,3 +873,67 @@ def save_mix(config: Config, name: str, mix: dict[str, Any]) -> Plan:
     plan = _plan_from(root, name, mix)
     (root / MIX).write_bytes(document_bytes(mix))
     return plan
+
+
+def with_basic_calls(
+    config: Config, name: str, mix: dict[str, Any], additions: dict[str, dict[str, Any]]
+) -> Plan:
+    """Validate a Basic edit against stored calls and proposed method/path calls."""
+    existing = load_plan(config, name)
+    basic = dict(existing.calls.get("calls/basic.json", {}))
+    for call_name, call in additions.items():
+        if call_name in existing.call_names and call_name not in basic:
+            raise PlanError(f"calls/basic.json/{call_name}: call name already exists")
+        basic[call_name] = call
+    check_basic_calls(additions)
+    _check(basic, "call.schema.json", "calls/basic.json")
+    _check(mix, "mix.schema.json", MIX)
+    if mix.get("name") != name:
+        raise PlanError(f"{MIX}/name: a plan's name is fixed at {name!r}")
+    calls = dict(existing.calls)
+    if basic:
+        calls["calls/basic.json"] = basic
+    for reference in mix.get("calls", []):
+        if reference not in calls:
+            raise PlanError(f"{MIX}/calls: {reference!r} is not defined")
+    named = {key for reference in mix.get("calls", []) for key in calls[reference]}
+    for chain_index, chain in enumerate(mix.get("chains", [])):
+        for step_index, step in enumerate(chain.get("steps", [])):
+            if step.get("call") not in named:
+                raise PlanError(
+                    f"{MIX}/chains/{chain_index}/steps/{step_index}/call: undefined call"
+                )
+    return Plan(name, mix, calls, existing.extras, existing.notes, existing.draft)
+
+
+def check_basic_calls(calls: dict[str, dict[str, Any]]) -> None:
+    """Minimal calls entered through Basic have the same narrow shape as its form."""
+    for name, call in calls.items():
+        if not NAME.fullmatch(name):
+            raise PlanError(f"calls/basic.json/{name}: invalid call name")
+        if set(call) != {"method", "path"}:
+            raise PlanError(f"calls/basic.json/{name}: expected only method and path")
+        path = call.get("path")
+        literal = re.sub(r"\{\{.*?\}\}", "", path) if isinstance(path, str) else ""
+        if (
+            not isinstance(path, str)
+            or not path.startswith("/")
+            or path.startswith("//")
+            or "#" in path
+            or any(c.isspace() for c in literal)
+        ):
+            raise PlanError(f"calls/basic.json/{name}/path: expected an origin-relative path")
+    _check(calls, "call.schema.json", "calls/basic.json")
+
+
+def save_basic(
+    config: Config, name: str, mix: dict[str, Any], additions: dict[str, dict[str, Any]]
+) -> Plan:
+    plan = with_basic_calls(config, name, mix, additions)
+    root = plan_path(config, name)
+    basic = plan.calls.get("calls/basic.json")
+    if basic:
+        (root / "calls").mkdir(exist_ok=True)
+        (root / "calls/basic.json").write_bytes(document_bytes(basic))
+    (root / MIX).write_bytes(document_bytes(mix))
+    return plan

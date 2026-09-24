@@ -363,10 +363,7 @@ async function openPlan(name) {
       planDraft: {
         name,
         doc,
-        editorMode:
-          detail.ready && plans.basicCompatible(doc, detail.call_details)
-            ? "basic"
-            : "advanced",
+        editorMode: plans.basicCompatible(doc, detail.call_details) ? "basic" : "advanced",
         // What is on disk, kept beside what is being typed: a bundle is assembled
         // from the stored plan, and the page has to be able to say when the two have
         // come apart.
@@ -389,6 +386,8 @@ async function openPlan(name) {
 
 function newPlanEditor() {
   const doc = plans.blankDocument();
+  doc.chains = [plans.blankBasicChain("")];
+  doc.chains[0].percent = 100;
   set({
     planDraft: {
       mode: "create",
@@ -396,8 +395,8 @@ function newPlanEditor() {
       doc,
       schemaId: null,
       schemaCalls: [],
-      selectedCalls: [],
-      editorMode: "advanced",
+      editorMode: "basic",
+      basicCalls: {},
       saved: null,
       detail: { call_details: [], calls: [] },
       profile: get().profiles[0]?.name ?? null,
@@ -416,7 +415,11 @@ function syncPlan() {
   if (!draft || !form) return draft;
   const doc = plans.readForm(form, draft.doc);
   const name = form.elements["plan.name"]?.value.trim() || draft.name;
-  const synced = { ...draft, name, doc: { ...doc, name } };
+  const basic = form.dataset.editorMode === "basic"
+    ? plans.readBasicEndpoints(form, doc, draft.schemaCalls ?? draft.detail?.call_details ?? [],
+        draft.basicCalls ?? {}, draft.mode === "create")
+    : { doc, basicCalls: draft.basicCalls ?? {} };
+  const synced = { ...draft, name, doc: { ...basic.doc, name }, basicCalls: basic.basicCalls };
   set({ planDraft: synced });
   return synced;
 }
@@ -435,8 +438,6 @@ async function choosePlanSchema(schemaId) {
         ...draft,
         schemaId: null,
         schemaCalls: [],
-        selectedCalls: [],
-        doc: { ...draft.doc, chains: [] },
       },
       planCheck: null,
     });
@@ -450,8 +451,9 @@ async function choosePlanSchema(schemaId) {
         ...current,
         schemaId,
         schemaCalls: schema.calls ?? [],
-        selectedCalls: [],
-        doc: { ...current.doc, chains: [] },
+        doc: { ...current.doc, chains: current.doc.chains[0]?.steps?.[0]?.call
+          ? current.doc.chains
+          : [{ ...plans.blankBasicChain(schema.calls?.[0]?.name), percent: 100 }] },
         error: null,
       },
       planCheck: null,
@@ -459,23 +461,6 @@ async function choosePlanSchema(schemaId) {
   } catch (error) {
     set({ planDraft: { ...get().planDraft, error: error.message } });
   }
-}
-
-function togglePlanSchemaCall(name, selected) {
-  const draft = syncPlan();
-  if (!draft || draft.mode !== "create") return;
-  const names = new Set(draft.selectedCalls ?? []);
-  if (selected) names.add(name);
-  else names.delete(name);
-  const selectedCalls = [...names];
-  editPlanDraft((current) => ({
-    selectedCalls,
-    doc: {
-      ...current.doc,
-      chains: plans.chainsForCalls(current.doc.chains ?? [], selectedCalls),
-    },
-  }));
-  set({ planCheck: null });
 }
 
 /**
@@ -494,7 +479,9 @@ async function checkPlan() {
     return;
   }
   try {
-    set({ planCheck: await api.validatePlan(draft.name, draft.doc) });
+    set({ planCheck: draft.editorMode === "basic"
+      ? await api.validateBasicPlan(draft.name, { mix: draft.doc, calls: draft.basicCalls ?? {} })
+      : await api.validatePlan(draft.name, draft.doc) });
   } catch (error) {
     // A document the schema rejects has no figures to show. Saying so is better than
     // leaving the last ones up, which would be numbers for a document that is no
@@ -513,19 +500,26 @@ async function savePlan() {
   const draft = syncPlan();
   if (!draft) return;
   try {
-    if (draft.mode === "create" && (!draft.name || !draft.schemaId)) {
-      throw new Error("enter a plan name and choose a stored schema before saving");
+    if (draft.mode === "create" && !draft.name) {
+      throw new Error("enter a plan name before saving");
     }
+    const schemaNames = new Set((draft.schemaCalls ?? []).map((call) => call.name));
+    const selectedCalls = [...new Set(draft.doc.chains.flatMap((chain) =>
+      chain.steps.map((step) => step.call).filter((name) => schemaNames.has(name))))];
     const saved = draft.mode === "create"
       ? await api.createPlan({
           name: draft.name,
           schema_id: draft.schemaId,
-          calls: draft.selectedCalls ?? [],
+          calls: selectedCalls,
+          basic_calls: draft.basicCalls ?? {},
           mix: draft.doc,
         })
-      : await api.replacePlan(draft.name, draft.doc);
+      : draft.editorMode === "basic"
+        ? await api.replaceBasicPlan(draft.name, { mix: draft.doc, calls: draft.basicCalls ?? {} })
+        : await api.replacePlan(draft.name, draft.doc);
     set({
-      planDraft: { ...get().planDraft, saved: draft.doc, error: null },
+      planDraft: { ...get().planDraft, mode: undefined, schemaCalls: undefined,
+        saved: draft.doc, detail: saved, basicCalls: {}, error: null },
       planCheck: { ready: saved.ready, problems: saved.problems, figures: saved.figures },
     });
     notify(
@@ -1568,7 +1562,7 @@ document.addEventListener("click", (event) => {
         chains: [
           ...(draft.doc.chains ?? []),
           plans.blankBasicChain(
-            draft.detail?.call_details?.[0]?.name,
+            plans.availableCalls(draft)[0]?.name,
             draft.doc.chains ?? []
           ),
         ],
@@ -1710,11 +1704,6 @@ document.addEventListener("change", (event) => {
     choosePlanSchema(schema.value);
     return;
   }
-  const schemaCall = event.target.closest("[data-schema-call]");
-  if (schemaCall) {
-    togglePlanSchemaCall(schemaCall.dataset.schemaCall, schemaCall.checked);
-    return;
-  }
 
   // The source select changes the hint under it, and the panel holds a document
   // somebody pasted: read the whole panel back before redrawing it.
@@ -1727,11 +1716,12 @@ document.addEventListener("change", (event) => {
   const field = event.target.closest("[data-plan-form] input, [data-plan-form] select");
   if (field) {
     if (field.dataset.basicType != null) {
-      const call = field.form.elements[`basic.${field.dataset.index}.call`];
-      const matching = Array.from(call?.options ?? []).find(
-        (option) => option.dataset.requestType === field.value
-      );
-      if (matching) call.value = matching.value;
+      const matching = plans.availableCalls(get().planDraft).find((call) =>
+        plans.requestType(call) === field.value);
+      if (matching) {
+        field.form.elements[`basic.${field.dataset.index}.endpoint`].value = matching.path;
+        field.form.elements[`basic.${field.dataset.index}.method`].value = matching.method;
+      }
     }
     if (field.dataset.derives === "percent") shareFromRate(field);
     if (field.name === "bundle.profile") {

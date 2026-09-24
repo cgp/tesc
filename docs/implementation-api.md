@@ -148,7 +148,7 @@ Nothing here requires the engine. Through A3 the product is a host-observation t
 2. **Every displayed percentile carries its sample count.** The rule lives once in `stats/` and the UI cannot bypass it.
 3. **Secrets never reach SQLite, run directories, exports, or error samples.** Redaction is applied at capture, not at display.
 4. **Desktop only.** No responsive breakpoints.
-5. **Calls are read-only in the UI** (§20 of the design). Mix and targets are editable.
+5. **Detailed calls are read-only in the UI** (§20 of the design). Basic may add a minimal method/path call; mix and targets are editable.
 
 ---
 

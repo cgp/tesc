@@ -87,45 +87,84 @@ class Regenerate(BaseModel):
 
 
 class Create(BaseModel):
-    """A new mixture and the stored schema calls it is allowed to use."""
+    """A new mixture with referenced schema calls and/or typed Basic endpoints."""
 
     name: str
-    schema_id: str
-    calls: list[str]
+    schema_id: str | None = None
+    calls: list[str] = Field(default_factory=list)
+    basic_calls: dict[str, dict[str, Any]] = Field(default_factory=dict)
     mix: dict[str, Any]
 
 
 @router.post("", status_code=201)
 def create_plan(request: Request, body: Create) -> dict[str, Any]:
-    """Create a plan from selected calls in an uploaded schema."""
+    """Create a plan from referenced schema calls or typed method/path calls."""
     config = _config(request)
     if not plans.NAME.match(body.name):
         raise HTTPException(
             status_code=422,
             detail=f"plan {body.name!r}: names are letters, digits, dot, dash, underscore",
         )
-    if not body.calls:
-        raise HTTPException(status_code=422, detail="choose at least one schema endpoint")
-    try:
-        schema = schema_library.load(config, body.schema_id)
-        generated = generate.generate(schema.source, schema.content or "", name=body.name)
-    except (FileNotFoundError, schema_library.SchemaLibraryError) as exc:
-        raise HTTPException(status_code=404, detail=f"no schema {body.schema_id!r}") from exc
-    except generate.GenerationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    selected = set(body.calls)
-    unknown = sorted(selected - generated.calls.keys())
+    if not body.calls and not body.basic_calls:
+        raise HTTPException(status_code=422, detail="add at least one endpoint")
+    generated_calls = {}
+    source = "basic"
+    if body.schema_id:
+        try:
+            schema = schema_library.load(config, body.schema_id)
+            generated = generate.generate(schema.source, schema.content or "", name=body.name)
+        except (FileNotFoundError, schema_library.SchemaLibraryError) as exc:
+            raise HTTPException(status_code=404, detail=f"no schema {body.schema_id!r}") from exc
+        except generate.GenerationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        generated_calls = generated.calls
+        source = schema.source
+    unknown = sorted(set(body.calls) - generated_calls.keys())
     if unknown:
         raise HTTPException(status_code=422, detail=f"schema has no endpoint {unknown[0]!r}")
     mix = {**body.mix, "name": body.name, "calls": [generate.CALLS_FILE]}
-    chosen = {name: generated.calls[name] for name in body.calls}
+    chosen = {name: generated_calls[name] for name in body.calls}
     try:
-        root = plans.create(config, body.name, mix, chosen, source=schema.source)
+        plans.check_basic_calls(body.basic_calls)
+    except plans.PlanError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if set(chosen) & set(body.basic_calls):
+        raise HTTPException(
+            status_code=422, detail="Basic endpoint name conflicts with schema call"
+        )
+    chosen.update(body.basic_calls)
+    try:
+        plans.create(config, body.name, mix, chosen, source=source)
     except plans.PlanError as exc:
         status = 409 if str(exc).startswith("a plan named") else 422
         raise HTTPException(status_code=status, detail=str(exc)) from exc
     plan = plans.load_plan(config, body.name)
+    return {**_summary(plan), "call_details": plans.call_details(plan)}
+
+
+class BasicEdit(BaseModel):
+    mix: dict[str, Any]
+    calls: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
+@router.post("/{name}/validate-basic")
+def validate_basic(name: str, request: Request, body: BasicEdit) -> dict[str, Any]:
+    try:
+        plan = plans.with_basic_calls(_config(request), name, body.mix, body.calls)
+    except plans.PlanError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    problems = plans.check(plan)
+    return {"name": name, "figures": plans.figures(plan),
+            "problems": [problem.to_document() for problem in problems],
+            "ready": plans.ready(problems)}
+
+
+@router.put("/{name}/basic")
+def replace_basic(name: str, request: Request, body: BasicEdit) -> dict[str, Any]:
+    try:
+        plan = plans.save_basic(_config(request), name, body.mix, body.calls)
+    except plans.PlanError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {**_summary(plan), "call_details": plans.call_details(plan)}
 
 

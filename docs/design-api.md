@@ -210,10 +210,10 @@ paths are an upload-time summary for the list and detail views; they do not beco
 fourth plan document and are never handed to the engine.
 
 `POST /api/plans/generate` takes a source and returns a draft plan. The Plans editor
-also opens as a blank mixture: it lists the stored schemas, lets the author choose
-which endpoints become calls, and creates the plan from those selected definitions.
-Generation is no longer a prerequisite for opening the editor; the stored schema is
-the source of the selected call documents.
+also opens with a Basic row: a stored schema supplies path suggestions, and the
+author can type an origin-relative path without a schema. Referenced schema calls
+and typed method/path calls become the plan's call documents. Generation is no
+longer a prerequisite for opening the editor.
 
 ### 8.1 What the tool does and does not do
 
@@ -522,13 +522,13 @@ The front end is the expected authoring surface (§4), but the three documents a
 |---|---|---|
 | **Mix** (§4.2) | **Full editing** | This is the knob that gets turned: percentages, total rate, duration, phases, session policy per chain |
 | **Targets** (§4.3) | **Full editing** | Pick a profile, re-resolve it, select or deselect individual hosts and containers |
-| **Calls** (§4.1) | **Read-only inspection** | Request definitions are authored by an LLM from the codebase or generated from a schema; editing them by hand in a browser invites drift from the service they describe |
+| **Calls** (§4.1) | **Read-only inspection, plus minimal Basic endpoint creation** | Detailed request definitions remain authored by an LLM or generated from a schema; Basic can add a method/path call for an endpoint absent from the schema |
 
 ### 20.1 Editing the mix
 
 The mixture editor has two tabs. **Basic** is the default for plans it can represent: a table where every row is one single-call chain and its RPS. The table derives the total load rate and normalizes the stored percentages, so it never exposes a half-valid percentage total; lowering the run below the 2250-sample floor (75 RPS for 30 seconds) remains a warning, not an invalid plan. A plan with multi-step chains or another advanced-only shape opens in **Advanced**, which is the existing full editor.
 
-Basic rows show chain name, call, RPS, expected status and request type. Call and request type are selectors over the existing read-only call definitions: choosing a request type selects among calls of that type rather than mutating a call. Actions are icon-only. A final row cannot be deleted, blank names are repaired to unique names, and an empty or zero-rate table is normalized to a runnable minimum when committed. These constraints are what make Basic a safe editor rather than a second way to construct an invalid mixture.
+Basic rows show chain name, HTTP method, endpoint path, RPS, expected status and request type. The path is an editable origin-relative URL template (for example `/display/{{id}}`) with suggestions from the plan or chosen schema. Choosing a suggestion reuses its call definition; a new path creates a minimal method/path call on save, checked by the server along with the whole mixture. The schema selector supplies suggestions without an endpoint checklist, and a plan can start with a typed endpoint alone. Other call fields remain read-only. Actions are icon-only. A final row cannot be deleted, blank names are repaired to unique names, and an empty or zero-rate table is normalized to a runnable minimum when committed.
 
 The editor is deliberately compact: chains occupy the primary column and the less-frequently changed load and phase controls sit alongside them. Load has no editable total RPS; Basic derives it from the table, while Advanced continues to express each chain as both a percentage and an implied iteration rate. The open/closed model is not exposed. Warmup and settle share a row, concurrency is last, and `stages` and `breakpoint` are labelled as not implemented in the editor. The server verdict, sample-count consequence and explanatory notes sit below the working controls rather than above them.
 
@@ -565,4 +565,4 @@ A read-only list, sufficient to understand what a chain does without opening a f
 - **Generation strategy** — inline template, dataset, Lua, Rust plugin, or exec sidecar (§7.2), with the generator's name and, for Lua, the file and entry point.
 - **Assertions**, listed plainly — this is where a chain like `login-fail` explains itself as expecting a 401.
 
-No editing at this time. The affordance offered instead is **export the bundle** (§4.4): change the call in the file, with the tooling and review a code change gets, and re-import. If hand-editing calls in the browser turns out to be needed, it should arrive as a deliberate decision with validation behind it, not as a text box.
+Other call fields remain read-only. For detailed changes, **export the bundle** (§4.4), edit the call file, and re-import. Basic's method/path creation passes through the same server validation and bundle gate as a hand-written call.
