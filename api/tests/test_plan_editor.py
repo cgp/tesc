@@ -354,6 +354,49 @@ class TestVariablesBetweenSteps:
 
 
 class TestSaving:
+    def test_new_plan_can_start_from_a_typed_endpoint_without_a_schema(self, client) -> None:
+        document = {
+            "version": 1, "name": "typed", "calls": ["calls/generated.json"],
+            "load": {"mode": "fixed", "rate": 75, "duration": "60s"},
+            "chains": [{"name": "display", "percent": 100,
+                        "steps": [{"id": "display", "call": "get-display"}]}],
+        }
+        response = client.post("/api/plans", json={
+            "name": "typed", "mix": document,
+            "basic_calls": {"get-display": {"method": "GET", "path": "/display/{{uuid()}}"}},
+        })
+        assert response.status_code == 201
+        assert response.json()["ready"] is True
+        details = client.get("/api/plans/typed").json()["call_details"]
+        assert details[0]["path"] == "/display/{{uuid()}}"
+
+    def test_basic_can_validate_and_save_a_templated_endpoint(self, home, client) -> None:
+        edited = mix(
+            calls=["calls/shop.json", "calls/basic.json"],
+            chains=[{"name": "display", "percent": 100,
+                     "steps": [{"id": "display", "call": "get-display-id"}]}],
+        )
+        body = {"mix": edited, "calls": {"get-display-id": {
+            "method": "GET", "path": "/display/{{id}}"}}}
+        before = (home.plans_dir / "shop" / "mix.json").read_bytes()
+        checked = client.post("/api/plans/shop/validate-basic", json=body)
+        assert checked.status_code == 200
+        assert (home.plans_dir / "shop" / "mix.json").read_bytes() == before
+        saved = client.put("/api/plans/shop/basic", json=body)
+        assert saved.status_code == 200
+        assert next(c for c in saved.json()["call_details"] if c["name"] == "get-display-id")[
+            "path"
+        ] == "/display/{{id}}"
+        written = plans.load_plan(home, "shop").calls["calls/basic.json"]["get-display-id"]
+        assert written == body["calls"]["get-display-id"]
+
+    def test_basic_rejects_a_non_path_without_writing(self, home, client) -> None:
+        before = (home.plans_dir / "shop" / "mix.json").read_bytes()
+        response = client.put("/api/plans/shop/basic", json={"mix": mix(), "calls": {
+            "bad": {"method": "GET", "path": "https://example.com/display"}}})
+        assert response.status_code == 422
+        assert (home.plans_dir / "shop" / "mix.json").read_bytes() == before
+
     def test_a_save_that_changes_nothing_leaves_the_bytes_and_the_hash_alone(
         self, home, client
     ) -> None:

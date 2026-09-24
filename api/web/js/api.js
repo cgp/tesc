@@ -87,8 +87,12 @@ export const api = {
   // would say about the same document on disk.
   validatePlan: (name, mix) =>
     request(`/api/plans/${encodeURIComponent(name)}/validate`, json("POST", mix)),
+  validateBasicPlan: (name, body) =>
+    request(`/api/plans/${encodeURIComponent(name)}/validate-basic`, json("POST", body)),
   replacePlan: (name, mix) =>
     request(`/api/plans/${encodeURIComponent(name)}`, json("PUT", mix)),
+  replaceBasicPlan: (name, body) =>
+    request(`/api/plans/${encodeURIComponent(name)}/basic`, json("PUT", body)),
   // The document itself, posted. There is no URL form on purpose: a control plane
   // that fetches whatever address it is handed is a request forwarder inside the
   // network it is meant to be observing.

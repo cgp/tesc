@@ -862,3 +862,8 @@ Add same-snapshot paired flush-plus-packet durations and supported totals. Skip 
 - SSH probes are now traced step by step in the server log: options (config and keys), DNS, TCP connect, handshake, auth, session, script and close, each with its duration, followed by AsyncSSH's debug events for that connection only. A failed or timed-out probe names the step it was in. AsyncSSH debug is enabled only while a probe runs, and its records are captured by a logger filter rather than propagated. Tests run against an in-process AsyncSSH server.
 - An unhandled route error is now logged through `metrix_api` with its traceback, so it appears under Server › Logs, and the 500's `detail` carries the exception's message.
 - Design (§2.4, §2.6, §3.5) and `profiles.md` updated. Ruff (except a pre-existing F841 in `routes/plans.py`), 678 Python tests and 191 front-end tests pass; the four live SSH integration tests time out because their configured hosts are not reachable from this network.
+## 2026-09-24 — Basic endpoint entry
+
+- Replaced the schema endpoint checklist and Basic call-name dropdown with an HTTP method and autocomplete path field. New plans can start from a typed endpoint without a schema.
+- Preserved URL templates such as /display/{{id}} in the editor and call document. Basic saves minimal method/path calls through server validation while retaining generated call details when selected.
+- Added API and front-end coverage for custom endpoints, schema suggestions, and the default Basic rate. Updated the API design and editor rule.

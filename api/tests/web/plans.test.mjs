@@ -45,7 +45,7 @@ class FakeFormData {
 }
 Object.defineProperty(globalThis, "FormData", { configurable: true, value: FakeFormData });
 
-const { basicCompatible, render, readDescribe, readForm, shareFromRate, verdict } =
+const { basicCompatible, render, readBasicEndpoints, readDescribe, readForm, shareFromRate, verdict } =
   await import("../../web/js/plans.js");
 
 const FIGURES = {
@@ -215,6 +215,52 @@ test("Basic only accepts shapes it can preserve", () => {
     ),
     true
   );
+});
+
+test("Basic shows URL templates and suggestions without an endpoint checklist", () => {
+  const state = editorState();
+  state.planDraft.doc = {
+    ...DOC,
+    chains: [{ name: "add", percent: 100, steps: [{ id: "add", call: "add" }] }],
+  };
+  state.planDraft.editorMode = "basic";
+  const markup = render(state);
+  assert.match(markup, /name="basic\.0\.endpoint"/);
+  assert.match(markup, /value="\/api\/cart\/\{\{ pid \}\}"/);
+  assert.match(markup, /<datalist id="basic-endpoint-suggestions">/);
+  assert.doesNotMatch(markup, /data-schema-call/);
+});
+
+test("a typed template becomes a method and path call while a suggestion reuses its call", () => {
+  const calls = editorState().planDraft.detail.call_details;
+  const doc = { ...DOC, chains: [{ name: "display", percent: 100,
+    steps: [{ id: "display", call: "search" }] }] };
+  const typed = readBasicEndpoints(form({
+    "basic.0.method": "GET", "basic.0.endpoint": "/display/{{id}}",
+  }), doc, calls);
+  const name = typed.doc.chains[0].steps[0].call;
+  assert.deepEqual(typed.basicCalls[name], { method: "GET", path: "/display/{{id}}" });
+  assert.ok(typed.doc.calls.includes("calls/basic.json"));
+  const chosen = readBasicEndpoints(form({
+    "basic.0.method": "POST", "basic.0.endpoint": "/api/cart/{{ pid }}",
+  }), typed.doc, calls, typed.basicCalls);
+  assert.equal(chosen.doc.chains[0].steps[0].call, "add");
+  assert.deepEqual(chosen.basicCalls, {});
+});
+
+test("a fresh Basic plan shows its starting 75 RPS", () => {
+  const state = editorState();
+  state.planDraft = {
+    ...state.planDraft, mode: "create", name: "", editorMode: "basic",
+    doc: { ...DOC, name: "", load: { mode: "fixed", rate: 75, duration: "60s" },
+      chains: [{ name: "call", percent: 100, steps: [{ id: "call", call: "" }] }] },
+    detail: { call_details: [] }, schemaCalls: [], basicCalls: {},
+  };
+  state.planCheck = null;
+  const markup = render(state);
+  assert.match(markup, /name="basic\.0\.rps" value="75"/);
+  assert.match(markup, /placeholder="\/display\/\{\{id\}\}"/);
+  assert.doesNotMatch(markup, /data-schema-call/);
 });
 
 test("Basic RPS derives a valid rate and exact percentage total below 75 RPS", () => {
