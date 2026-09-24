@@ -216,9 +216,12 @@ Service descriptions may be uploaded once into a small source library instead of
 being pasted directly into the plan generator every time. Each entry lives at
 `$METRIX_HOME/schemas/<id>/`: the original UTF-8 content is kept as `source.txt` and
 `metadata.json` records its uploaded filename, source type and the call summary
-produced at upload. The id combines a slug of the filename stem with the selected source type,
-so `shop.yaml` uploaded as OpenAPI becomes `shop-openapi`; an existing id is a
-conflict rather than an implicit overwrite.
+produced at upload. For OpenAPI 3 and Swagger 2.0, the id uses `info.title`, then
+`info.description` if the title is absent or unusable, then the filename stem. Other
+sources use the filename stem. Metadata text is slugged and capped at 64 characters
+before the source type is appended, so a document titled `Shop API` becomes `shop-api-openapi`;
+an existing id is a conflict rather than an implicit overwrite. Stored ids do not
+change when this naming rule changes.
 
 Upload is transactional at the feature boundary: the server first runs the content
 through the same `generate.generate` dispatch used by `POST /api/plans/generate`, and
@@ -545,15 +548,13 @@ The front end is the expected authoring surface (§4), but the three documents a
 
 ### 20.1 Editing the mix
 
-The mixture editor has two tabs. **Basic** is the default for plans it can represent: a table where every row is one single-call chain and its RPS. The table derives the total load rate and normalizes the stored percentages, so it never exposes a half-valid percentage total; lowering the run below the 2250-sample floor (75 RPS for 30 seconds) remains a warning, not an invalid plan. A plan with multi-step chains or another advanced-only shape opens in **Advanced**, which is the existing full editor.
+The mixture editor shows a table where every row is one single-call chain and its RPS. The table derives the total load rate and normalizes the stored percentages, so it never exposes a half-valid percentage total; lowering the run below the 2250-sample floor (75 RPS for 30 seconds) remains a warning, not an invalid plan. Plans with multi-step chains or another shape the table cannot represent keep their chain definitions unchanged. Their Load controls remain editable, and the page explains that the richer chain definitions are carried into the exported bundle.
 
-Basic rows show chain name, call, RPS, expected status and request type. Call and request type are selectors over the existing read-only call definitions: choosing a request type selects among calls of that type rather than mutating a call. Actions are icon-only. A final row cannot be deleted, blank names are repaired to unique names, and an empty or zero-rate table is normalized to a runnable minimum when committed. These constraints are what make Basic a safe editor rather than a second way to construct an invalid mixture.
+Rows show chain name, call, RPS, expected status and request type. Call and request type are selectors over the existing read-only call definitions: choosing a request type selects among calls of that type rather than mutating a call. A final row cannot be deleted, blank names are repaired to unique names, and an empty or zero-rate table is normalized to a runnable minimum when committed.
 
-The editor is deliberately compact: chains occupy the primary column and the less-frequently changed load and phase controls sit alongside them. Load has no editable total RPS; Basic derives it from the table, while Advanced continues to express each chain as both a percentage and an implied iteration rate. The open/closed model is not exposed. Warmup and settle share a row, concurrency is last, and `stages` and `breakpoint` are labelled as not implemented in the editor. The server verdict, sample-count consequence and explanatory notes sit below the working controls rather than above them.
+The editor is deliberately compact: calls occupy the primary column and the less-frequently changed load and phase controls sit alongside them. The table derives total RPS from call rates; plans whose chains cannot be edited in the table can set total RPS in Load. The open/closed model is not exposed. Warmup and settle share a row, concurrency is last, and `stages` and `breakpoint` are labelled as not implemented in the editor. The server verdict, sample-count consequence and explanatory notes sit below the working controls rather than above them.
 
-In Advanced, chains are listed with their target rates and derived percentages. The total rate is the sum of the chain rates, and the stored shares are normalized from those values; the resulting total is always exactly 100 rather than silently carrying rounding drift.
-
-Alongside each chain: implied iterations/s, implied req/s given its step count, session policy, and the calls it invokes. Adding a chain means selecting from the calls already defined; reordering steps and setting `repeat_until` are in scope. Duration, warmup, concurrency cap and the phase durations are editable here, with the §12.1 sample-count consequence shown live: a duration and rate that fall below the 2250 floor say so before the run, not after, and so does a 5% chain inside a run that clears the floor comfortably. A `stages` ramp and a `breakpoint` search carry their own shape and are shown rather than edited; they belong with the sweep that runs them (§17.6).
+Duration, warmup, concurrency cap and phase durations are editable here, with the §12.1 sample-count consequence shown live. A `stages` ramp and a `breakpoint` search carry their own shape and are shown rather than edited; they belong with the sweep that runs them (§17.6). Multi-step chains, session policies and polling remain in the plan document and export unchanged through this editor.
 
 **Every figure on the page is computed server-side.** The percentages, the implied rates, the request counts and the verdict all come from one function, which is also the one the save path and the bundle gate call. The browser converts a typed rate into the share the document stores — the document has to be built before it can be submitted — and renders what it is told about everything else. A second rulebook in JavaScript would be a rulebook to drift from the first.
 

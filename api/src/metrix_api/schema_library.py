@@ -25,6 +25,7 @@ SOURCE = "source.txt"
 VERSION = 1
 KINDS = ("openapi", "swagger", "wadl", "wsdl", "har", "access_log", "routes")
 ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+METADATA_ID_LENGTH = 64
 
 
 class SchemaLibraryError(Exception):
@@ -57,17 +58,30 @@ class StoredSchema:
         return {**self.summary(), "calls": self.calls, "content": self.content}
 
 
-def schema_id(filename: str, source: str) -> str:
-    """A stable, readable id from the uploaded name and selected parser."""
+def schema_id(filename: str, source: str, content: str) -> str:
+    """A stable id from service metadata when available, or the uploaded name."""
     clean = _filename(filename)
     if source not in KINDS:
         raise SchemaLibraryError(f"unknown source {source!r}; expected one of {', '.join(KINDS)}")
-    return f"{generate.slug(Path(clean).stem)}-{source}"
+    stem = generate.slug(Path(clean).stem)
+    if source in {"openapi", "swagger"}:
+        try:
+            document = generate.parse_document(content, where=source)
+        except generate.GenerationError as exc:
+            raise SchemaLibraryError(str(exc)) from exc
+        info = document.get("info") if isinstance(document, dict) else None
+        if isinstance(info, dict):
+            for key in ("title", "description"):
+                value = info.get(key)
+                if isinstance(value, str) and re.search(r"[a-zA-Z0-9]", value):
+                    stem = generate.slug(value)[:METADATA_ID_LENGTH].rstrip("-")
+                    break
+    return f"{stem}-{source}"
 
 
 def store(config: Config, filename: str, source: str, content: str) -> StoredSchema:
     """Parse, then atomically add one source document to the library."""
-    entry_id = schema_id(filename, source)
+    entry_id = schema_id(filename, source, content)
     try:
         draft = generate.generate(source, content, name=generate.slug(Path(filename).stem))
     except generate.GenerationError as exc:

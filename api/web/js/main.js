@@ -376,10 +376,6 @@ async function openPlan(name) {
       planDraft: {
         name,
         doc,
-        editorMode:
-          detail.ready && plans.basicCompatible(doc, detail.call_details)
-            ? "basic"
-            : "advanced",
         // What is on disk, kept beside what is being typed: a bundle is assembled
         // from the stored plan, and the page has to be able to say when the two have
         // come apart.
@@ -410,7 +406,6 @@ function newPlanEditor() {
       schemaId: null,
       schemaCalls: [],
       selectedCalls: [],
-      editorMode: "advanced",
       saved: null,
       detail: { call_details: [], calls: [] },
       profile: get().profiles[0]?.name ?? null,
@@ -561,22 +556,6 @@ async function reloadPlans() {
   } catch (error) {
     set({ error: error.message });
   }
-}
-
-/**
- * A percentage typed as a rate.
- *
- * The document stores shares, so an iterations/s has to become one before it can be
- * submitted. Written into the percentage box first and read back from the form with
- * everything else, so there is one path from the form to the document.
- */
-function shareFromRate(input) {
-  const form = input.form;
-  const index = input.name.split(".")[1];
-  const percent = form.elements[`chains.${index}.percent`];
-  const rate = Number(form.elements["load.rate"]?.value);
-  const share = plans.shareFromRate(Number(input.value), rate);
-  if (percent && share != null) percent.value = String(share);
 }
 
 /** Show what the bundle holds, without downloading it. */
@@ -1603,9 +1582,6 @@ document.addEventListener("click", (event) => {
   if (action === "plan-run") runPlan();
   if (action === "bundle-preview") previewBundle();
   if (action === "bundle-download") downloadBundle();
-  if (action === "plan-mode") {
-    editPlanDraft(() => ({ editorMode: button.dataset.mode }));
-  }
   if (action === "basic-row-add") {
     editPlanDraft((draft) => ({
       doc: {
@@ -1613,7 +1589,7 @@ document.addEventListener("click", (event) => {
         chains: [
           ...(draft.doc.chains ?? []),
           plans.blankBasicChain(
-            draft.detail?.call_details?.[0]?.name,
+            (draft.schemaCalls ?? draft.detail?.call_details)?.[0]?.name,
             draft.doc.chains ?? []
           ),
         ],
@@ -1629,64 +1605,6 @@ document.addEventListener("click", (event) => {
       }));
       checkPlan();
     }
-  }
-  if (action === "chain-add") {
-    editPlanDraft((draft) => ({
-      doc: {
-        ...draft.doc,
-        chains: [
-          ...(draft.doc.chains ?? []),
-          plans.blankChain(draft.detail?.calls[0]?.name),
-        ],
-      },
-    }));
-    checkPlan();
-  }
-  if (action === "chain-remove") {
-    const at = Number(index);
-    editPlanDraft((draft) => ({
-      doc: { ...draft.doc, chains: draft.doc.chains.filter((_, i) => i !== at) },
-    }));
-    checkPlan();
-  }
-  if (action === "step-add") {
-    editPlanDraft((draft) => ({
-      doc: {
-        ...draft.doc,
-        chains: draft.doc.chains.map((chain, i) =>
-          i === Number(index)
-            ? { ...chain, steps: [...chain.steps, plans.blankStep(draft.detail?.calls[0]?.name)] }
-            : chain
-        ),
-      },
-    }));
-    checkPlan();
-  }
-  if (action === "step-remove") {
-    editPlanDraft((draft) => ({
-      doc: {
-        ...draft.doc,
-        chains: draft.doc.chains.map((chain, i) =>
-          i === Number(index)
-            ? { ...chain, steps: chain.steps.filter((_, s) => s !== Number(button.dataset.step)) }
-            : chain
-        ),
-      },
-    }));
-    checkPlan();
-  }
-  if (action === "step-move") {
-    editPlanDraft((draft) => ({
-      doc: {
-        ...draft.doc,
-        chains: draft.doc.chains.map((chain, i) =>
-          i === Number(index)
-            ? { ...chain, steps: moved(chain.steps, Number(button.dataset.step), button.dataset.move) }
-            : chain
-        ),
-      },
-    }));
-    checkPlan();
   }
   if (action === "profile-cancel") set({ profileDraft: null });
   if (action === "profile-save") saveProfile();
@@ -1724,21 +1642,6 @@ document.addEventListener("click", (event) => {
 
 // Separate from clicks: a select whose value decides which other fields exist has to
 // be read on change, and preventing its click would stop the dropdown opening.
-/**
- * Reorder a chain's steps.
- *
- * Order is the chain: step two reads what step one extracted, so moving one is a
- * change to what the run does rather than to how it is displayed. The check that
- * follows is what says whether the variables still line up.
- */
-function moved(steps, index, direction) {
-  const to = direction === "up" ? index - 1 : index + 1;
-  if (to < 0 || to >= steps.length) return steps;
-  const next = [...steps];
-  [next[index], next[to]] = [next[to], next[index]];
-  return next;
-}
-
 document.addEventListener("change", (event) => {
   const schemaFile = event.target.closest("[data-schema-upload-form] input[type=file]");
   if (schemaFile?.files?.length === 1) {
@@ -1784,7 +1687,6 @@ document.addEventListener("change", (event) => {
       );
       if (matching) call.value = matching.value;
     }
-    if (field.dataset.derives === "percent") shareFromRate(field);
     if (field.name === "bundle.profile") {
       // A different profile is a different targets.json, so whatever preview is on
       // screen is now for a bundle nobody asked about.

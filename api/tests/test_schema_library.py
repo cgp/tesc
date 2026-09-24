@@ -99,7 +99,7 @@ class TestSchemaLibraryRoutes:
     def test_openapi_uses_the_same_parser_and_call_count_as_plan_generation(self, client) -> None:
         document = {
             "openapi": "3.0.3",
-            "info": {"title": "Shop", "version": "1"},
+            "info": {"title": "Pet Catalog API", "version": "1"},
             "paths": {
                 "/pets": {
                     "get": {
@@ -118,8 +118,29 @@ class TestSchemaLibraryRoutes:
         )
 
         assert response.status_code == 201
-        assert response.json()["id"] == "shop-openapi"
+        assert response.json()["id"] == "pet-catalog-api-openapi"
         assert response.json()["calls"] == [{"name": "listpets", "method": "GET", "path": "/pets"}]
+
+    def test_openapi_description_names_schema_when_title_is_missing(self, client) -> None:
+        document = {
+            "openapi": "3.0.3",
+            "info": {"description": "Inventory Service", "version": "1"},
+            "paths": {
+                "/items": {
+                    "get": {"responses": {"200": {"description": "ok"}}}
+                }
+            },
+        }
+
+        response = upload(
+            client,
+            filename="uploaded.json",
+            source="openapi",
+            content=json.dumps(document),
+        )
+
+        assert response.status_code == 201
+        assert response.json()["id"] == "inventory-service-openapi"
 
     def test_swagger_two_uses_its_local_adapter_before_being_stored(self, client) -> None:
         document = {
@@ -144,7 +165,7 @@ class TestSchemaLibraryRoutes:
         )
 
         assert response.status_code == 201
-        assert response.json()["id"] == "shop-swagger-swagger"
+        assert response.json()["id"] == "shop-swagger"
         assert response.json()["calls"] == [
             {"name": "listpets", "method": "GET", "path": "/v1/pets"}
         ]

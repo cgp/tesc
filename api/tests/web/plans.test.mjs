@@ -174,17 +174,17 @@ test("a chain's share is shown as the requests it actually buys", () => {
   assert.match(markup, /12,000/);
 });
 
-test("the editor keeps the chain mix primary and puts load controls beside it", () => {
+test("complex chains are carried while load remains editable", () => {
   const markup = render(editorState());
-  assert.match(markup, /class="metrix-plan-workspace"/);
-  assert.match(markup, /metrix-chain-fields/);
+  assert.match(markup, /class="metrix-plan-workspace metrix-plan-load-only"/);
+  assert.match(markup, /chain definitions stay in the stored plan/);
+  assert.match(markup, /name="load\.rate"/);
   assert.match(markup, /metrix-load-fields/);
-  assert.ok(markup.indexOf("<h3 class=\"card-title\">Chains") < markup.indexOf("<h3 class=\"card-title\">Load"));
+  assert.doesNotMatch(markup, /data-mode="advanced"/);
 });
 
-test("a single-call fixed plan opens as a Basic table", () => {
+test("a single-call fixed plan opens as a call table without tabs", () => {
   const state = editorState();
-  state.planDraft.editorMode = "basic";
   state.planDraft.doc = {
     ...DOC,
     chains: [{ ...DOC.chains[0], steps: [DOC.chains[0].steps[0]] }],
@@ -202,7 +202,7 @@ test("a single-call fixed plan opens as a Basic table", () => {
   assert.match(markup, /class="table card-table table-vcenter metrix-basic-table"/);
   assert.match(markup, /name="basic\.0\.rps"/);
   assert.match(markup, /Request type/);
-  assert.match(markup, /data-mode="advanced"/);
+  assert.doesNotMatch(markup, /role="tab"/);
 });
 
 test("Basic only accepts shapes it can preserve", () => {
@@ -247,8 +247,13 @@ test("Basic RPS derives a valid rate and exact percentage total below 75 RPS", (
   assert.equal(next.chains[1].steps[0].call, "add");
 });
 
-test("Load hides model and editable total RPS in both editor modes", () => {
-  const markup = render(editorState());
+test("the call table derives total RPS and keeps Load controls", () => {
+  const state = editorState();
+  state.planDraft.doc = {
+    ...DOC,
+    chains: [{ ...DOC.chains[0], steps: [DOC.chains[0].steps[0]] }],
+  };
+  const markup = render(state);
   assert.doesNotMatch(markup, /name="load\.model"/);
   assert.doesNotMatch(markup, /name="load\.rate"/);
   assert.match(markup, /stages \(not implemented\)/);
@@ -301,19 +306,20 @@ test("a mixture that does not parse shows no figures rather than the last ones",
   assert.doesNotMatch(markup, /12,000/);
 });
 
-test("a chain below the sample floor says so beside the chain", () => {
+test("the sample floor is shown below the editor", () => {
   const thin = {
     ...FIGURES,
-    chains: [{ ...FIGURES.chains[0], requests: 400, supported: false }],
+    requests: 400,
+    supported: false,
   };
   const markup = render(editorState({ planCheck: { ready: true, problems: [], figures: thin } }));
-  assert.match(markup, /below the floor/);
+  assert.match(markup, /below the 2250 a tail percentile/);
 });
 
-test("a step shows what its call reads and what it provides", () => {
+test("read-only calls show what each request reads and provides", () => {
   const markup = render(editorState());
-  assert.match(markup, /reads <code>users.term<\/code>/);
-  assert.match(markup, /provides <code>pid<\/code>/);
+  assert.match(markup, /<code>users.term<\/code>/);
+  assert.match(markup, /<code>pid<\/code>/);
 });
 
 test("what the form does not draw is named as carried rather than left invisible", () => {

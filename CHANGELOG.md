@@ -848,6 +848,9 @@ Add same-snapshot paired flush-plus-packet durations and supported totals. Skip 
 - Front-end verification now makes one root HTTP request and displays any returned status, with an independent per-endpoint front-end test button beside SSH connectivity.
 - New plans now open directly in a blank editor. Authors choose an existing stored schema and check the endpoints to include; only those selected call definitions are stored with the plan.
 
+- Simplified the plan editor to one call table and Load panel; removed the Advanced tab and controls. Existing complex chains are preserved when Load is saved, and bundle export continues to use the stored plan.
+- Schema uploads now derive OpenAPI and Swagger IDs from info.title, then info.description, with the filename as fallback; existing stored IDs remain stable.
+
 ## 2026-09-24 — Fast verification and a server log
 
 - Front-end checks dial every resolved address at once (Happy Eyeballs with no stagger). `localhost` on Windows went from ~2,030 ms to 2–16 ms, because the refused `::1` attempt no longer runs before IPv4; a dual-stack name seen from an IPv4-only network no longer pays the whole timeout.

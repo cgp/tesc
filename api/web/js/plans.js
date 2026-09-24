@@ -90,14 +90,13 @@ export function blankBasicChain(call, existing = []) {
   };
 }
 
-/** Basic never opens over a shape it would have to flatten or guess at. */
+/** The call table only opens over a shape it can preserve. */
 export function basicCompatible(doc, calls = []) {
   const known = new Set(calls.map((call) => call.name));
   const chains = doc.chains ?? [];
   const names = chains.map((chain) => chain.name);
   return (
     (doc.load?.mode ?? "fixed") === "fixed" &&
-    chains.length > 0 &&
     names.every(Boolean) &&
     new Set(names).size === names.length &&
     chains.every(
@@ -435,8 +434,7 @@ function editor(state) {
   const doc = draft.doc;
   const check = state.planCheck;
   const calls = draft.schemaCalls ?? draft.detail?.call_details ?? [];
-  const canUseBasic = basicCompatible(doc, calls) && check?.ready !== false;
-  const mode = draft.editorMode === "basic" && canUseBasic ? "basic" : "advanced";
+  const canEditCalls = basicCompatible(doc, calls);
 
   const error = draft.error
     ? `<div class="alert alert-danger" role="alert">
@@ -451,7 +449,7 @@ function editor(state) {
     : "";
 
   return `<form class="metrix-stack metrix-plan-editor" data-plan-form
-               data-editor-mode="${mode}" novalidate>
+               data-editor-mode="${canEditCalls ? "basic" : "load"}" novalidate>
       ${error}
     <div class="card">
       <div class="card-header">
@@ -472,22 +470,19 @@ function editor(state) {
         }
       )}</div>` : ""}
       ${draft.mode === "create" ? schemaCard(state, draft, calls) : ""}
-      ${editorTabs(mode, canUseBasic)}
     </div>
 
-    <div class="metrix-plan-workspace">
-      ${mode === "basic" ? basicTable(doc, check, draft) : chainsCard(doc, check, draft)}
-      ${loadCard(doc, check)}
+    <div class="metrix-plan-workspace${canEditCalls ? "" : " metrix-plan-load-only"}">
+      ${canEditCalls ? basicTable(doc, check, draft) : complexChainsNote(doc)}
+      ${loadCard(doc, check, canEditCalls)}
     </div>
     <div class="card">
       <div class="card-body" id="plan-verdict">${verdict(check)}</div>
       ${notes(draft.detail?.notes)}
       <div class="card-body border-top text-secondary metrix-plan-explanation">
-        ${
-          mode === "basic"
-            ? "Basic keeps every row as one call and derives the stored rate and percentages from the RPS column. Calls themselves remain read-only."
-            : "Advanced exposes the full mixture: multi-step chains, sessions, polling and percentage control. Calls themselves remain read-only."
-        }
+        ${canEditCalls
+          ? "Each row is one call. Its RPS determines the stored rate and percentages. Calls themselves remain read-only."
+          : "This plan's chains are carried unchanged when Load is saved. Calls themselves remain read-only."}
         Targets come from a profile when the bundle is assembled.
       </div>
     </div>
@@ -526,25 +521,6 @@ function schemaCard(state, draft, calls) {
       </div>
       <div class="mt-3"><div class="form-label">Endpoints</div>${endpointRows}</div>
     </div>
-  </div>`;
-}
-
-function editorTabs(mode, canUseBasic) {
-  const tab = (value, label, disabled = false) => `<li class="nav-item" role="presentation">
-    <button type="button" class="nav-link${mode === value ? " active" : ""}"
-            data-action="plan-mode" data-mode="${value}" role="tab"
-            aria-selected="${mode === value}" ${disabled ? "disabled" : ""}
-            ${
-              disabled
-                ? 'title="Basic is available for valid fixed-rate plans whose chains each contain one call"'
-                : ""
-            }>${label}</button>
-  </li>`;
-  return `<div class="card-header py-0">
-    <ul class="nav nav-tabs card-header-tabs" role="tablist">
-      ${tab("basic", "Basic", !canUseBasic)}
-      ${tab("advanced", "Advanced")}
-    </ul>
   </div>`;
 }
 
@@ -625,7 +601,7 @@ function implication(figures) {
 
 function basicTable(doc, check, draft) {
   const chains = doc.chains ?? [];
-  const calls = draft.detail?.call_details ?? [];
+  const calls = draft.schemaCalls ?? draft.detail?.call_details ?? [];
   const totalRate = check?.figures?.rate;
   return `<div class="card metrix-basic-card">
     <div class="card-header">
@@ -647,17 +623,24 @@ function basicTable(doc, check, draft) {
           <th class="num" style="width:12%">RPS</th>
           <th style="width:13%">Expect</th>
           <th style="width:18%">Request type</th>
-          <th class="text-end" style="width:10%">Actions</th>
+          <th class="text-end" style="width:10%">Remove</th>
         </tr></thead>
         <tbody>${chains
-          .map((chain, index) => basicRow(chain, index, check, calls, chains.length))
+          .map((chain, index) => basicRow(
+            chain,
+            index,
+            check?.figures?.chains?.[index]?.iterations_per_s ??
+              (Number(doc.load?.rate ?? 0) * Number(chain.percent ?? 0) / 100),
+            calls,
+            chains.length
+          ))
           .join("")}</tbody>
       </table>
     </div>
   </div>`;
 }
 
-function basicRow(chain, index, check, calls, chainCount) {
+function basicRow(chain, index, rps, calls, chainCount) {
   const selected = chain.steps?.[0]?.call ?? "";
   const detail = calls.find((call) => call.name === selected);
   const type = requestType(detail);
@@ -674,8 +657,6 @@ function basicRow(chain, index, check, calls, chainCount) {
     (value) => `<option value="${value}"${value === type ? " selected" : ""}
       ${availableTypes.has(value) ? "" : "disabled"}>${requestTypeLabel(value)}</option>`
   ).join("");
-  const rps = check?.figures?.chains?.[index]?.iterations_per_s;
-
   return `<tr>
     <td><input class="form-control" name="basic.${index}.name" readonly
                value="${escape(chain.name ?? "")}" aria-label="Chain name"></td>
@@ -690,15 +671,23 @@ function basicRow(chain, index, check, calls, chainCount) {
           ${typeOptions}
         </select></td>
     <td class="text-end text-nowrap">
-      <button type="button" class="btn btn-sm btn-icon" data-action="plan-mode"
-              data-mode="advanced" title="Edit details in Advanced"
-              aria-label="Edit details in Advanced">${icon("pencil")}</button>
       <button type="button" class="btn btn-sm btn-icon btn-outline-danger"
               data-action="basic-row-remove" data-index="${index}"
               title="Remove call" aria-label="Remove call"
               ${chainCount === 1 ? "disabled" : ""}>${icon("trash")}</button>
     </td>
   </tr>`;
+}
+
+function complexChainsNote(doc) {
+  const chains = doc.chains ?? [];
+  return `<div class="card">
+    <div class="card-header"><h3 class="card-title">Chain details</h3></div>
+    <div class="card-body text-secondary">
+      This plan has ${count(chains.length, "chain")} with details the call table cannot edit.
+      The chain definitions stay in the stored plan and its exported bundle when Load is saved.
+    </div>
+  </div>`;
 }
 
 function expectedStatus(detail) {
@@ -737,7 +726,7 @@ function requestTypeLabel(value) {
   }[value];
 }
 
-function loadCard(doc, check) {
+function loadCard(doc, check, canEditCalls) {
   const load = doc.load ?? {};
   const phases = doc.phases ?? {};
   const mode = load.mode ?? "fixed";
@@ -762,6 +751,11 @@ function loadCard(doc, check) {
           required: true,
           hint: 'With units: "30s", "5m", "1h30m".',
         })}
+        ${!canEditCalls && mode === "fixed"
+          ? number("load.rate", "Total RPS", load.rate, {
+              hint: "Combined rate of all chains in the exported bundle.",
+            })
+          : ""}
         ${text("load.warmup", "Warmup", load.warmup, {
           hint: "Measured separately and excluded from the summary. Blank for none.",
         })}
@@ -775,7 +769,9 @@ function loadCard(doc, check) {
           hint: "In-flight requests. Hitting it annotates the run rather than failing it.",
         })}
       </div>
-      <div class="mt-2 text-secondary">Total RPS is calculated from the call rates.</div>
+      ${canEditCalls
+        ? '<div class="mt-2 text-secondary">Total RPS is calculated from the call rates.</div>'
+        : ""}
       <div class="mt-3" id="plan-implied">${
         check
           ? implication(check.figures)
@@ -1248,7 +1244,6 @@ function signature(state) {
   if (!draft) return null;
   return JSON.stringify([
     draft.name,
-    draft.editorMode ?? null,
     draft.error ?? null,
     draft.profile ?? null,
     draft.preview?.plan_hash ?? null,
@@ -1412,9 +1407,14 @@ export function readForm(form, previous) {
   let chains;
   if (editorMode === "basic") {
     chains = readBasicChains(previous.chains ?? [], value, numberAt);
-    const rates = chains.map((_, index) => numberAt(`basic.${index}.rps`) ?? 0);
-    const safeRates = rates.some((rate) => rate > 0) ? rates : rates.map(() => 1);
-    load.rate = applyRates(chains, safeRates);
+    if (chains.length) {
+      const rates = chains.map((_, index) => numberAt(`basic.${index}.rps`) ?? 0);
+      const safeRates = rates.some((rate) => rate > 0) ? rates : rates.map(() => 1);
+      load.rate = applyRates(chains, safeRates);
+    }
+  } else if (editorMode === "load") {
+    chains = previous.chains ?? [];
+    if (load.mode === "fixed") load.rate = numberAt("load.rate") ?? load.rate;
   } else {
     chains = (previous.chains ?? []).map((chain, index) => {
     const at = (field) => `chains.${index}.${field}`;

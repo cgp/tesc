@@ -121,7 +121,7 @@ def create_plan(request: Request, body: Create) -> dict[str, Any]:
     mix = {**body.mix, "name": body.name, "calls": [generate.CALLS_FILE]}
     chosen = {name: generated.calls[name] for name in body.calls}
     try:
-        root = plans.create(config, body.name, mix, chosen, source=schema.source)
+        plans.create(config, body.name, mix, chosen, source=schema.source)
     except plans.PlanError as exc:
         status = 409 if str(exc).startswith("a plan named") else 422
         raise HTTPException(status_code=status, detail=str(exc)) from exc

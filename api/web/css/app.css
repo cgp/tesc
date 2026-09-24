@@ -347,10 +347,8 @@
 
 /* ---------------------------------------------------------------- plan editor */
 
-/* The mix is adjusted much more often than the load envelope. Keep it in the
-   reading path, with the envelope available beside it instead of above it. This is
-   a desktop-only tool, so the grid deliberately does not collapse into a mobile
-   stack. */
+/* Put call rates and the load envelope beside each other. This is a desktop-only
+   tool, so the grid deliberately does not collapse into a mobile stack. */
 .metrix-plan-workspace {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(22rem, 1fr);
@@ -362,7 +360,6 @@
    rhythm lets several chains stay in view without turning labels or help into
    hover-only explanations. */
 .metrix-plan-editor .card-header { min-height: 0; padding: .75rem 1rem; }
-.metrix-plan-editor .card-header.py-0 { padding-top: 0 !important; padding-bottom: 0 !important; }
 .metrix-plan-editor .card-body { padding: .875rem 1rem; }
 .metrix-plan-editor .metrix-fields { gap: .625rem 1rem; }
 .metrix-plan-editor .form-label { margin-bottom: .2rem; font-size: .75rem; }
@@ -370,19 +367,13 @@
 .metrix-plan-editor .form-control,
 .metrix-plan-editor .form-select { min-height: calc(1.25em + .55rem + 2px); padding: .275rem .5rem; }
 .metrix-plan-editor .metrix-toolbar { gap: .75rem; }
-.metrix-plan-editor .nav-tabs .nav-link { padding: .65rem .85rem; }
-.metrix-plan-editor .nav-tabs .nav-link:disabled { color: var(--tblr-muted); opacity: .55; }
 .metrix-plan-explanation { font-size: .8125rem; }
 
-/* The load panel is narrow by design; two useful controls per row keep its
-   relationship to the chain mix visible without making it compete with it. */
+/* The load panel is narrow by design; two controls per row keep it beside calls. */
 .metrix-load-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .metrix-load-mode .form-hint { max-width: 26ch; }
 
-/* A chain's four high-frequency controls deserve one predictable scan line. */
-.metrix-chain-fields { grid-template-columns: minmax(9rem, 1.25fr) repeat(3, minmax(7rem, 1fr)); }
-
-/* Basic borrows the spreadsheet's scan pattern without borrowing its visual
+/* Calls borrow the spreadsheet's scan pattern without borrowing its visual
    chrome: compact cells, one line per call, and actions that stay out of the data. */
 .metrix-basic-table {
   table-layout: fixed;
